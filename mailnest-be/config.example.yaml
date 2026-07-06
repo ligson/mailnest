@@ -1,0 +1,20 @@
+server:
+  host: "127.0.0.1"
+  port: 8080
+
+app:
+  dataDir: "./data"
+  allowRegistration: true
+  jwtSecret: "change-me-in-production"
+  jwtExpireHours: 168
+  credentialSecret: "change-me-32-byte-secret-value"
+
+database:
+  path: "./data/mailnest.db"
+
+oauth:
+  microsoft:
+    tenant: "consumers"
+    clientId: ""
+    clientSecret: ""
+    redirectUrl: "http://127.0.0.1:5173/oauth/microsoft/callback"

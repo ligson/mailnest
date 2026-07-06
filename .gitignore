@@ -1,0 +1,21 @@
+.DS_Store
+.superpowers/
+
+# Local runtime data
+data/
+mailnest-be/data/
+mailnest-be/config.yaml
+
+# Go
+*.test
+coverage.out
+
+# Node / frontend
+node_modules/
+mailnest-fe/node_modules/
+mailnest-fe/dist/
+mailnest-fe/.vite/
+mailnest-fe/node_modules/.tmp/
+
+# Logs
+*.log
