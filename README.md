@@ -72,6 +72,18 @@ mailnest/
 - [实施计划](doc/implementation-plan.md)
 - [更新日志](CHANGELOG.md)
 
+## Docker Compose 部署
+
+仓库提供非敏感部署模板：
+
+- `mailnest-be/docker/Dockerfile`：后端生产镜像。
+- `mailnest-fe/Dockerfile`：前端生产镜像。
+- `mailnest-fe/docker/nginx.conf`：前端静态资源服务，并将 `/api/` 代理到后端容器。
+- `docker/docker-compose.yml`：NAS 单机部署示例。
+- `docker/config.example.yaml`：后端生产配置示例。
+
+真实 `docker/config.yaml`、运行数据、镜像包和本地 `.env` 均已加入 `.gitignore`，不要提交。
+
 ## 当前状态
 
 当前仓库已完成文档初始化，并创建了后端与前端基础骨架：

@@ -70,6 +70,21 @@ http://127.0.0.1:8080
 GET /api/v1/health
 ```
 
+## Docker 部署
+
+生产镜像入口为 `mailnest-be/docker/Dockerfile`。容器默认读取：
+
+```text
+MAILNEST_CONFIG=/app/config.yaml
+```
+
+NAS 或服务器部署时建议：
+
+- 将真实 `config.yaml` 挂载到 `/app/config.yaml:ro`。
+- 将本地数据目录挂载到 `/data`。
+- 配置 `server.host: "0.0.0.0"`，数据库路径使用 `/data/mailnest.db`。
+- 真实 `jwtSecret`、`credentialSecret`、OAuth client secret 不要写入仓库。
+
 ## 测试
 
 ```bash

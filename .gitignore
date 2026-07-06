@@ -5,6 +5,12 @@
 data/
 mailnest-be/data/
 mailnest-be/config.yaml
+docker/config.yaml
+docker/data/
+docker/*.env
+docker/*.tar
+docker/*.tar.gz
+docker/*.tar.gz.part-*
 
 # Go
 *.test
