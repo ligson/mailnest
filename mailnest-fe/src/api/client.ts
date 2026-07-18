@@ -11,11 +11,25 @@ export interface User {
   id: string;
   username: string;
   email: string;
+  nickname: string | null;
+  avatarUrl: string | null;
+  bio: string | null;
 }
 
 export interface AuthData {
   user: User;
   token: string;
+}
+
+export interface ChangePasswordPayload {
+  currentPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+}
+
+export interface UpdateProfilePayload {
+  nickname: string;
+  bio: string;
 }
 
 export interface MailAccount {
@@ -28,11 +42,28 @@ export interface MailAccount {
   imapPort: number;
   imapTls: boolean;
   imapUsername: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpTls: boolean;
+  smtpStartTls: boolean;
+  smtpUsername: string;
+  smtpConfigured: boolean;
+  sentFolder: string;
+  signatureHtml: string;
   pollIntervalMinutes: number;
   enabled: boolean;
   lastSyncAt: string | null;
   lastSyncStatus: string | null;
   lastSyncError: string | null;
+  fullSyncStatus: 'idle' | 'running' | 'success' | 'failed' | 'cancelled';
+  fullSyncTotal: number;
+  fullSyncProcessed: number;
+  fullSyncNewCount: number;
+  fullSyncStartedAt: string | null;
+  fullSyncFinishedAt: string | null;
+  fullSyncError: string | null;
+  cleanupEnabled: boolean;
+  cleanupRetentionDays: number;
 }
 
 export interface MailAccountListData {
@@ -42,6 +73,30 @@ export interface MailAccountListData {
 export interface SyncResult {
   jobId: string;
   newMessageCount: number;
+  warnings?: string[];
+}
+
+export interface MailAccountFolder {
+  name: string;
+  delimiter: string;
+  attributes: string[];
+  sentCandidate: boolean;
+}
+
+export interface MailAccountFoldersData {
+  items: MailAccountFolder[];
+}
+
+export interface FullSyncStatusData {
+  fullSyncStatus: 'idle' | 'running' | 'success' | 'failed' | 'cancelled';
+  fullSyncTotal: number;
+  fullSyncProcessed: number;
+  fullSyncNewCount: number;
+  fullSyncStartedAt: string | null;
+  fullSyncFinishedAt: string | null;
+  fullSyncError: string | null;
+  cleanupEnabled: boolean;
+  cleanupRetentionDays: number;
 }
 
 export interface MailMessage {
@@ -94,6 +149,38 @@ export interface MailFolderListData {
   items: MailFolder[];
 }
 
+export interface Contact {
+  id: string;
+  email: string;
+  displayName: string | null;
+  nickname: string | null;
+  name: string;
+  phone: string | null;
+  company: string | null;
+  notes: string | null;
+  source: 'manual' | 'auto' | string;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ContactListData {
+  items: Contact[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+export interface ContactPayload {
+  email: string;
+  displayName: string;
+  nickname: string;
+  phone: string;
+  company: string;
+  notes: string;
+}
+
 export interface MailRuleCondition {
   id?: string;
   field: string;
@@ -128,11 +215,33 @@ export interface CreateMailAccountPayload {
   imapTls: boolean;
   imapUsername: string;
   imapPassword: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpTls: boolean;
+  smtpStartTls: boolean;
+  smtpUsername: string;
+  smtpPassword: string;
+  smtpUseImapPassword: boolean;
+  sentFolder: string;
+  signatureHtml: string;
   pollIntervalMinutes: number;
   enabled: boolean;
+  cleanupEnabled: boolean;
+  cleanupRetentionDays: number;
 }
 
 export type UpdateMailAccountPayload = CreateMailAccountPayload;
+
+export interface SendMessagePayload {
+  accountId: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  textBody: string;
+  htmlBody: string;
+  attachments?: File[];
+}
 
 export interface MailRulePayload {
   name: string;
@@ -185,8 +294,27 @@ export const authApi = {
   me() {
     return requestEnvelope<User>(apiClient.get('/auth/me'));
   },
+  changePassword(payload: ChangePasswordPayload) {
+    return requestEnvelope<Record<string, never>>(apiClient.post('/auth/change-password', payload));
+  },
   logout() {
     return requestEnvelope<Record<string, never>>(apiClient.post('/auth/logout'));
+  },
+};
+
+export const profileApi = {
+  get() {
+    return requestEnvelope<User>(apiClient.get('/profile'));
+  },
+  update(payload: UpdateProfilePayload) {
+    return requestEnvelope<User>(apiClient.put('/profile', payload));
+  },
+  uploadAvatar(file: File) {
+    const form = new FormData();
+    form.append('avatar', file);
+    return requestEnvelope<User>(apiClient.post('/profile/avatar', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }));
   },
 };
 
@@ -206,8 +334,20 @@ export const mailAccountApi = {
   testConnection(id: string) {
     return requestEnvelope<Record<string, never>>(apiClient.post(`/mail-accounts/${id}/test-connection`));
   },
+  folders(id: string) {
+    return requestEnvelope<MailAccountFoldersData>(apiClient.get(`/mail-accounts/${id}/folders`));
+  },
   sync(id: string) {
     return requestEnvelope<SyncResult>(apiClient.post(`/mail-accounts/${id}/sync`));
+  },
+  startFullSync(id: string) {
+    return requestEnvelope<FullSyncStatusData>(apiClient.post(`/mail-accounts/${id}/full-sync/start`));
+  },
+  stopFullSync(id: string) {
+    return requestEnvelope<FullSyncStatusData>(apiClient.post(`/mail-accounts/${id}/full-sync/stop`));
+  },
+  syncStatus(id: string) {
+    return requestEnvelope<FullSyncStatusData>(apiClient.get(`/mail-accounts/${id}/sync-status`));
   },
 };
 
@@ -228,6 +368,7 @@ export const messageApi = {
     keyword?: string;
     from?: string;
     subject?: string;
+    body?: string;
     dateFrom?: string;
     dateTo?: string;
     hasAttachments?: boolean;
@@ -238,6 +379,22 @@ export const messageApi = {
   },
   detail(id: string) {
     return requestEnvelope<MailMessageDetail>(apiClient.get(`/messages/${id}`));
+  },
+  send(payload: SendMessagePayload) {
+    const form = new FormData();
+    form.append('accountId', payload.accountId);
+    form.append('to', JSON.stringify(payload.to));
+    form.append('cc', JSON.stringify(payload.cc));
+    form.append('bcc', JSON.stringify(payload.bcc));
+    form.append('subject', payload.subject);
+    form.append('textBody', payload.textBody);
+    form.append('htmlBody', payload.htmlBody);
+    for (const file of payload.attachments || []) {
+      form.append('attachments', file, file.name);
+    }
+    return requestEnvelope<MailMessage>(apiClient.post('/messages/send', form, {
+      timeout: 60000,
+    }));
   },
   async downloadAttachment(attachment: MailAttachment) {
     const response = await apiClient.get<Blob>(attachment.downloadUrl.replace(/^\/api\/v1/, ''), {
@@ -256,6 +413,21 @@ export const mailFolderApi = {
   },
   remove(id: string) {
     return requestEnvelope<Record<string, never>>(apiClient.delete(`/mail-folders/${id}`));
+  },
+};
+
+export const contactApi = {
+  list(params?: { keyword?: string; page?: number; pageSize?: number }) {
+    return requestEnvelope<ContactListData>(apiClient.get('/contacts', { params }));
+  },
+  create(payload: ContactPayload) {
+    return requestEnvelope<Contact>(apiClient.post('/contacts', payload));
+  },
+  update(id: string, payload: ContactPayload) {
+    return requestEnvelope<Contact>(apiClient.put(`/contacts/${id}`, payload));
+  },
+  remove(id: string) {
+    return requestEnvelope<Record<string, never>>(apiClient.delete(`/contacts/${id}`));
   },
 };
 

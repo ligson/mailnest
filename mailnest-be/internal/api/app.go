@@ -1,15 +1,26 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/png"
+	"io"
+	"log"
 	"mime"
+	"mime/multipart"
 	"net/http"
+	netmail "net/mail"
+	"net/url"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +32,8 @@ import (
 	"mailnest-be/internal/oauth"
 	"mailnest-be/internal/response"
 	"mailnest-be/internal/storage"
+
+	"golang.org/x/image/tiff"
 )
 
 type App struct {
@@ -33,6 +46,13 @@ type App struct {
 type contextKey string
 
 const userIDKey contextKey = "userID"
+
+var cidReferencePattern = regexp.MustCompile(`(?i)cid:(?:<[^>]+>|[^"'\s>]+)`)
+
+const inlineAttachmentURLTTL = time.Hour
+
+const maxComposeAttachmentCount = 20
+const maxComposeAttachmentBytes = 25 << 20
 
 func NewApp(cfg config.Config) (*App, error) {
 	return NewAppWithFetcher(cfg, nil)
@@ -47,11 +67,16 @@ func NewAppWithDependencies(cfg config.Config, fetcher mail.Fetcher, exchanger o
 	if err != nil {
 		return nil, err
 	}
+	if err := store.MarkStaleFullSyncsFailed(); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	mailService := mail.NewService(store, fetcher, exchanger, cfg.App.DataDir, cfg.App.CredentialSecret)
 
 	return &App{
 		cfg:         cfg,
 		store:       store,
-		mailService: mail.NewService(store, fetcher, exchanger, cfg.App.DataDir, cfg.App.CredentialSecret),
+		mailService: mailService,
 		oauth:       oauth.NewService(store, exchanger, cfg.App.CredentialSecret, cfg.OAuth.Microsoft.RedirectURL),
 	}, nil
 }
@@ -63,16 +88,31 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/login", a.handleLogin)
 	mux.Handle("GET /api/v1/auth/me", a.authMiddleware(http.HandlerFunc(a.handleMe)))
 	mux.Handle("POST /api/v1/auth/logout", a.authMiddleware(http.HandlerFunc(a.handleLogout)))
+	mux.Handle("POST /api/v1/auth/change-password", a.authMiddleware(http.HandlerFunc(a.handleChangePassword)))
+	mux.Handle("GET /api/v1/profile", a.authMiddleware(http.HandlerFunc(a.handleProfile)))
+	mux.Handle("PUT /api/v1/profile", a.authMiddleware(http.HandlerFunc(a.handleUpdateProfile)))
+	mux.Handle("POST /api/v1/profile/avatar", a.authMiddleware(http.HandlerFunc(a.handleUploadProfileAvatar)))
+	mux.Handle("GET /api/v1/profile/avatar/content", a.authMiddleware(http.HandlerFunc(a.handleProfileAvatarContent)))
 	mux.Handle("GET /api/v1/mail-accounts", a.authMiddleware(http.HandlerFunc(a.handleListMailAccounts)))
 	mux.Handle("POST /api/v1/mail-accounts", a.authMiddleware(http.HandlerFunc(a.handleCreateMailAccount)))
 	mux.Handle("PUT /api/v1/mail-accounts/{id}", a.authMiddleware(http.HandlerFunc(a.handleUpdateMailAccount)))
 	mux.Handle("DELETE /api/v1/mail-accounts/{id}", a.authMiddleware(http.HandlerFunc(a.handleDeleteMailAccount)))
+	mux.Handle("GET /api/v1/mail-accounts/{id}/folders", a.authMiddleware(http.HandlerFunc(a.handleListMailAccountFolders)))
 	mux.Handle("POST /api/v1/mail-accounts/{id}/test-connection", a.authMiddleware(http.HandlerFunc(a.handleTestMailAccountConnection)))
 	mux.Handle("POST /api/v1/mail-accounts/{id}/sync", a.authMiddleware(http.HandlerFunc(a.handleSyncMailAccount)))
+	mux.Handle("POST /api/v1/mail-accounts/{id}/full-sync/start", a.authMiddleware(http.HandlerFunc(a.handleStartFullSyncMailAccount)))
+	mux.Handle("POST /api/v1/mail-accounts/{id}/full-sync/stop", a.authMiddleware(http.HandlerFunc(a.handleStopFullSyncMailAccount)))
+	mux.Handle("GET /api/v1/mail-accounts/{id}/sync-status", a.authMiddleware(http.HandlerFunc(a.handleMailAccountSyncStatus)))
 	mux.Handle("GET /api/v1/messages", a.authMiddleware(http.HandlerFunc(a.handleListMessages)))
+	mux.Handle("POST /api/v1/messages/send", a.authMiddleware(http.HandlerFunc(a.handleSendMessage)))
 	mux.Handle("GET /api/v1/messages/{id}", a.authMiddleware(http.HandlerFunc(a.handleMessageDetail)))
 	mux.Handle("POST /api/v1/messages/{id}/folder", a.authMiddleware(http.HandlerFunc(a.handleAssignMessageFolder)))
 	mux.Handle("GET /api/v1/messages/{id}/attachments/{attachmentId}/content", a.authMiddleware(http.HandlerFunc(a.handleAttachmentContent)))
+	mux.HandleFunc("GET /api/v1/messages/{id}/attachments/{attachmentId}/inline-content", a.handleInlineAttachmentContent)
+	mux.Handle("GET /api/v1/contacts", a.authMiddleware(http.HandlerFunc(a.handleListContacts)))
+	mux.Handle("POST /api/v1/contacts", a.authMiddleware(http.HandlerFunc(a.handleCreateContact)))
+	mux.Handle("PUT /api/v1/contacts/{id}", a.authMiddleware(http.HandlerFunc(a.handleUpdateContact)))
+	mux.Handle("DELETE /api/v1/contacts/{id}", a.authMiddleware(http.HandlerFunc(a.handleDeleteContact)))
 	mux.Handle("GET /api/v1/mail-folders", a.authMiddleware(http.HandlerFunc(a.handleListMailFolders)))
 	mux.Handle("POST /api/v1/mail-folders", a.authMiddleware(http.HandlerFunc(a.handleCreateMailFolder)))
 	mux.Handle("DELETE /api/v1/mail-folders/{id}", a.authMiddleware(http.HandlerFunc(a.handleDeleteMailFolder)))
@@ -84,6 +124,15 @@ func (a *App) Routes() http.Handler {
 	mux.Handle("POST /api/v1/oauth/microsoft/start", a.authMiddleware(http.HandlerFunc(a.handleMicrosoftOAuthStart)))
 	mux.Handle("POST /api/v1/oauth/microsoft/complete", a.authMiddleware(http.HandlerFunc(a.handleMicrosoftOAuthComplete)))
 	return mux
+}
+
+func (a *App) StartBackgroundTasks(ctx context.Context) {
+	go func() {
+		if err := a.mailService.RepairStoredParsedMessages(); err != nil {
+			log.Printf("repair parsed mail content: %v", err)
+		}
+	}()
+	a.mailService.StartAutoSyncScheduler(ctx, mail.AutoSyncOptions{})
 }
 
 func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -101,16 +150,38 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
+type changePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+	ConfirmPassword string `json:"confirmPassword"`
+}
+
+type updateProfileRequest struct {
+	Nickname string `json:"nickname"`
+	Bio      string `json:"bio"`
+}
+
 type createMailAccountRequest struct {
-	DisplayName         string `json:"displayName"`
-	Email               string `json:"email"`
-	IMAPHost            string `json:"imapHost"`
-	IMAPPort            int    `json:"imapPort"`
-	IMAPTLS             bool   `json:"imapTls"`
-	IMAPUsername        string `json:"imapUsername"`
-	IMAPPassword        string `json:"imapPassword"`
-	PollIntervalMinutes int    `json:"pollIntervalMinutes"`
-	Enabled             bool   `json:"enabled"`
+	DisplayName          string `json:"displayName"`
+	Email                string `json:"email"`
+	IMAPHost             string `json:"imapHost"`
+	IMAPPort             int    `json:"imapPort"`
+	IMAPTLS              bool   `json:"imapTls"`
+	IMAPUsername         string `json:"imapUsername"`
+	IMAPPassword         string `json:"imapPassword"`
+	SMTPHost             string `json:"smtpHost"`
+	SMTPPort             int    `json:"smtpPort"`
+	SMTPTLS              bool   `json:"smtpTls"`
+	SMTPStartTLS         bool   `json:"smtpStartTls"`
+	SMTPUsername         string `json:"smtpUsername"`
+	SMTPPassword         string `json:"smtpPassword"`
+	SMTPUseIMAPPassword  bool   `json:"smtpUseImapPassword"`
+	SentFolder           string `json:"sentFolder"`
+	SignatureHTML        string `json:"signatureHtml"`
+	PollIntervalMinutes  int    `json:"pollIntervalMinutes"`
+	Enabled              bool   `json:"enabled"`
+	CleanupEnabled       bool   `json:"cleanupEnabled"`
+	CleanupRetentionDays int    `json:"cleanupRetentionDays"`
 }
 
 type completeMicrosoftOAuthRequest struct {
@@ -124,8 +195,27 @@ type createMailFolderRequest struct {
 	SortOrder int    `json:"sortOrder"`
 }
 
+type contactRequest struct {
+	Email       string `json:"email"`
+	DisplayName string `json:"displayName"`
+	Nickname    string `json:"nickname"`
+	Phone       string `json:"phone"`
+	Company     string `json:"company"`
+	Notes       string `json:"notes"`
+}
+
 type assignMessageFolderRequest struct {
 	FolderID string `json:"folderId"`
+}
+
+type sendMessageRequest struct {
+	AccountID string   `json:"accountId"`
+	To        []string `json:"to"`
+	CC        []string `json:"cc"`
+	BCC       []string `json:"bcc"`
+	Subject   string   `json:"subject"`
+	TextBody  string   `json:"textBody"`
+	HTMLBody  string   `json:"htmlBody"`
 }
 
 type createMailRuleRequest struct {
@@ -243,6 +333,205 @@ func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, "退出成功", nil)
 }
 
+func (a *App) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+
+	var req changePasswordRequest
+	if err := decodeJSON(r, &req); err != nil {
+		response.Error(w, http.StatusBadRequest, "请求参数格式错误")
+		return
+	}
+	if strings.TrimSpace(req.CurrentPassword) == "" || len(req.NewPassword) < 8 {
+		response.Error(w, http.StatusBadRequest, "当前密码不能为空，新密码至少 8 位")
+		return
+	}
+	if req.NewPassword != req.ConfirmPassword {
+		response.Error(w, http.StatusBadRequest, "两次输入的新密码不一致")
+		return
+	}
+
+	user, err := a.store.FindUserByID(userID)
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "获取当前用户失败")
+		return
+	}
+	if !auth.CheckPassword(user.PasswordHash, req.CurrentPassword) {
+		response.Error(w, http.StatusBadRequest, "当前密码错误")
+		return
+	}
+	if auth.CheckPassword(user.PasswordHash, req.NewPassword) {
+		response.Error(w, http.StatusBadRequest, "新密码不能与当前密码相同")
+		return
+	}
+
+	passwordHash, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "密码处理失败")
+		return
+	}
+	if err := a.store.UpdateUserPasswordHash(userID, passwordHash); errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	} else if err != nil {
+		response.Error(w, http.StatusInternalServerError, "密码修改失败")
+		return
+	}
+
+	response.OK(w, "密码修改成功", nil)
+}
+
+func (a *App) handleProfile(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+
+	user, err := a.store.FindUserByID(userID)
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "获取个人资料失败")
+		return
+	}
+
+	response.OK(w, "获取成功", userPayload(user))
+}
+
+func (a *App) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+
+	var req updateProfileRequest
+	if err := decodeJSON(r, &req); err != nil {
+		response.Error(w, http.StatusBadRequest, "请求参数格式错误")
+		return
+	}
+	req.Nickname = strings.TrimSpace(req.Nickname)
+	req.Bio = strings.TrimSpace(req.Bio)
+	if len([]rune(req.Nickname)) > 40 {
+		response.Error(w, http.StatusBadRequest, "昵称不能超过 40 个字符")
+		return
+	}
+	if len([]rune(req.Bio)) > 200 {
+		response.Error(w, http.StatusBadRequest, "个人描述不能超过 200 个字符")
+		return
+	}
+
+	user, err := a.store.UpdateUserProfile(userID, req.Nickname, req.Bio)
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "保存个人资料失败")
+		return
+	}
+
+	response.OK(w, "保存成功", userPayload(user))
+}
+
+func (a *App) handleUploadProfileAvatar(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	if err := r.ParseMultipartForm(2 << 20); err != nil {
+		response.Error(w, http.StatusBadRequest, "头像文件不能超过 2MB")
+		return
+	}
+	file, header, err := r.FormFile("avatar")
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "请选择头像文件")
+		return
+	}
+	defer file.Close()
+
+	avatarPath, err := a.saveProfileAvatar(userID, file, header)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	user, err := a.store.UpdateUserAvatarPath(userID, avatarPath)
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "保存头像失败")
+		return
+	}
+
+	response.OK(w, "头像已更新", userPayload(user))
+}
+
+func (a *App) handleProfileAvatarContent(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	user, err := a.store.FindUserByID(userID)
+	if errors.Is(err, storage.ErrNotFound) || !user.AvatarPath.Valid {
+		response.Error(w, http.StatusNotFound, "头像不存在")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "获取头像失败")
+		return
+	}
+	http.ServeFile(w, r, user.AvatarPath.String)
+}
+
+func (a *App) saveProfileAvatar(userID int64, file multipart.File, header *multipart.FileHeader) (string, error) {
+	extension := strings.ToLower(filepath.Ext(header.Filename))
+	contentType := header.Header.Get("Content-Type")
+	switch {
+	case strings.HasPrefix(contentType, "image/png"):
+		extension = ".png"
+	case strings.HasPrefix(contentType, "image/jpeg"):
+		extension = ".jpg"
+	case strings.HasPrefix(contentType, "image/webp"):
+		extension = ".webp"
+	case strings.HasPrefix(contentType, "image/gif"):
+		extension = ".gif"
+	}
+	switch extension {
+	case ".png", ".jpg", ".jpeg", ".webp", ".gif":
+	default:
+		return "", fmt.Errorf("头像仅支持 PNG、JPG、WEBP 或 GIF")
+	}
+
+	dir := filepath.Join(a.cfg.App.DataDir, "users", fmt.Sprint(userID), "profile")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("创建头像目录失败")
+	}
+	path := filepath.Join(dir, "avatar"+extension)
+	output, err := os.Create(path)
+	if err != nil {
+		return "", fmt.Errorf("保存头像失败")
+	}
+	defer output.Close()
+	if _, err := output.ReadFrom(file); err != nil {
+		return "", fmt.Errorf("保存头像失败")
+	}
+	return path, nil
+}
+
 func (a *App) handleListMailAccounts(w http.ResponseWriter, r *http.Request) {
 	userID, ok := currentUserID(r)
 	if !ok {
@@ -281,12 +570,26 @@ func (a *App) handleCreateMailAccount(w http.ResponseWriter, r *http.Request) {
 	req.Email = strings.TrimSpace(req.Email)
 	req.IMAPHost = strings.TrimSpace(req.IMAPHost)
 	req.IMAPUsername = strings.TrimSpace(req.IMAPUsername)
+	req.SMTPHost = strings.TrimSpace(req.SMTPHost)
+	req.SMTPUsername = strings.TrimSpace(req.SMTPUsername)
+	req.SentFolder = normalizeSentFolder(req.SentFolder)
+	req.SignatureHTML = strings.TrimSpace(req.SignatureHTML)
 	if req.DisplayName == "" || req.Email == "" || req.IMAPHost == "" || req.IMAPUsername == "" || req.IMAPPassword == "" || req.IMAPPort <= 0 {
 		response.Error(w, http.StatusBadRequest, "邮箱账号配置不完整")
 		return
 	}
+	if req.SMTPHost != "" && req.SMTPPort <= 0 {
+		req.SMTPPort = 587
+	}
 	if req.PollIntervalMinutes <= 0 {
 		req.PollIntervalMinutes = 10
+	}
+	if req.CleanupRetentionDays <= 0 {
+		req.CleanupRetentionDays = 90
+	}
+	if len([]rune(req.SignatureHTML)) > 10000 {
+		response.Error(w, http.StatusBadRequest, "签名模板不能超过 10000 个字符")
+		return
 	}
 
 	encryptedPassword, err := crypto.EncryptString(req.IMAPPassword, a.cfg.App.CredentialSecret)
@@ -294,18 +597,38 @@ func (a *App) handleCreateMailAccount(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusInternalServerError, "邮箱凭据加密失败")
 		return
 	}
+	encryptedSMTPPassword := ""
+	if strings.TrimSpace(req.SMTPPassword) != "" {
+		encryptedSMTPPassword, err = crypto.EncryptString(req.SMTPPassword, a.cfg.App.CredentialSecret)
+		if err != nil {
+			response.Error(w, http.StatusInternalServerError, "SMTP 凭据加密失败")
+			return
+		}
+	} else if req.SMTPUseIMAPPassword && req.SMTPHost != "" {
+		encryptedSMTPPassword = encryptedPassword
+	}
 
 	account, err := a.store.CreateMailAccount(storage.MailAccount{
-		UserID:              userID,
-		DisplayName:         req.DisplayName,
-		Email:               req.Email,
-		IMAPHost:            req.IMAPHost,
-		IMAPPort:            req.IMAPPort,
-		IMAPTLS:             req.IMAPTLS,
-		IMAPUsername:        req.IMAPUsername,
-		IMAPPasswordEncoded: encryptedPassword,
-		PollIntervalMinutes: req.PollIntervalMinutes,
-		Enabled:             req.Enabled,
+		UserID:               userID,
+		DisplayName:          req.DisplayName,
+		Email:                req.Email,
+		IMAPHost:             req.IMAPHost,
+		IMAPPort:             req.IMAPPort,
+		IMAPTLS:              req.IMAPTLS,
+		IMAPUsername:         req.IMAPUsername,
+		IMAPPasswordEncoded:  encryptedPassword,
+		SMTPHost:             req.SMTPHost,
+		SMTPPort:             req.SMTPPort,
+		SMTPTLS:              req.SMTPTLS,
+		SMTPStartTLS:         req.SMTPStartTLS,
+		SMTPUsername:         req.SMTPUsername,
+		SMTPPasswordEncoded:  encryptedSMTPPassword,
+		SentFolder:           req.SentFolder,
+		SignatureHTML:        req.SignatureHTML,
+		PollIntervalMinutes:  req.PollIntervalMinutes,
+		Enabled:              req.Enabled,
+		CleanupEnabled:       req.CleanupEnabled,
+		CleanupRetentionDays: req.CleanupRetentionDays,
 	})
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "创建邮箱账号失败")
@@ -347,12 +670,26 @@ func (a *App) handleUpdateMailAccount(w http.ResponseWriter, r *http.Request) {
 	req.Email = strings.TrimSpace(req.Email)
 	req.IMAPHost = strings.TrimSpace(req.IMAPHost)
 	req.IMAPUsername = strings.TrimSpace(req.IMAPUsername)
+	req.SMTPHost = strings.TrimSpace(req.SMTPHost)
+	req.SMTPUsername = strings.TrimSpace(req.SMTPUsername)
+	req.SentFolder = normalizeSentFolder(req.SentFolder)
+	req.SignatureHTML = strings.TrimSpace(req.SignatureHTML)
 	if req.DisplayName == "" || req.Email == "" || req.IMAPHost == "" || req.IMAPUsername == "" || req.IMAPPort <= 0 {
 		response.Error(w, http.StatusBadRequest, "邮箱账号配置不完整")
 		return
 	}
+	if req.SMTPHost != "" && req.SMTPPort <= 0 {
+		req.SMTPPort = 587
+	}
 	if req.PollIntervalMinutes <= 0 {
 		req.PollIntervalMinutes = 10
+	}
+	if req.CleanupRetentionDays <= 0 {
+		req.CleanupRetentionDays = 90
+	}
+	if len([]rune(req.SignatureHTML)) > 10000 {
+		response.Error(w, http.StatusBadRequest, "签名模板不能超过 10000 个字符")
+		return
 	}
 
 	encryptedPassword := current.IMAPPasswordEncoded
@@ -363,6 +700,16 @@ func (a *App) handleUpdateMailAccount(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	encryptedSMTPPassword := current.SMTPPasswordEncoded
+	if strings.TrimSpace(req.SMTPPassword) != "" {
+		encryptedSMTPPassword, err = crypto.EncryptString(req.SMTPPassword, a.cfg.App.CredentialSecret)
+		if err != nil {
+			response.Error(w, http.StatusInternalServerError, "SMTP 凭据加密失败")
+			return
+		}
+	} else if req.SMTPUseIMAPPassword && req.SMTPHost != "" {
+		encryptedSMTPPassword = encryptedPassword
+	}
 
 	current.DisplayName = req.DisplayName
 	current.Email = req.Email
@@ -371,8 +718,18 @@ func (a *App) handleUpdateMailAccount(w http.ResponseWriter, r *http.Request) {
 	current.IMAPTLS = req.IMAPTLS
 	current.IMAPUsername = req.IMAPUsername
 	current.IMAPPasswordEncoded = encryptedPassword
+	current.SMTPHost = req.SMTPHost
+	current.SMTPPort = req.SMTPPort
+	current.SMTPTLS = req.SMTPTLS
+	current.SMTPStartTLS = req.SMTPStartTLS
+	current.SMTPUsername = req.SMTPUsername
+	current.SMTPPasswordEncoded = encryptedSMTPPassword
+	current.SentFolder = req.SentFolder
+	current.SignatureHTML = req.SignatureHTML
 	current.PollIntervalMinutes = req.PollIntervalMinutes
 	current.Enabled = req.Enabled
+	current.CleanupEnabled = req.CleanupEnabled
+	current.CleanupRetentionDays = req.CleanupRetentionDays
 
 	account, err := a.store.UpdateMailAccount(current)
 	if errors.Is(err, storage.ErrNotFound) {
@@ -428,6 +785,34 @@ func (a *App) handleTestMailAccountConnection(w http.ResponseWriter, r *http.Req
 	response.OK(w, "连接成功", nil)
 }
 
+func (a *App) handleListMailAccountFolders(w http.ResponseWriter, r *http.Request) {
+	userID, accountID, ok := accountRouteIDs(w, r)
+	if !ok {
+		return
+	}
+
+	folders, err := a.mailService.ListFolders(userID, accountID)
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusNotFound, "邮箱账号不存在")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "读取邮箱文件夹失败："+err.Error())
+		return
+	}
+
+	items := make([]map[string]any, 0, len(folders))
+	for _, folder := range folders {
+		items = append(items, map[string]any{
+			"name":          folder.Name,
+			"delimiter":     folder.Delimiter,
+			"attributes":    folder.Attributes,
+			"sentCandidate": mail.IsSentFolderCandidate(folder),
+		})
+	}
+	response.OK(w, "获取成功", map[string]any{"items": items})
+}
+
 func (a *App) handleSyncMailAccount(w http.ResponseWriter, r *http.Request) {
 	userID, accountID, ok := accountRouteIDs(w, r)
 	if !ok {
@@ -439,6 +824,10 @@ func (a *App) handleSyncMailAccount(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusNotFound, "邮箱账号不存在")
 		return
 	}
+	if errors.Is(err, mail.ErrSyncAlreadyRunning) {
+		response.Error(w, http.StatusConflict, "邮箱账号正在收取中，请稍后再试")
+		return
+	}
 	if err != nil {
 		response.Error(w, http.StatusBadRequest, "收取失败："+err.Error())
 		return
@@ -447,7 +836,65 @@ func (a *App) handleSyncMailAccount(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, "收取完成", map[string]any{
 		"jobId":           strconv.FormatInt(result.JobID, 10),
 		"newMessageCount": result.NewMessageCount,
+		"warnings":        result.Warnings,
 	})
+}
+
+func (a *App) handleStartFullSyncMailAccount(w http.ResponseWriter, r *http.Request) {
+	userID, accountID, ok := accountRouteIDs(w, r)
+	if !ok {
+		return
+	}
+
+	status, err := a.mailService.StartFullSync(userID, accountID)
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusNotFound, "邮箱账号不存在")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "启动全量同步失败："+err.Error())
+		return
+	}
+
+	response.JSON(w, http.StatusAccepted, true, "已开始全量同步", fullSyncStatusPayload(status))
+}
+
+func (a *App) handleStopFullSyncMailAccount(w http.ResponseWriter, r *http.Request) {
+	userID, accountID, ok := accountRouteIDs(w, r)
+	if !ok {
+		return
+	}
+
+	status, err := a.mailService.StopFullSync(userID, accountID)
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusNotFound, "邮箱账号不存在")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "停止全量同步失败："+err.Error())
+		return
+	}
+
+	response.OK(w, "已停止全量同步", fullSyncStatusPayload(status))
+}
+
+func (a *App) handleMailAccountSyncStatus(w http.ResponseWriter, r *http.Request) {
+	userID, accountID, ok := accountRouteIDs(w, r)
+	if !ok {
+		return
+	}
+
+	status, err := a.mailService.GetFullSyncStatus(userID, accountID)
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusNotFound, "邮箱账号不存在")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "获取同步状态失败")
+		return
+	}
+
+	response.OK(w, "获取成功", fullSyncStatusPayload(status))
 }
 
 func (a *App) handleListMessages(w http.ResponseWriter, r *http.Request) {
@@ -456,6 +903,7 @@ func (a *App) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
 		return
 	}
+	started := time.Now()
 
 	page := parsePositiveInt(r.URL.Query().Get("page"), 1)
 	pageSize := parsePositiveInt(r.URL.Query().Get("pageSize"), 20)
@@ -471,16 +919,19 @@ func (a *App) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		Keyword:        r.URL.Query().Get("keyword"),
 		From:           r.URL.Query().Get("from"),
 		Subject:        r.URL.Query().Get("subject"),
+		Body:           r.URL.Query().Get("body"),
 		DateFrom:       parseDateQuery(r.URL.Query().Get("dateFrom")),
 		DateTo:         parseDateQuery(r.URL.Query().Get("dateTo")),
 		HasAttachments: parseBoolQuery(r.URL.Query().Get("hasAttachments")),
 		Limit:          pageSize,
 		Offset:         offset,
+		SummaryOnly:    true,
 	})
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "获取邮件列表失败")
 		return
 	}
+	queryDuration := time.Since(started)
 
 	items := make([]map[string]any, 0, len(messages))
 	for _, message := range messages {
@@ -493,6 +944,71 @@ func (a *App) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		"pageSize": pageSize,
 		"total":    total,
 	})
+	logSlowAPI("messages.list", started, "query="+queryDuration.String(), "items="+strconv.Itoa(len(items)), "total="+strconv.Itoa(total))
+}
+
+func (a *App) handleSendMessage(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	req, attachments, err := decodeSendMessageRequest(r)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	accountID, err := strconv.ParseInt(strings.TrimSpace(req.AccountID), 10, 64)
+	if err != nil || accountID <= 0 {
+		response.Error(w, http.StatusBadRequest, "请选择发件邮箱账号")
+		return
+	}
+	to, ok := normalizeOutgoingAddresses(w, req.To, "收件人")
+	if !ok {
+		return
+	}
+	cc, ok := normalizeOutgoingAddresses(w, req.CC, "抄送人")
+	if !ok {
+		return
+	}
+	bcc, ok := normalizeOutgoingAddresses(w, req.BCC, "密送人")
+	if !ok {
+		return
+	}
+	if len(to) == 0 && len(cc) == 0 && len(bcc) == 0 {
+		response.Error(w, http.StatusBadRequest, "至少需要填写一个收件人")
+		return
+	}
+	req.Subject = strings.TrimSpace(req.Subject)
+	req.TextBody = strings.TrimSpace(req.TextBody)
+	req.HTMLBody = strings.TrimSpace(req.HTMLBody)
+	if req.Subject == "" && req.TextBody == "" && req.HTMLBody == "" {
+		response.Error(w, http.StatusBadRequest, "主题和正文不能同时为空")
+		return
+	}
+	if len([]rune(req.Subject)) > 500 {
+		response.Error(w, http.StatusBadRequest, "邮件主题不能超过 500 个字符")
+		return
+	}
+
+	sent, err := a.mailService.SendMessage(userID, accountID, mail.OutgoingMessage{
+		To:          to,
+		CC:          cc,
+		BCC:         bcc,
+		Subject:     req.Subject,
+		TextBody:    req.TextBody,
+		HTMLBody:    req.HTMLBody,
+		Attachments: attachments,
+	})
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusNotFound, "邮箱账号不存在")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "发送失败："+err.Error())
+		return
+	}
+	response.OK(w, "发送成功", messageListPayload(sent))
 }
 
 func (a *App) handleMessageDetail(w http.ResponseWriter, r *http.Request) {
@@ -501,6 +1017,7 @@ func (a *App) handleMessageDetail(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
 		return
 	}
+	started := time.Now()
 
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -508,6 +1025,7 @@ func (a *App) handleMessageDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	segmentStarted := time.Now()
 	message, err := a.store.FindMailMessageByID(userID, id)
 	if errors.Is(err, storage.ErrNotFound) {
 		response.Error(w, http.StatusNotFound, "邮件不存在")
@@ -517,21 +1035,44 @@ func (a *App) handleMessageDetail(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusInternalServerError, "获取邮件详情失败")
 		return
 	}
+	messageDuration := time.Since(segmentStarted)
 
 	payload := messageListPayload(message)
+	segmentStarted = time.Now()
 	attachments, err := a.store.ListMailAttachments(userID, message.ID)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "获取邮件附件失败")
 		return
 	}
+	attachmentsDuration := time.Since(segmentStarted)
+	segmentStarted = time.Now()
+	htmlBody := readOptionalFile(message.HTMLBodyPath)
+	htmlReadDuration := time.Since(segmentStarted)
+	segmentStarted = time.Now()
+	inlineContentIDs := referencedInlineContentIDs(htmlBody, attachments)
 	payload["textBody"] = readOptionalFile(message.TextBodyPath)
-	payload["htmlBody"] = rewriteInlineCIDImages(readOptionalFile(message.HTMLBodyPath), attachments)
+	bodyReadDuration := time.Since(segmentStarted)
+	segmentStarted = time.Now()
+	payload["htmlBody"] = rewriteInlineCIDImages(htmlBody, attachments, inlineContentIDs, userID, message.ID, a.cfg.App.JWTSecret)
+	rewriteDuration := time.Since(segmentStarted)
 	payload["cc"] = splitAddressField(message.CCAddrs)
 	payload["folder"] = message.Folder
 	payload["messageId"] = nullableString(message.MessageID)
-	payload["attachments"] = attachmentPayloads(message.ID, attachments)
+	payload["attachments"] = attachmentPayloads(message.ID, attachments, inlineContentIDs)
 
 	response.OK(w, "获取成功", payload)
+	logSlowAPI(
+		"messages.detail",
+		started,
+		"id="+strconv.FormatInt(id, 10),
+		"message="+messageDuration.String(),
+		"attachments="+attachmentsDuration.String(),
+		"htmlRead="+htmlReadDuration.String(),
+		"bodyRead="+bodyReadDuration.String(),
+		"cidRewrite="+rewriteDuration.String(),
+		"attachmentCount="+strconv.Itoa(len(attachments)),
+		"htmlBytes="+strconv.Itoa(len(htmlBody)),
+	)
 }
 
 func (a *App) handleAssignMessageFolder(w http.ResponseWriter, r *http.Request) {
@@ -576,6 +1117,129 @@ func (a *App) handleAssignMessageFolder(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	response.OK(w, "更新成功", nil)
+}
+
+func (a *App) handleListContacts(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	page := parsePositiveInt(r.URL.Query().Get("page"), 1)
+	pageSize := parsePositiveInt(r.URL.Query().Get("pageSize"), 100)
+	contacts, total, err := a.store.ListContacts(storage.ListContactsQuery{
+		UserID:  userID,
+		Keyword: r.URL.Query().Get("keyword"),
+		Limit:   pageSize,
+		Offset:  (page - 1) * pageSize,
+	})
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "获取联系人失败")
+		return
+	}
+	items := make([]map[string]any, 0, len(contacts))
+	for _, contact := range contacts {
+		items = append(items, contactPayload(contact))
+	}
+	response.OK(w, "获取成功", map[string]any{
+		"items":    items,
+		"page":     page,
+		"pageSize": pageSize,
+		"total":    total,
+	})
+}
+
+func (a *App) handleCreateContact(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	var req contactRequest
+	if err := decodeJSON(r, &req); err != nil {
+		response.Error(w, http.StatusBadRequest, "请求参数格式错误")
+		return
+	}
+	params, ok := contactParamsFromRequest(w, userID, req)
+	if !ok {
+		return
+	}
+	contact, err := a.store.CreateContact(params)
+	if err != nil {
+		response.Error(w, http.StatusConflict, "联系人邮箱已存在")
+		return
+	}
+	response.Created(w, "创建成功", contactPayload(contact))
+}
+
+func (a *App) handleUpdateContact(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "联系人 ID 格式错误")
+		return
+	}
+	current, err := a.store.FindContactByID(userID, id)
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusNotFound, "联系人不存在")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "获取联系人失败")
+		return
+	}
+	var req contactRequest
+	if err := decodeJSON(r, &req); err != nil {
+		response.Error(w, http.StatusBadRequest, "请求参数格式错误")
+		return
+	}
+	params, ok := contactParamsFromRequest(w, userID, req)
+	if !ok {
+		return
+	}
+	current.Email = params.Email
+	current.EmailKey = strings.ToLower(params.Email)
+	current.DisplayName = sql.NullString{String: params.DisplayName, Valid: strings.TrimSpace(params.DisplayName) != ""}
+	current.Nickname = sql.NullString{String: params.Nickname, Valid: strings.TrimSpace(params.Nickname) != ""}
+	current.Phone = sql.NullString{String: params.Phone, Valid: strings.TrimSpace(params.Phone) != ""}
+	current.Company = sql.NullString{String: params.Company, Valid: strings.TrimSpace(params.Company) != ""}
+	current.Notes = sql.NullString{String: params.Notes, Valid: strings.TrimSpace(params.Notes) != ""}
+	current.Source = "manual"
+	contact, err := a.store.UpdateContact(current)
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusNotFound, "联系人不存在")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusConflict, "联系人邮箱已存在")
+		return
+	}
+	response.OK(w, "更新成功", contactPayload(contact))
+}
+
+func (a *App) handleDeleteContact(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "联系人 ID 格式错误")
+		return
+	}
+	if err := a.store.DeleteContact(userID, id); errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusNotFound, "联系人不存在")
+		return
+	} else if err != nil {
+		response.Error(w, http.StatusInternalServerError, "删除联系人失败")
+		return
+	}
+	response.OK(w, "删除成功", nil)
 }
 
 func (a *App) handleListMailFolders(w http.ResponseWriter, r *http.Request) {
@@ -856,6 +1520,53 @@ func (a *App) handleAttachmentContent(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, attachment.FilePath)
 }
 
+func (a *App) handleInlineAttachmentContent(w http.ResponseWriter, r *http.Request) {
+	messageID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "邮件 ID 格式错误")
+		return
+	}
+	attachmentID, err := strconv.ParseInt(r.PathValue("attachmentId"), 10, 64)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "附件 ID 格式错误")
+		return
+	}
+	userID, err := strconv.ParseInt(r.URL.Query().Get("uid"), 10, 64)
+	if err != nil || userID <= 0 {
+		response.Error(w, http.StatusUnauthorized, "内嵌图片链接已失效")
+		return
+	}
+	expiresAt, err := strconv.ParseInt(r.URL.Query().Get("exp"), 10, 64)
+	if err != nil || time.Now().Unix() > expiresAt {
+		response.Error(w, http.StatusUnauthorized, "内嵌图片链接已失效")
+		return
+	}
+	signature := r.URL.Query().Get("sig")
+	if !validInlineAttachmentSignature(a.cfg.App.JWTSecret, userID, messageID, attachmentID, expiresAt, signature) {
+		response.Error(w, http.StatusUnauthorized, "内嵌图片链接已失效")
+		return
+	}
+
+	attachment, err := a.store.FindMailAttachmentByID(userID, messageID, attachmentID)
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusNotFound, "附件不存在")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "获取附件失败")
+		return
+	}
+
+	contentType := "application/octet-stream"
+	if attachment.ContentType.Valid && strings.TrimSpace(attachment.ContentType.String) != "" {
+		contentType = attachment.ContentType.String
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": attachment.Filename}))
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	http.ServeFile(w, r, attachment.FilePath)
+}
+
 func (a *App) handleMicrosoftOAuthStart(w http.ResponseWriter, r *http.Request) {
 	userID, ok := currentUserID(r)
 	if !ok {
@@ -935,12 +1646,112 @@ func decodeJSON(r *http.Request, dst any) error {
 	return decoder.Decode(dst)
 }
 
+func decodeSendMessageRequest(r *http.Request) (sendMessageRequest, []mail.OutgoingAttachment, error) {
+	if !strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "multipart/form-data") {
+		var req sendMessageRequest
+		if err := decodeJSON(r, &req); err != nil {
+			return sendMessageRequest{}, nil, errors.New("请求参数格式错误")
+		}
+		return req, nil, nil
+	}
+
+	if err := r.ParseMultipartForm(maxComposeAttachmentBytes + 1<<20); err != nil {
+		return sendMessageRequest{}, nil, errors.New("读取发信表单失败")
+	}
+	form := r.MultipartForm
+	req := sendMessageRequest{
+		AccountID: strings.TrimSpace(formValue(form, "accountId")),
+		To:        formAddressValues(form, "to"),
+		CC:        formAddressValues(form, "cc"),
+		BCC:       formAddressValues(form, "bcc"),
+		Subject:   formValue(form, "subject"),
+		TextBody:  formValue(form, "textBody"),
+		HTMLBody:  formValue(form, "htmlBody"),
+	}
+	attachments, err := readComposeAttachments(form)
+	if err != nil {
+		return sendMessageRequest{}, nil, err
+	}
+	return req, attachments, nil
+}
+
+func formValue(form *multipart.Form, key string) string {
+	if form == nil || len(form.Value[key]) == 0 {
+		return ""
+	}
+	return form.Value[key][0]
+}
+
+func formAddressValues(form *multipart.Form, key string) []string {
+	raw := strings.TrimSpace(formValue(form, key))
+	if raw == "" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err == nil {
+		return values
+	}
+	return strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '，' || r == '；'
+	})
+}
+
+func readComposeAttachments(form *multipart.Form) ([]mail.OutgoingAttachment, error) {
+	if form == nil {
+		return nil, nil
+	}
+	fileHeaders := form.File["attachments"]
+	if len(fileHeaders) > maxComposeAttachmentCount {
+		return nil, fmt.Errorf("附件不能超过 %d 个", maxComposeAttachmentCount)
+	}
+	attachments := make([]mail.OutgoingAttachment, 0, len(fileHeaders))
+	var total int64
+	for _, header := range fileHeaders {
+		if header == nil || strings.TrimSpace(header.Filename) == "" {
+			continue
+		}
+		file, err := header.Open()
+		if err != nil {
+			return nil, errors.New("读取附件失败")
+		}
+		data, readErr := io.ReadAll(io.LimitReader(file, maxComposeAttachmentBytes+1))
+		closeErr := file.Close()
+		if readErr != nil || closeErr != nil {
+			return nil, errors.New("读取附件失败")
+		}
+		total += int64(len(data))
+		if total > maxComposeAttachmentBytes {
+			return nil, fmt.Errorf("附件总大小不能超过 %d MB", maxComposeAttachmentBytes>>20)
+		}
+		contentType := strings.TrimSpace(header.Header.Get("Content-Type"))
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		attachments = append(attachments, mail.OutgoingAttachment{
+			Filename:    filepath.Base(header.Filename),
+			ContentType: contentType,
+			Data:        data,
+		})
+	}
+	return attachments, nil
+}
+
 func userPayload(user storage.User) map[string]any {
 	return map[string]any{
-		"id":       strconv.FormatInt(user.ID, 10),
-		"username": user.Username,
-		"email":    user.Email,
+		"id":        strconv.FormatInt(user.ID, 10),
+		"username":  user.Username,
+		"email":     user.Email,
+		"nickname":  nullableString(user.Nickname),
+		"bio":       nullableString(user.Bio),
+		"avatarUrl": profileAvatarURL(user),
 	}
+}
+
+func profileAvatarURL(user storage.User) any {
+	if !user.AvatarPath.Valid || strings.TrimSpace(user.AvatarPath.String) == "" {
+		return nil
+	}
+	return "/api/v1/profile/avatar/content"
 }
 
 func currentUserID(r *http.Request) (int64, bool) {
@@ -979,20 +1790,51 @@ func mailAccountPayload(account storage.MailAccount) map[string]any {
 	}
 
 	return map[string]any{
-		"id":                  strconv.FormatInt(account.ID, 10),
-		"provider":            account.Provider,
-		"authType":            account.AuthType,
-		"displayName":         account.DisplayName,
-		"email":               account.Email,
-		"imapHost":            account.IMAPHost,
-		"imapPort":            account.IMAPPort,
-		"imapTls":             account.IMAPTLS,
-		"imapUsername":        account.IMAPUsername,
-		"pollIntervalMinutes": account.PollIntervalMinutes,
-		"enabled":             account.Enabled,
-		"lastSyncAt":          lastSyncAt,
-		"lastSyncStatus":      lastSyncStatus,
-		"lastSyncError":       lastSyncError,
+		"id":                   strconv.FormatInt(account.ID, 10),
+		"provider":             account.Provider,
+		"authType":             account.AuthType,
+		"displayName":          account.DisplayName,
+		"email":                account.Email,
+		"imapHost":             account.IMAPHost,
+		"imapPort":             account.IMAPPort,
+		"imapTls":              account.IMAPTLS,
+		"imapUsername":         account.IMAPUsername,
+		"smtpHost":             account.SMTPHost,
+		"smtpPort":             account.SMTPPort,
+		"smtpTls":              account.SMTPTLS,
+		"smtpStartTls":         account.SMTPStartTLS,
+		"smtpUsername":         account.SMTPUsername,
+		"smtpConfigured":       strings.TrimSpace(account.SMTPHost) != "",
+		"sentFolder":           normalizeSentFolder(account.SentFolder),
+		"signatureHtml":        account.SignatureHTML,
+		"pollIntervalMinutes":  account.PollIntervalMinutes,
+		"enabled":              account.Enabled,
+		"lastSyncAt":           lastSyncAt,
+		"lastSyncStatus":       lastSyncStatus,
+		"lastSyncError":        lastSyncError,
+		"fullSyncStatus":       account.FullSyncStatus,
+		"fullSyncTotal":        account.FullSyncTotal,
+		"fullSyncProcessed":    account.FullSyncProcessed,
+		"fullSyncNewCount":     account.FullSyncNewCount,
+		"fullSyncStartedAt":    nullableTime(account.FullSyncStartedAt),
+		"fullSyncFinishedAt":   nullableTime(account.FullSyncFinishedAt),
+		"fullSyncError":        nullableString(account.FullSyncError),
+		"cleanupEnabled":       account.CleanupEnabled,
+		"cleanupRetentionDays": account.CleanupRetentionDays,
+	}
+}
+
+func fullSyncStatusPayload(status mail.FullSyncStatus) map[string]any {
+	return map[string]any{
+		"fullSyncStatus":       status.Status,
+		"fullSyncTotal":        status.Total,
+		"fullSyncProcessed":    status.Processed,
+		"fullSyncNewCount":     status.NewCount,
+		"fullSyncStartedAt":    nullableTime(status.StartedAt),
+		"fullSyncFinishedAt":   nullableTime(status.FinishedAt),
+		"fullSyncError":        nullableString(status.Error),
+		"cleanupEnabled":       status.CleanupEnabled,
+		"cleanupRetentionDays": status.RetentionDays,
 	}
 }
 
@@ -1019,6 +1861,124 @@ func mailFolderPayload(folder storage.MailFolder) map[string]any {
 	}
 }
 
+func contactPayload(contact storage.Contact) map[string]any {
+	displayName := nullableString(contact.DisplayName)
+	nickname := nullableString(contact.Nickname)
+	preferredName := contact.Email
+	if name, ok := nickname.(string); ok && strings.TrimSpace(name) != "" {
+		preferredName = name
+	} else if name, ok := displayName.(string); ok && strings.TrimSpace(name) != "" {
+		preferredName = name
+	}
+	return map[string]any{
+		"id":          strconv.FormatInt(contact.ID, 10),
+		"email":       contact.Email,
+		"displayName": displayName,
+		"nickname":    nickname,
+		"name":        preferredName,
+		"phone":       nullableString(contact.Phone),
+		"company":     nullableString(contact.Company),
+		"notes":       nullableString(contact.Notes),
+		"source":      contact.Source,
+		"firstSeenAt": nullableTime(contact.FirstSeenAt),
+		"lastSeenAt":  nullableTime(contact.LastSeenAt),
+		"createdAt":   contact.CreatedAt,
+		"updatedAt":   contact.UpdatedAt,
+	}
+}
+
+func contactParamsFromRequest(w http.ResponseWriter, userID int64, req contactRequest) (storage.CreateContactParams, bool) {
+	email, displayFromEmail, ok := normalizeContactEmail(w, req.Email)
+	if !ok {
+		return storage.CreateContactParams{}, false
+	}
+	req.DisplayName = strings.TrimSpace(req.DisplayName)
+	if req.DisplayName == "" {
+		req.DisplayName = displayFromEmail
+	}
+	req.Nickname = strings.TrimSpace(req.Nickname)
+	req.Phone = strings.TrimSpace(req.Phone)
+	req.Company = strings.TrimSpace(req.Company)
+	req.Notes = strings.TrimSpace(req.Notes)
+	if len([]rune(req.DisplayName)) > 80 {
+		response.Error(w, http.StatusBadRequest, "联系人姓名不能超过 80 个字符")
+		return storage.CreateContactParams{}, false
+	}
+	if len([]rune(req.Nickname)) > 80 {
+		response.Error(w, http.StatusBadRequest, "联系人昵称不能超过 80 个字符")
+		return storage.CreateContactParams{}, false
+	}
+	if len([]rune(req.Phone)) > 40 {
+		response.Error(w, http.StatusBadRequest, "联系电话不能超过 40 个字符")
+		return storage.CreateContactParams{}, false
+	}
+	if len([]rune(req.Company)) > 120 {
+		response.Error(w, http.StatusBadRequest, "公司不能超过 120 个字符")
+		return storage.CreateContactParams{}, false
+	}
+	if len([]rune(req.Notes)) > 500 {
+		response.Error(w, http.StatusBadRequest, "备注不能超过 500 个字符")
+		return storage.CreateContactParams{}, false
+	}
+	return storage.CreateContactParams{
+		UserID:      userID,
+		Email:       email,
+		DisplayName: req.DisplayName,
+		Nickname:    req.Nickname,
+		Phone:       req.Phone,
+		Company:     req.Company,
+		Notes:       req.Notes,
+		Source:      "manual",
+		SeenAt:      sql.NullTime{Time: time.Now(), Valid: true},
+	}, true
+}
+
+func normalizeContactEmail(w http.ResponseWriter, value string) (string, string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		response.Error(w, http.StatusBadRequest, "联系人邮箱不能为空")
+		return "", "", false
+	}
+	address, err := netmail.ParseAddress(value)
+	if err != nil || strings.TrimSpace(address.Address) == "" {
+		response.Error(w, http.StatusBadRequest, "联系人邮箱格式不正确")
+		return "", "", false
+	}
+	email := strings.ToLower(strings.TrimSpace(address.Address))
+	if len([]rune(email)) > 254 {
+		response.Error(w, http.StatusBadRequest, "联系人邮箱过长")
+		return "", "", false
+	}
+	return email, strings.TrimSpace(address.Name), true
+}
+
+func normalizeOutgoingAddresses(w http.ResponseWriter, values []string, label string) ([]string, bool) {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		addresses, err := netmail.ParseAddressList(value)
+		if err != nil {
+			response.Error(w, http.StatusBadRequest, label+"邮箱格式不正确")
+			return nil, false
+		}
+		for _, address := range addresses {
+			if strings.TrimSpace(address.Address) == "" {
+				response.Error(w, http.StatusBadRequest, label+"邮箱格式不正确")
+				return nil, false
+			}
+			out = append(out, address.String())
+		}
+	}
+	if len(out) > 200 {
+		response.Error(w, http.StatusBadRequest, label+"不能超过 200 个")
+		return nil, false
+	}
+	return out, true
+}
+
 func mailRulePayload(rule storage.MailRule) map[string]any {
 	conditions := make([]map[string]any, 0, len(rule.Conditions))
 	for _, condition := range rule.Conditions {
@@ -1040,16 +2000,17 @@ func mailRulePayload(rule storage.MailRule) map[string]any {
 	}
 }
 
-func attachmentPayloads(messageID int64, attachments []storage.MailAttachment) []map[string]any {
+func attachmentPayloads(messageID int64, attachments []storage.MailAttachment, inlineContentIDs map[string]bool) []map[string]any {
 	items := make([]map[string]any, 0, len(attachments))
 	for _, attachment := range attachments {
+		inline := attachment.Inline || inlineContentIDs[normalizeContentID(nullableStringValue(attachment.ContentID))]
 		items = append(items, map[string]any{
 			"id":          strconv.FormatInt(attachment.ID, 10),
 			"messageId":   strconv.FormatInt(messageID, 10),
 			"filename":    attachment.Filename,
 			"contentType": nullableString(attachment.ContentType),
 			"contentId":   nullableString(attachment.ContentID),
-			"inline":      attachment.Inline,
+			"inline":      inline,
 			"size":        attachment.Size,
 			"downloadUrl": fmt.Sprintf("/api/v1/messages/%d/attachments/%d/content", messageID, attachment.ID),
 		})
@@ -1057,30 +2018,167 @@ func attachmentPayloads(messageID int64, attachments []storage.MailAttachment) [
 	return items
 }
 
-func rewriteInlineCIDImages(htmlBody string, attachments []storage.MailAttachment) string {
-	if strings.TrimSpace(htmlBody) == "" || len(attachments) == 0 {
+func rewriteInlineCIDImages(htmlBody string, attachments []storage.MailAttachment, inlineContentIDs map[string]bool, userID, messageID int64, secret string) string {
+	if strings.TrimSpace(htmlBody) == "" {
 		return htmlBody
 	}
-	result := htmlBody
+	replacements := make(map[string]string)
 	for _, attachment := range attachments {
-		if !attachment.Inline || !attachment.ContentID.Valid || strings.TrimSpace(attachment.ContentID.String) == "" {
+		contentID := nullableStringValue(attachment.ContentID)
+		normalizedContentID := normalizeContentID(contentID)
+		if normalizedContentID == "" || (!attachment.Inline && !inlineContentIDs[normalizedContentID]) {
 			continue
 		}
 		contentType := "application/octet-stream"
 		if attachment.ContentType.Valid && strings.TrimSpace(attachment.ContentType.String) != "" {
 			contentType = attachment.ContentType.String
 		}
+		if browserCanDisplayImage(contentType, attachment.FilePath) {
+			replacements[normalizedContentID] = inlineAttachmentContentURL(secret, userID, messageID, attachment.ID)
+			continue
+		}
 		data, err := os.ReadFile(attachment.FilePath)
 		if err != nil {
 			continue
 		}
-		dataURL := "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
-		contentID := strings.TrimSpace(attachment.ContentID.String)
-		for _, cid := range []string{"cid:" + contentID, "cid:<" + contentID + ">"} {
-			result = strings.ReplaceAll(result, cid, dataURL)
+		contentType, data = browserDisplayableInlineImage(contentType, attachment.FilePath, data)
+		replacements[normalizedContentID] = "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
+	}
+	return rewriteCIDReferences(htmlBody, replacements)
+}
+
+func referencedInlineContentIDs(htmlBody string, attachments []storage.MailAttachment) map[string]bool {
+	referenced := make(map[string]bool)
+	if strings.TrimSpace(htmlBody) == "" || len(attachments) == 0 {
+		return referenced
+	}
+	htmlContentIDs := extractCIDReferences(htmlBody)
+	for _, attachment := range attachments {
+		contentID := nullableStringValue(attachment.ContentID)
+		normalizedContentID := normalizeContentID(contentID)
+		if normalizedContentID == "" {
+			continue
+		}
+		if htmlContentIDs[normalizedContentID] {
+			referenced[normalizedContentID] = true
 		}
 	}
-	return result
+	return referenced
+}
+
+func rewriteCIDReferences(htmlBody string, replacements map[string]string) string {
+	return cidReferencePattern.ReplaceAllStringFunc(htmlBody, func(reference string) string {
+		normalizedContentID := normalizeContentID(reference)
+		if replacement, ok := replacements[normalizedContentID]; ok {
+			return replacement
+		}
+		return missingInlineImagePlaceholderDataURL()
+	})
+}
+
+func inlineAttachmentContentURL(secret string, userID, messageID, attachmentID int64) string {
+	expiresAt := time.Now().Add(inlineAttachmentURLTTL).Unix()
+	signature := inlineAttachmentSignature(secret, userID, messageID, attachmentID, expiresAt)
+	return fmt.Sprintf(
+		"/api/v1/messages/%d/attachments/%d/inline-content?uid=%d&exp=%d&sig=%s",
+		messageID,
+		attachmentID,
+		userID,
+		expiresAt,
+		url.QueryEscape(signature),
+	)
+}
+
+func validInlineAttachmentSignature(secret string, userID, messageID, attachmentID, expiresAt int64, signature string) bool {
+	if strings.TrimSpace(signature) == "" {
+		return false
+	}
+	expected := inlineAttachmentSignature(secret, userID, messageID, attachmentID, expiresAt)
+	return hmac.Equal([]byte(signature), []byte(expected))
+}
+
+func inlineAttachmentSignature(secret string, userID, messageID, attachmentID, expiresAt int64) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = fmt.Fprintf(mac, "%d:%d:%d:%d", userID, messageID, attachmentID, expiresAt)
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func extractCIDReferences(htmlBody string) map[string]bool {
+	contentIDs := make(map[string]bool)
+	for _, reference := range cidReferencePattern.FindAllString(htmlBody, -1) {
+		normalizedContentID := normalizeContentID(reference)
+		if normalizedContentID != "" {
+			contentIDs[normalizedContentID] = true
+		}
+	}
+	return contentIDs
+}
+
+func normalizeContentID(contentID string) string {
+	contentID = strings.TrimSpace(contentID)
+	if decoded, err := url.PathUnescape(contentID); err == nil {
+		contentID = decoded
+	}
+	contentID = strings.TrimSpace(contentID)
+	if strings.HasPrefix(strings.ToLower(contentID), "cid:") {
+		contentID = strings.TrimSpace(contentID[4:])
+	}
+	contentID = strings.TrimPrefix(strings.TrimSuffix(contentID, ">"), "<")
+	return strings.ToLower(contentID)
+}
+
+func normalizeSentFolder(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "Sent"
+	}
+	return value
+}
+
+func browserDisplayableInlineImage(contentType string, filePath string, data []byte) (string, []byte) {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	extension := strings.ToLower(filepath.Ext(filePath))
+	if mediaType != "image/tiff" && mediaType != "image/tif" && extension != ".tif" && extension != ".tiff" {
+		return contentType, data
+	}
+
+	image, err := tiff.Decode(bytes.NewReader(data))
+	if err != nil {
+		return contentType, data
+	}
+	var pngData bytes.Buffer
+	if err := png.Encode(&pngData, image); err != nil {
+		return contentType, data
+	}
+	return "image/png", pngData.Bytes()
+}
+
+func browserCanDisplayImage(contentType string, filePath string) bool {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	switch mediaType {
+	case "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/svg+xml", "image/bmp", "image/x-icon":
+		return true
+	case "image/tiff", "image/tif":
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(filePath)) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico":
+		return true
+	default:
+		return false
+	}
+}
+
+func missingInlineImagePlaceholderDataURL() string {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="48" viewBox="0 0 220 48"><rect width="220" height="48" rx="6" fill="#f8fafc" stroke="#cbd5e1"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#64748b" font-size="14" font-family="Arial, sans-serif">内嵌图片缺失</text></svg>`
+	return "data:image/svg+xml;charset=utf-8," + url.PathEscape(svg)
+}
+
+func nullableStringValue(value sql.NullString) string {
+	if value.Valid {
+		return value.String
+	}
+	return ""
 }
 
 func nullableString(value sql.NullString) any {
@@ -1128,6 +2226,16 @@ func readOptionalFile(value sql.NullString) string {
 		return ""
 	}
 	return string(content)
+}
+
+func logSlowAPI(name string, started time.Time, details ...string) {
+	duration := time.Since(started)
+	if duration < 500*time.Millisecond {
+		return
+	}
+	fields := []string{"slow api", "name=" + name, "duration=" + duration.String()}
+	fields = append(fields, details...)
+	log.Print(strings.Join(fields, " "))
 }
 
 func parsePositiveInt(value string, fallback int) int {

@@ -3,11 +3,14 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"mailnest-be/internal/config"
 	"mailnest-be/internal/mail"
@@ -76,6 +79,95 @@ func TestRegisterRespectsConfigSwitch(t *testing.T) {
 	}
 }
 
+func TestChangePasswordRequiresLoginAndUpdatesLoginCredential(t *testing.T) {
+	router := newTestRouter(t, true)
+	token := registerTestUser(t, router, "change-password", "change-password@example.com")
+
+	unauthorizedResp := performRequest(router, http.MethodPost, "/api/v1/auth/change-password", `{"currentPassword":"password123","newPassword":"new-password-123","confirmPassword":"new-password-123"}`, "")
+	if unauthorizedResp.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized status 401, got %d: %s", unauthorizedResp.Code, unauthorizedResp.Body.String())
+	}
+
+	wrongCurrentResp := performRequest(router, http.MethodPost, "/api/v1/auth/change-password", `{"currentPassword":"wrong-password","newPassword":"new-password-123","confirmPassword":"new-password-123"}`, token)
+	if wrongCurrentResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected wrong current password status 400, got %d: %s", wrongCurrentResp.Code, wrongCurrentResp.Body.String())
+	}
+
+	samePasswordResp := performRequest(router, http.MethodPost, "/api/v1/auth/change-password", `{"currentPassword":"password123","newPassword":"password123","confirmPassword":"password123"}`, token)
+	if samePasswordResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected same password status 400, got %d: %s", samePasswordResp.Code, samePasswordResp.Body.String())
+	}
+
+	changeResp := performRequest(router, http.MethodPost, "/api/v1/auth/change-password", `{"currentPassword":"password123","newPassword":"new-password-123","confirmPassword":"new-password-123"}`, token)
+	if changeResp.Code != http.StatusOK {
+		t.Fatalf("expected change password status 200, got %d: %s", changeResp.Code, changeResp.Body.String())
+	}
+	if decodeEnvelope(t, changeResp.Body.Bytes())["success"] != true {
+		t.Fatalf("expected change password success, got %s", changeResp.Body.String())
+	}
+
+	oldLoginResp := performRequest(router, http.MethodPost, "/api/v1/auth/login", `{"account":"change-password","password":"password123"}`, "")
+	if oldLoginResp.Code != http.StatusUnauthorized {
+		t.Fatalf("expected old password login status 401, got %d: %s", oldLoginResp.Code, oldLoginResp.Body.String())
+	}
+
+	newLoginResp := performRequest(router, http.MethodPost, "/api/v1/auth/login", `{"account":"change-password","password":"new-password-123"}`, "")
+	if newLoginResp.Code != http.StatusOK {
+		t.Fatalf("expected new password login status 200, got %d: %s", newLoginResp.Code, newLoginResp.Body.String())
+	}
+}
+
+func TestProfileCanBeUpdatedAndAvatarCanBeUploaded(t *testing.T) {
+	router := newTestRouter(t, true)
+	token := registerTestUser(t, router, "profile-user", "profile-user@example.com")
+
+	updateResp := performRequest(router, http.MethodPut, "/api/v1/profile", `{"nickname":"信匣用户","bio":"用 Mail Nest 管理邮件"}`, token)
+	if updateResp.Code != http.StatusOK {
+		t.Fatalf("expected update profile status 200, got %d: %s", updateResp.Code, updateResp.Body.String())
+	}
+	data := decodeEnvelope(t, updateResp.Body.Bytes())["data"].(map[string]any)
+	if data["nickname"] != "信匣用户" || data["bio"] != "用 Mail Nest 管理邮件" {
+		t.Fatalf("expected updated profile data, got %#v", data)
+	}
+
+	meResp := performRequest(router, http.MethodGet, "/api/v1/auth/me", "", token)
+	if meResp.Code != http.StatusOK {
+		t.Fatalf("expected me status 200, got %d: %s", meResp.Code, meResp.Body.String())
+	}
+	if nestedString(t, decodeEnvelope(t, meResp.Body.Bytes()), "data", "nickname") != "信匣用户" {
+		t.Fatalf("expected me payload to include nickname, got %s", meResp.Body.String())
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("avatar", "avatar.png")
+	if err != nil {
+		t.Fatalf("create avatar form file: %v", err)
+	}
+	if _, err := part.Write([]byte("fake-png-bytes")); err != nil {
+		t.Fatalf("write avatar: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	avatarResp := performMultipartRequest(router, http.MethodPost, "/api/v1/profile/avatar", body.Bytes(), writer.FormDataContentType(), token)
+	if avatarResp.Code != http.StatusOK {
+		t.Fatalf("expected upload avatar status 200, got %d: %s", avatarResp.Code, avatarResp.Body.String())
+	}
+	avatarURL := nestedString(t, decodeEnvelope(t, avatarResp.Body.Bytes()), "data", "avatarUrl")
+	if avatarURL == "" {
+		t.Fatalf("expected avatarUrl, got %s", avatarResp.Body.String())
+	}
+
+	contentResp := performRequest(router, http.MethodGet, avatarURL, "", token)
+	if contentResp.Code != http.StatusOK {
+		t.Fatalf("expected avatar content status 200, got %d: %s", contentResp.Code, contentResp.Body.String())
+	}
+	if contentResp.Body.String() != "fake-png-bytes" {
+		t.Fatalf("expected avatar bytes, got %q", contentResp.Body.String())
+	}
+}
+
 func TestMailAccountsAreIsolatedByUser(t *testing.T) {
 	router := newTestRouter(t, true)
 
@@ -102,6 +194,65 @@ func TestMailAccountsAreIsolatedByUser(t *testing.T) {
 	}
 	if listItemCount(t, secondList.Body.Bytes()) != 0 {
 		t.Fatalf("expected second user to see 0 accounts, got %s", secondList.Body.String())
+	}
+}
+
+func TestContactsCanBeMaintainedAndAreIsolatedByUser(t *testing.T) {
+	router := newTestRouter(t, true)
+
+	firstToken := registerTestUser(t, router, "contact-first", "contact-first@example.com")
+	secondToken := registerTestUser(t, router, "contact-second", "contact-second@example.com")
+
+	createResp := performRequest(router, http.MethodPost, "/api/v1/contacts", `{
+		"email":"Alice <alice@example.com>",
+		"displayName":"",
+		"nickname":"Alice",
+		"phone":"123456",
+		"company":"Example Inc.",
+		"notes":"重要客户"
+	}`, firstToken)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("expected create contact status 201, got %d: %s", createResp.Code, createResp.Body.String())
+	}
+	contactID := nestedString(t, decodeEnvelope(t, createResp.Body.Bytes()), "data", "id")
+	if nestedString(t, decodeEnvelope(t, createResp.Body.Bytes()), "data", "email") != "alice@example.com" {
+		t.Fatalf("expected normalized email, got %s", createResp.Body.String())
+	}
+
+	firstList := performRequest(router, http.MethodGet, "/api/v1/contacts?keyword=Alice", "", firstToken)
+	if firstList.Code != http.StatusOK {
+		t.Fatalf("expected first contact list status 200, got %d: %s", firstList.Code, firstList.Body.String())
+	}
+	if listItemCount(t, firstList.Body.Bytes()) != 1 {
+		t.Fatalf("expected first user to see one contact, got %s", firstList.Body.String())
+	}
+
+	secondList := performRequest(router, http.MethodGet, "/api/v1/contacts", "", secondToken)
+	if secondList.Code != http.StatusOK {
+		t.Fatalf("expected second contact list status 200, got %d: %s", secondList.Code, secondList.Body.String())
+	}
+	if listItemCount(t, secondList.Body.Bytes()) != 0 {
+		t.Fatalf("expected second user to see no contacts, got %s", secondList.Body.String())
+	}
+
+	updateResp := performRequest(router, http.MethodPut, "/api/v1/contacts/"+contactID, `{
+		"email":"alice@example.com",
+		"displayName":"Alice Zhang",
+		"nickname":"阿丽",
+		"phone":"654321",
+		"company":"Mail Nest",
+		"notes":"已更新"
+	}`, firstToken)
+	if updateResp.Code != http.StatusOK {
+		t.Fatalf("expected update contact status 200, got %d: %s", updateResp.Code, updateResp.Body.String())
+	}
+	if nestedString(t, decodeEnvelope(t, updateResp.Body.Bytes()), "data", "name") != "阿丽" {
+		t.Fatalf("expected preferred nickname in response, got %s", updateResp.Body.String())
+	}
+
+	deleteResp := performRequest(router, http.MethodDelete, "/api/v1/contacts/"+contactID, "", firstToken)
+	if deleteResp.Code != http.StatusOK {
+		t.Fatalf("expected delete contact status 200, got %d: %s", deleteResp.Code, deleteResp.Body.String())
 	}
 }
 
@@ -212,6 +363,140 @@ func TestSyncMessagesAndMessageAccessAreIsolatedByUser(t *testing.T) {
 	}
 }
 
+func TestSyncIncludesSentFolderAndFiltersSentMessages(t *testing.T) {
+	fetcher := &mail.FakeFetcher{
+		FolderMessages: map[string][]mail.FetchedMessage{
+			"INBOX": {
+				{
+					UID:        "inbox-1",
+					MessageID:  "<inbox-1@example.com>",
+					Subject:    "收到的邮件",
+					From:       "sender@example.com",
+					To:         []string{"first@example.com"},
+					SentAt:     "2026-07-06T12:00:00+08:00",
+					TextBody:   "收件箱正文",
+					RawContent: "Subject: 收到的邮件\r\n\r\n收件箱正文",
+				},
+			},
+			"Sent Messages": {
+				{
+					UID:        "sent-1",
+					MessageID:  "<sent-1@example.com>",
+					Subject:    "已发送邮件",
+					From:       "first@example.com",
+					To:         []string{"receiver@example.com"},
+					SentAt:     "2026-07-06T13:00:00+08:00",
+					TextBody:   "发件箱正文",
+					RawContent: "Subject: 已发送邮件\r\n\r\n发件箱正文",
+				},
+			},
+		},
+	}
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	token := registerTestUser(t, router, "sent-user", "sent-user@example.com")
+
+	createBody := `{"displayName":"工作邮箱","email":"first@example.com","imapHost":"imap.example.com","imapPort":993,"imapTls":true,"imapUsername":"first@example.com","imapPassword":"mail-password","sentFolder":"Sent Messages","pollIntervalMinutes":10,"enabled":true}`
+	createResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts", createBody, token)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("expected create account status 201, got %d: %s", createResp.Code, createResp.Body.String())
+	}
+	accountData := decodeEnvelope(t, createResp.Body.Bytes())["data"].(map[string]any)
+	if accountData["sentFolder"] != "Sent Messages" {
+		t.Fatalf("expected sent folder in account payload, got %#v", accountData)
+	}
+	accountID := accountData["id"].(string)
+
+	syncResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/sync", "", token)
+	if syncResp.Code != http.StatusOK {
+		t.Fatalf("expected sync status 200, got %d: %s", syncResp.Code, syncResp.Body.String())
+	}
+	if nestedFloat64(t, decodeEnvelope(t, syncResp.Body.Bytes()), "data", "newMessageCount") != 2 {
+		t.Fatalf("expected sync to add inbox and sent messages, got %s", syncResp.Body.String())
+	}
+
+	inboxResp := performRequest(router, http.MethodGet, "/api/v1/messages?systemFolder=inbox", "", token)
+	if got := listSubjects(t, inboxResp.Body.Bytes()); len(got) != 1 || got[0] != "收到的邮件" {
+		t.Fatalf("expected only inbox message, got %#v", got)
+	}
+	sentResp := performRequest(router, http.MethodGet, "/api/v1/messages?systemFolder=sent", "", token)
+	if got := listSubjects(t, sentResp.Body.Bytes()); len(got) != 1 || got[0] != "已发送邮件" {
+		t.Fatalf("expected only sent message, got %#v", got)
+	}
+	allResp := performRequest(router, http.MethodGet, "/api/v1/messages?systemFolder=all", "", token)
+	if got := listSubjects(t, allResp.Body.Bytes()); len(got) != 2 {
+		t.Fatalf("expected all messages to include inbox and sent, got %#v", got)
+	}
+}
+
+func TestMailAccountFoldersEndpointListsSentCandidates(t *testing.T) {
+	fetcher := &mail.FakeFetcher{
+		Folders: []mail.FolderInfo{
+			{Name: "INBOX", Attributes: []string{"\\HasNoChildren"}},
+			{Name: "已发送邮件", Attributes: []string{"\\Sent"}},
+			{Name: "Drafts", Attributes: []string{"\\Drafts"}},
+		},
+	}
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	token := registerTestUser(t, router, "folder-user", "folder-user@example.com")
+	accountID := createTestAccount(t, router, token)
+
+	resp := performRequest(router, http.MethodGet, "/api/v1/mail-accounts/"+accountID+"/folders", "", token)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected folders status 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	items := decodeEnvelope(t, resp.Body.Bytes())["data"].(map[string]any)["items"].([]any)
+	if len(items) != 3 {
+		t.Fatalf("expected 3 folders, got %#v", items)
+	}
+	sent := items[1].(map[string]any)
+	if sent["name"] != "已发送邮件" || sent["sentCandidate"] != true {
+		t.Fatalf("expected sent folder candidate, got %#v", sent)
+	}
+}
+
+func TestSyncSkipsMissingSentFolderWithoutDroppingInboxMessages(t *testing.T) {
+	fetcher := &mail.FakeFetcher{
+		FolderMessages: map[string][]mail.FetchedMessage{
+			"INBOX": {
+				{
+					UID:        "inbox-1",
+					MessageID:  "<missing-sent-inbox-1@example.com>",
+					Subject:    "收件箱仍可同步",
+					From:       "sender@example.com",
+					To:         []string{"first@example.com"},
+					SentAt:     "2026-07-06T12:00:00+08:00",
+					TextBody:   "发件箱目录不存在时，收件箱仍应入库",
+					RawContent: "Subject: 收件箱仍可同步\r\n\r\n正文",
+				},
+			},
+		},
+		FolderErrors: map[string]error{
+			"Sent": mail.ErrFolderNotFound,
+		},
+	}
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	token := registerTestUser(t, router, "missing-sent-user", "missing-sent@example.com")
+	accountID := createTestAccount(t, router, token)
+
+	syncResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/sync", "", token)
+	if syncResp.Code != http.StatusOK {
+		t.Fatalf("expected sync status 200, got %d: %s", syncResp.Code, syncResp.Body.String())
+	}
+	data := decodeEnvelope(t, syncResp.Body.Bytes())["data"].(map[string]any)
+	if data["newMessageCount"] != float64(1) {
+		t.Fatalf("expected one inbox message, got %#v", data)
+	}
+	warnings := data["warnings"].([]any)
+	if len(warnings) != 1 || !strings.Contains(warnings[0].(string), "Sent") {
+		t.Fatalf("expected sent folder warning, got %#v", data["warnings"])
+	}
+
+	listResp := performRequest(router, http.MethodGet, "/api/v1/messages?systemFolder=inbox", "", token)
+	if got := listSubjects(t, listResp.Body.Bytes()); len(got) != 1 || got[0] != "收件箱仍可同步" {
+		t.Fatalf("expected inbox message to be saved, got %#v", got)
+	}
+}
+
 func TestMessageDetailReturnsAttachmentsAndInlineCIDImages(t *testing.T) {
 	fetcher := &mail.FakeFetcher{
 		Messages: []mail.FetchedMessage{
@@ -270,8 +555,24 @@ func TestMessageDetailReturnsAttachmentsAndInlineCIDImages(t *testing.T) {
 	}
 	data := decodeEnvelope(t, detailResp.Body.Bytes())["data"].(map[string]any)
 	htmlBody, ok := data["htmlBody"].(string)
-	if !ok || !strings.Contains(htmlBody, `src="data:image/png;base64,`) {
-		t.Fatalf("expected cid image to be rewritten as data URL, got %#v", data["htmlBody"])
+	if !ok || !strings.Contains(htmlBody, `/inline-content?`) || strings.Contains(strings.ToLower(htmlBody), "cid:") {
+		t.Fatalf("expected cid image to be rewritten as signed inline URL, got %#v", data["htmlBody"])
+	}
+	inlineURL := firstImageSource(t, htmlBody)
+	inlineResp := performRequest(router, http.MethodGet, inlineURL, "", "")
+	if inlineResp.Code != http.StatusOK {
+		t.Fatalf("expected inline image status 200, got %d: %s", inlineResp.Code, inlineResp.Body.String())
+	}
+	if inlineResp.Body.String() != "inline-image-bytes" {
+		t.Fatalf("expected inline image bytes, got %q", inlineResp.Body.String())
+	}
+	sigIndex := strings.Index(inlineURL, "sig=")
+	if sigIndex < 0 {
+		t.Fatalf("expected signed inline url, got %q", inlineURL)
+	}
+	tamperedInlineResp := performRequest(router, http.MethodGet, inlineURL[:sigIndex]+"sig=bad", "", "")
+	if tamperedInlineResp.Code != http.StatusUnauthorized {
+		t.Fatalf("expected tampered inline image status 401, got %d: %s", tamperedInlineResp.Code, tamperedInlineResp.Body.String())
 	}
 	attachments, ok := data["attachments"].([]any)
 	if !ok || len(attachments) != 2 {
@@ -292,6 +593,176 @@ func TestMessageDetailReturnsAttachmentsAndInlineCIDImages(t *testing.T) {
 	}
 	if downloadResp.Body.String() != "%PDF-1.4" {
 		t.Fatalf("expected attachment content, got %q", downloadResp.Body.String())
+	}
+}
+
+func TestMessageDetailTreatsCIDReferencedAttachmentAsInline(t *testing.T) {
+	fetcher := &mail.FakeFetcher{
+		Messages: []mail.FetchedMessage{
+			{
+				UID:        "foxmail-inline-false",
+				MessageID:  "<foxmail-inline-false@example.com>",
+				Subject:    "Foxmail 内嵌图片",
+				From:       "sender@example.com",
+				To:         []string{"receiver@example.com"},
+				HTMLBody:   `<p>正文图片</p><img src="CID:%3C_Foxmail.1@55d24ed9-1d1b-3c80-0b94-c95e7a27a898%3E">`,
+				RawContent: "Subject: Foxmail 内嵌图片\r\n\r\n正文图片",
+				Attachments: []mail.FetchedAttachment{
+					{
+						Filename:    "InsertPic_1F7E.jpg",
+						ContentType: "image/jpeg",
+						ContentID:   "_Foxmail.1@55d24ed9-1d1b-3c80-0b94-c95e7a27a898",
+						Inline:      false,
+						Data:        []byte("image-bytes"),
+					},
+				},
+			},
+		},
+	}
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	token := registerTestUser(t, router, "foxmail-user", "foxmail-user@example.com")
+	accountID := createTestAccount(t, router, token)
+
+	syncResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/sync", "", token)
+	if syncResp.Code != http.StatusOK {
+		t.Fatalf("expected sync status 200, got %d: %s", syncResp.Code, syncResp.Body.String())
+	}
+
+	listResp := performRequest(router, http.MethodGet, "/api/v1/messages", "", token)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("expected messages status 200, got %d: %s", listResp.Code, listResp.Body.String())
+	}
+	messageID := firstListItem(t, listResp.Body.Bytes())["id"].(string)
+
+	detailResp := performRequest(router, http.MethodGet, "/api/v1/messages/"+messageID, "", token)
+	if detailResp.Code != http.StatusOK {
+		t.Fatalf("expected detail status 200, got %d: %s", detailResp.Code, detailResp.Body.String())
+	}
+	data := decodeEnvelope(t, detailResp.Body.Bytes())["data"].(map[string]any)
+	htmlBody := data["htmlBody"].(string)
+	if !strings.Contains(htmlBody, `/inline-content?`) || strings.Contains(strings.ToLower(htmlBody), "cid:") {
+		t.Fatalf("expected cid referenced attachment to be rewritten, got %q", htmlBody)
+	}
+	attachments := data["attachments"].([]any)
+	if len(attachments) != 1 {
+		t.Fatalf("expected one attachment, got %#v", data["attachments"])
+	}
+	inlineAttachment := attachments[0].(map[string]any)
+	if inlineAttachment["filename"] != "InsertPic_1F7E.jpg" || inlineAttachment["inline"] != true {
+		t.Fatalf("expected cid referenced attachment to be marked inline, got %#v", inlineAttachment)
+	}
+}
+
+func TestMessageDetailReplacesMissingCIDImageWithPlaceholder(t *testing.T) {
+	fetcher := &mail.FakeFetcher{
+		Messages: []mail.FetchedMessage{
+			{
+				UID:        "missing-cid-image",
+				MessageID:  "<missing-cid-image@example.com>",
+				Subject:    "缺失内嵌图片",
+				From:       "sender@example.com",
+				To:         []string{"receiver@example.com"},
+				HTMLBody:   `<p>正文图片缺失</p><img src="cid:missing-inline-image">`,
+				RawContent: "Subject: 缺失内嵌图片\r\n\r\n正文图片缺失",
+			},
+		},
+	}
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	token := registerTestUser(t, router, "missing-cid-user", "missing-cid-user@example.com")
+	accountID := createTestAccount(t, router, token)
+
+	syncResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/sync", "", token)
+	if syncResp.Code != http.StatusOK {
+		t.Fatalf("expected sync status 200, got %d: %s", syncResp.Code, syncResp.Body.String())
+	}
+
+	listResp := performRequest(router, http.MethodGet, "/api/v1/messages", "", token)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("expected messages status 200, got %d: %s", listResp.Code, listResp.Body.String())
+	}
+	messageID := firstListItem(t, listResp.Body.Bytes())["id"].(string)
+
+	detailResp := performRequest(router, http.MethodGet, "/api/v1/messages/"+messageID, "", token)
+	if detailResp.Code != http.StatusOK {
+		t.Fatalf("expected detail status 200, got %d: %s", detailResp.Code, detailResp.Body.String())
+	}
+	htmlBody := nestedString(t, decodeEnvelope(t, detailResp.Body.Bytes()), "data", "htmlBody")
+	if strings.Contains(strings.ToLower(htmlBody), "cid:") {
+		t.Fatalf("expected missing cid image to be replaced, got %q", htmlBody)
+	}
+	if !strings.Contains(htmlBody, "data:image/svg+xml") {
+		t.Fatalf("expected missing cid image placeholder, got %q", htmlBody)
+	}
+}
+
+func TestMessageDetailConvertsInlineTIFFToPNG(t *testing.T) {
+	fetcher := &mail.FakeFetcher{
+		Messages: []mail.FetchedMessage{
+			{
+				UID:        "inline-tiff",
+				MessageID:  "<inline-tiff@example.com>",
+				Subject:    "内嵌 TIFF 图片",
+				From:       "sender@example.com",
+				To:         []string{"receiver@example.com"},
+				HTMLBody:   `<p>截图如下</p><img src="cid:inline-tiff-1" alt="粘贴的图形-1.tiff">`,
+				RawContent: "Subject: 内嵌 TIFF 图片\r\n\r\n截图如下",
+				Attachments: []mail.FetchedAttachment{
+					{
+						Filename:    "pasted-image.tiff",
+						ContentType: "image/tiff",
+						ContentID:   "inline-tiff-1",
+						Inline:      true,
+						Data:        tinyTIFFImage(),
+					},
+				},
+			},
+		},
+	}
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	token := registerTestUser(t, router, "tiff-user", "tiff-user@example.com")
+	accountID := createTestAccount(t, router, token)
+
+	syncResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/sync", "", token)
+	if syncResp.Code != http.StatusOK {
+		t.Fatalf("expected sync status 200, got %d: %s", syncResp.Code, syncResp.Body.String())
+	}
+
+	listResp := performRequest(router, http.MethodGet, "/api/v1/messages", "", token)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("expected messages status 200, got %d: %s", listResp.Code, listResp.Body.String())
+	}
+	messageID := firstListItem(t, listResp.Body.Bytes())["id"].(string)
+
+	detailResp := performRequest(router, http.MethodGet, "/api/v1/messages/"+messageID, "", token)
+	if detailResp.Code != http.StatusOK {
+		t.Fatalf("expected detail status 200, got %d: %s", detailResp.Code, detailResp.Body.String())
+	}
+	htmlBody := nestedString(t, decodeEnvelope(t, detailResp.Body.Bytes()), "data", "htmlBody")
+	if !strings.Contains(htmlBody, `src="data:image/png;base64,`) {
+		t.Fatalf("expected inline tiff image to be converted to png data URL, got %q", htmlBody)
+	}
+	if strings.Contains(htmlBody, "cid:inline-tiff-1") || strings.Contains(htmlBody, "data:image/tiff") {
+		t.Fatalf("expected no cid or tiff data URL in html body, got %q", htmlBody)
+	}
+}
+
+func tinyTIFFImage() []byte {
+	return []byte{
+		0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00,
+		0x0a, 0x00,
+		0x00, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+		0x02, 0x01, 0x03, 0x00, 0x03, 0x00, 0x00, 0x00, 0x86, 0x00, 0x00, 0x00,
+		0x03, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+		0x06, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+		0x11, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x8c, 0x00, 0x00, 0x00,
+		0x15, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+		0x16, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+		0x17, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+		0x1c, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x08, 0x00, 0x08, 0x00, 0x08, 0x00,
+		0xff, 0x00, 0x00,
 	}
 }
 
@@ -353,8 +824,121 @@ func TestDuplicateSyncBackfillsMissingAttachments(t *testing.T) {
 		t.Fatalf("expected detail status 200, got %d: %s", detailResp.Code, detailResp.Body.String())
 	}
 	htmlBody := nestedString(t, decodeEnvelope(t, detailResp.Body.Bytes()), "data", "htmlBody")
-	if !strings.Contains(htmlBody, `src="data:image/png;base64,`) {
-		t.Fatalf("expected backfilled cid image to be rewritten, got %q", htmlBody)
+	if !strings.Contains(htmlBody, `/inline-content?`) || strings.Contains(strings.ToLower(htmlBody), "cid:") {
+		t.Fatalf("expected backfilled cid image to be rewritten as signed inline URL, got %q", htmlBody)
+	}
+}
+
+func TestFullSyncFetchesAllInboxMessagesAndReportsProgress(t *testing.T) {
+	messages := make([]mail.FetchedMessage, 0, 75)
+	for i := 1; i <= 75; i++ {
+		messages = append(messages, mail.FetchedMessage{
+			UID:        fmt.Sprint(i),
+			MessageID:  fmt.Sprintf("<full-%03d@example.com>", i),
+			Subject:    fmt.Sprintf("历史邮件 %03d", i),
+			From:       "archive@example.com",
+			To:         []string{"first@example.com"},
+			SentAt:     "2026-07-01T10:00:00+08:00",
+			TextBody:   "历史邮件正文",
+			RawContent: fmt.Sprintf("Subject: 历史邮件 %03d\r\n\r\n历史邮件正文", i),
+		})
+	}
+	fetcher := &mail.FakeFetcher{Messages: messages}
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	token := registerTestUser(t, router, "full-sync-user", "full-sync-user@example.com")
+	accountID := createTestAccount(t, router, token)
+
+	startResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/full-sync/start", "", token)
+	if startResp.Code != http.StatusAccepted {
+		t.Fatalf("expected full sync start status 202, got %d: %s", startResp.Code, startResp.Body.String())
+	}
+
+	status := waitForFullSyncStatus(t, router, token, accountID, "success")
+	if status["fullSyncTotal"] != float64(75) || status["fullSyncProcessed"] != float64(75) || status["fullSyncNewCount"] != float64(75) {
+		t.Fatalf("expected full sync progress 75/75, got %#v", status)
+	}
+
+	listResp := performRequest(router, http.MethodGet, "/api/v1/messages?pageSize=100", "", token)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("expected messages status 200, got %d: %s", listResp.Code, listResp.Body.String())
+	}
+	if listItemCount(t, listResp.Body.Bytes()) != 75 {
+		t.Fatalf("expected full sync to save all 75 messages, got %s", listResp.Body.String())
+	}
+}
+
+func TestFullSyncCleanupDeletesOnlySyncedOldServerMessagesWhenEnabled(t *testing.T) {
+	fetcher := &mail.FakeFetcher{Messages: []mail.FetchedMessage{
+		{
+			UID:        "1001",
+			MessageID:  "<old@example.com>",
+			Subject:    "旧邮件",
+			From:       "archive@example.com",
+			To:         []string{"first@example.com"},
+			SentAt:     "2026-05-01T10:00:00+08:00",
+			TextBody:   "旧邮件正文",
+			RawContent: "Subject: 旧邮件\r\n\r\n旧邮件正文",
+		},
+		{
+			UID:        "1002",
+			MessageID:  "<new@example.com>",
+			Subject:    "新邮件",
+			From:       "archive@example.com",
+			To:         []string{"first@example.com"},
+			SentAt:     time.Now().Format(time.RFC3339),
+			TextBody:   "新邮件正文",
+			RawContent: "Subject: 新邮件\r\n\r\n新邮件正文",
+		},
+	}}
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	token := registerTestUser(t, router, "cleanup-user", "cleanup-user@example.com")
+
+	createBody := `{"displayName":"清理邮箱","email":"cleanup@example.com","imapHost":"imap.example.com","imapPort":993,"imapTls":true,"imapUsername":"cleanup@example.com","imapPassword":"mail-password","pollIntervalMinutes":10,"enabled":true,"cleanupEnabled":true,"cleanupRetentionDays":30}`
+	createResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts", createBody, token)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create account failed: %d %s", createResp.Code, createResp.Body.String())
+	}
+	accountID := nestedString(t, decodeEnvelope(t, createResp.Body.Bytes()), "data", "id")
+
+	startResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/full-sync/start", "", token)
+	if startResp.Code != http.StatusAccepted {
+		t.Fatalf("expected full sync start status 202, got %d: %s", startResp.Code, startResp.Body.String())
+	}
+	waitForFullSyncStatus(t, router, token, accountID, "success")
+
+	if got := fmt.Sprint(fetcher.DeletedUIDs); got != "[1001]" {
+		t.Fatalf("expected only old synced UID 1001 to be deleted from server, got %s", got)
+	}
+}
+
+func TestFullSyncCanBeStopped(t *testing.T) {
+	fetcher := newBlockingFullSyncFetcher(120)
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	token := registerTestUser(t, router, "stop-sync-user", "stop-sync-user@example.com")
+	accountID := createTestAccount(t, router, token)
+
+	startResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/full-sync/start", "", token)
+	if startResp.Code != http.StatusAccepted {
+		t.Fatalf("expected full sync start status 202, got %d: %s", startResp.Code, startResp.Body.String())
+	}
+	select {
+	case <-fetcher.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected full sync fetch to start")
+	}
+
+	stopResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/full-sync/stop", "", token)
+	if stopResp.Code != http.StatusOK {
+		t.Fatalf("expected full sync stop status 200, got %d: %s", stopResp.Code, stopResp.Body.String())
+	}
+	if nestedString(t, decodeEnvelope(t, stopResp.Body.Bytes()), "data", "fullSyncStatus") != "cancelled" {
+		t.Fatalf("expected cancelled status, got %s", stopResp.Body.String())
+	}
+
+	close(fetcher.release)
+	status := waitForFullSyncStatus(t, router, token, accountID, "cancelled")
+	if status["fullSyncError"] == nil {
+		t.Fatalf("expected cancelled status to include message, got %#v", status)
 	}
 }
 
@@ -416,6 +1000,8 @@ func TestListMessagesSupportsSearchFiltersAndUserIsolation(t *testing.T) {
 	}{
 		{name: "keyword matches subject", query: "?keyword=网络安全", subjects: []string{"网络安全整改通知"}},
 		{name: "keyword matches body", query: "?keyword=主机探针", subjects: []string{"网络安全整改通知"}},
+		{name: "body filter", query: "?body=主机探针", subjects: []string{"网络安全整改通知"}},
+		{name: "body filter does not match subject", query: "?body=Container", subjects: []string{}},
 		{name: "from filter", query: "?from=training@example.com", subjects: []string{"认证考试倒计时"}},
 		{name: "subject filter", query: "?subject=Container", subjects: []string{"Container Manager 通知"}},
 		{name: "date range filter", query: "?dateFrom=2026-07-02&dateTo=2026-07-04", subjects: []string{"认证考试倒计时"}},
@@ -855,14 +1441,119 @@ func (f *capturingFetcher) TestConnection(account mail.AccountConfig) error {
 	return nil
 }
 
-func (f *capturingFetcher) FetchInbox(account mail.AccountConfig) ([]mail.FetchedMessage, error) {
+func (f *capturingFetcher) ListFolders(account mail.AccountConfig) ([]mail.FolderInfo, error) {
 	f.LastAccount = account
+	return []mail.FolderInfo{{Name: "INBOX"}, {Name: "Sent", Attributes: []string{"\\Sent"}}}, nil
+}
+
+func (f *capturingFetcher) FetchInbox(account mail.AccountConfig) ([]mail.FetchedMessage, error) {
+	return f.FetchFolder(account)
+}
+
+func (f *capturingFetcher) FetchFolder(account mail.AccountConfig) ([]mail.FetchedMessage, error) {
+	f.LastAccount = account
+	if !strings.EqualFold(account.Folder, "INBOX") {
+		return []mail.FetchedMessage{}, nil
+	}
 	return f.Messages, nil
+}
+
+func (f *capturingFetcher) ListInboxUIDs(account mail.AccountConfig) ([]string, error) {
+	return f.ListFolderUIDs(account)
+}
+
+func (f *capturingFetcher) ListFolderUIDs(account mail.AccountConfig) ([]string, error) {
+	f.LastAccount = account
+	uids := make([]string, 0, len(f.Messages))
+	for _, message := range f.Messages {
+		uids = append(uids, message.UID)
+	}
+	return uids, nil
+}
+
+func (f *capturingFetcher) FetchInboxByUIDs(account mail.AccountConfig, uids []string) ([]mail.FetchedMessage, error) {
+	return f.FetchFolderByUIDs(account, uids)
+}
+
+func (f *capturingFetcher) FetchFolderByUIDs(account mail.AccountConfig, uids []string) ([]mail.FetchedMessage, error) {
+	f.LastAccount = account
+	want := make(map[string]bool, len(uids))
+	for _, uid := range uids {
+		want[uid] = true
+	}
+	messages := make([]mail.FetchedMessage, 0, len(uids))
+	for _, message := range f.Messages {
+		if want[message.UID] {
+			messages = append(messages, message)
+		}
+	}
+	return messages, nil
+}
+
+func (f *capturingFetcher) DeleteInboxUIDs(account mail.AccountConfig, uids []string) error {
+	return f.DeleteFolderUIDs(account, uids)
+}
+
+func (f *capturingFetcher) DeleteFolderUIDs(account mail.AccountConfig, uids []string) error {
+	f.LastAccount = account
+	return nil
+}
+
+type blockingFullSyncFetcher struct {
+	*mail.FakeFetcher
+	started chan struct{}
+	release chan struct{}
+}
+
+func newBlockingFullSyncFetcher(count int) *blockingFullSyncFetcher {
+	messages := make([]mail.FetchedMessage, 0, count)
+	for i := 1; i <= count; i++ {
+		messages = append(messages, mail.FetchedMessage{
+			UID:        fmt.Sprint(i),
+			MessageID:  fmt.Sprintf("<blocking-%03d@example.com>", i),
+			Subject:    fmt.Sprintf("阻塞同步 %03d", i),
+			From:       "archive@example.com",
+			To:         []string{"first@example.com"},
+			SentAt:     "2026-07-01T10:00:00+08:00",
+			TextBody:   "阻塞同步正文",
+			RawContent: fmt.Sprintf("Subject: 阻塞同步 %03d\r\n\r\n阻塞同步正文", i),
+		})
+	}
+	return &blockingFullSyncFetcher{
+		FakeFetcher: &mail.FakeFetcher{Messages: messages},
+		started:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+}
+
+func (f *blockingFullSyncFetcher) FetchInboxByUIDs(account mail.AccountConfig, uids []string) ([]mail.FetchedMessage, error) {
+	return f.FetchFolderByUIDs(account, uids)
+}
+
+func (f *blockingFullSyncFetcher) FetchFolderByUIDs(account mail.AccountConfig, uids []string) ([]mail.FetchedMessage, error) {
+	select {
+	case <-f.started:
+	default:
+		close(f.started)
+	}
+	<-f.release
+	return f.FakeFetcher.FetchFolderByUIDs(account, uids)
 }
 
 func performRequest(handler http.Handler, method, path, body, token string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func performMultipartRequest(handler http.Handler, method, path string, body []byte, contentType, token string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	req.Header.Set("Content-Type", contentType)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -889,12 +1580,32 @@ func registerTestUser(t *testing.T, router http.Handler, username, email string)
 func createTestAccount(t *testing.T, router http.Handler, token string) string {
 	t.Helper()
 
-	body := `{"displayName":"工作邮箱","email":"first@example.com","imapHost":"imap.example.com","imapPort":993,"imapTls":true,"imapUsername":"first@example.com","imapPassword":"mail-password","pollIntervalMinutes":10,"enabled":true}`
+	body := `{"displayName":"工作邮箱","email":"first@example.com","imapHost":"imap.example.com","imapPort":993,"imapTls":true,"imapUsername":"first@example.com","imapPassword":"mail-password","sentFolder":"Sent","pollIntervalMinutes":10,"enabled":true}`
 	resp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts", body, token)
 	if resp.Code != http.StatusCreated {
 		t.Fatalf("create account failed: %d %s", resp.Code, resp.Body.String())
 	}
 	return nestedString(t, decodeEnvelope(t, resp.Body.Bytes()), "data", "id")
+}
+
+func waitForFullSyncStatus(t *testing.T, router http.Handler, token, accountID, expected string) map[string]any {
+	t.Helper()
+
+	var data map[string]any
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		resp := performRequest(router, http.MethodGet, "/api/v1/mail-accounts/"+accountID+"/sync-status", "", token)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("expected sync status 200, got %d: %s", resp.Code, resp.Body.String())
+		}
+		data = decodeEnvelope(t, resp.Body.Bytes())["data"].(map[string]any)
+		if data["fullSyncStatus"] == expected {
+			return data
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("full sync status did not become %q, last status %#v", expected, data)
+	return nil
 }
 
 func decodeEnvelope(t *testing.T, body []byte) map[string]any {
@@ -942,6 +1653,21 @@ func nestedString(t *testing.T, input map[string]any, keys ...string) string {
 		t.Fatalf("expected string at %v, got %#v", keys, current)
 	}
 	return value
+}
+
+func firstImageSource(t *testing.T, htmlBody string) string {
+	t.Helper()
+	marker := `src="`
+	start := strings.Index(htmlBody, marker)
+	if start < 0 {
+		t.Fatalf("expected image src in html body, got %q", htmlBody)
+	}
+	start += len(marker)
+	end := strings.Index(htmlBody[start:], `"`)
+	if end < 0 {
+		t.Fatalf("expected image src to be closed, got %q", htmlBody)
+	}
+	return htmlBody[start : start+end]
 }
 
 func nestedFloat64(t *testing.T, input map[string]any, keys ...string) float64 {

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"mailnest-be/internal/api"
 	"mailnest-be/internal/config"
@@ -25,6 +28,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("init app: %v", err)
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	app.StartBackgroundTasks(ctx)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	log.Printf("mailnest backend listening on %s", addr)

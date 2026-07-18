@@ -5,6 +5,8 @@ import RegisterView from '../views/RegisterView.vue';
 import DashboardView from '../views/DashboardView.vue';
 import MailAccountsView from '../views/MailAccountsView.vue';
 import MailRulesView from '../views/MailRulesView.vue';
+import ContactsView from '../views/ContactsView.vue';
+import ProfileSettingsView from '../views/ProfileSettingsView.vue';
 import MicrosoftOAuthCallbackView from '../views/MicrosoftOAuthCallbackView.vue';
 
 export const router = createRouter({
@@ -16,7 +18,9 @@ export const router = createRouter({
     { path: '/oauth/microsoft/callback', component: MicrosoftOAuthCallbackView },
     { path: '/mail', component: DashboardView },
     { path: '/accounts', component: MailAccountsView },
+    { path: '/contacts', component: ContactsView },
     { path: '/rules', component: MailRulesView },
+    { path: '/settings/profile', component: ProfileSettingsView },
   ],
 });
 

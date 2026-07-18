@@ -20,6 +20,9 @@ export const useAuthStore = defineStore('auth', {
       this.user = user;
       localStorage.setItem(tokenStorageKey, token);
     },
+    setUser(user: User) {
+      this.user = user;
+    },
     async register(payload: { username: string; email: string; password: string }) {
       const data = await authApi.register(payload);
       this.setSession(data.token, data.user);
