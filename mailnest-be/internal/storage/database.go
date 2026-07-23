@@ -142,7 +142,10 @@ func normalizeDatabaseOptions(options DatabaseOptions) (dbDialect, string, error
 func gormDialector(dialect dbDialect, dsn string) gorm.Dialector {
 	switch dialect {
 	case dialectMySQL:
-		return mysql.Open(dsn)
+		return mysql.New(mysql.Config{
+			DSN:                      dsn,
+			DisableDatetimePrecision: true,
+		})
 	case dialectPostgres:
 		return postgres.Open(dsn)
 	default:
