@@ -83,11 +83,11 @@
 
       <main class="mail-list-pane">
         <div class="mail-list-header">
-          <div>
+          <div class="mail-list-heading">
             <h2 class="mail-page-title">{{ activeFolderLabel }}</h2>
             <p class="mail-count">{{ mailCountText }}</p>
           </div>
-          <a-space>
+          <a-space class="mail-list-actions" wrap>
             <a-radio-group
               v-if="activeSystemFolder !== 'drafts'"
               v-model:value="mailViewMode"
@@ -317,15 +317,11 @@
         <div v-else-if="detail" class="mail-reader">
           <div class="reader-header">
             <div class="reader-title-row">
-              <div class="reader-title-main">
-                <div class="reader-status-row">
-                  <span v-for="badge in readerStatusBadges" :key="badge.label" class="reader-status-chip" :class="badge.tone">
-                    <component :is="badge.icon" />
-                    {{ badge.label }}
-                  </span>
-                </div>
-                <h3 class="mail-subject">{{ detail.subject || '无主题' }}</h3>
-                <div class="reader-time">{{ formatTime(detail.sentAt || detail.receivedAt) }}</div>
+              <div class="reader-status-row">
+                <span v-for="badge in readerStatusBadges" :key="badge.label" class="reader-status-chip" :class="badge.tone">
+                  <component :is="badge.icon" />
+                  {{ badge.label }}
+                </span>
               </div>
               <a-space class="reader-actions reader-actions-desktop" size="small" wrap>
                 <a-button size="small" @click="openReply('reply')">
@@ -370,6 +366,11 @@
                   </a-menu>
                 </template>
               </a-dropdown>
+            </div>
+
+            <div class="reader-title-main">
+              <h3 class="mail-subject">{{ detail.subject || '无主题' }}</h3>
+              <div class="reader-time">{{ formatTime(detail.sentAt || detail.receivedAt) }}</div>
             </div>
 
             <div class="reader-address-grid">
@@ -436,25 +437,26 @@
         <div v-else-if="threadDetail" class="mail-reader thread-reader">
           <div class="reader-header">
             <div class="reader-title-row">
-              <div class="reader-title-main">
-                <div class="reader-status-row">
-                  <span class="reader-status-chip neutral">
-                    <branches-outlined />
-                    {{ threadDetail.messageCount }} 封邮件
-                  </span>
-                  <span v-if="threadDetail.unreadCount" class="reader-status-chip accent">{{ threadDetail.unreadCount }} 封未读</span>
-                  <span v-if="threadDetail.hasAttachments" class="reader-status-chip neutral">
-                    <paper-clip-outlined />
-                    有附件
-                  </span>
-                </div>
-                <h3 class="mail-subject">{{ threadDetail.subject || '无主题' }}</h3>
-                <div class="reader-time">{{ formatTime(threadDetail.lastMessageAt) }}</div>
+              <div class="reader-status-row">
+                <span class="reader-status-chip neutral">
+                  <branches-outlined />
+                  {{ threadDetail.messageCount }} 封邮件
+                </span>
+                <span v-if="threadDetail.unreadCount" class="reader-status-chip accent">{{ threadDetail.unreadCount }} 封未读</span>
+                <span v-if="threadDetail.hasAttachments" class="reader-status-chip neutral">
+                  <paper-clip-outlined />
+                  有附件
+                </span>
               </div>
-              <a-button size="small" @click="rebuildThreads('empty')">
+              <a-button class="reader-actions" size="small" @click="rebuildThreads('empty')">
                 <template #icon><reload-outlined /></template>
                 补齐会话
               </a-button>
+            </div>
+
+            <div class="reader-title-main">
+              <h3 class="mail-subject">{{ threadDetail.subject || '无主题' }}</h3>
+              <div class="reader-time">{{ formatTime(threadDetail.lastMessageAt) }}</div>
             </div>
           </div>
           <div class="thread-timeline">
@@ -2874,20 +2876,31 @@ function looksLikeEmail(value: string) {
 
 .mail-list-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 12px 14px;
   min-width: 0;
   flex: none;
   padding: 18px 18px 12px;
 }
 
-.mail-list-header > div {
-  min-width: 0;
+.mail-list-heading {
+  display: grid;
+  flex: 1 1 180px;
+  min-width: min(100%, 160px);
+  max-width: 100%;
+  gap: 2px;
 }
 
-.mail-list-header :deep(.ant-space) {
-  flex: none;
+.mail-list-actions {
+  flex: 0 1 auto;
+  margin-left: auto;
+  justify-content: flex-end;
+}
+
+.mail-list-actions :deep(.ant-space-item) {
+  max-width: 100%;
 }
 
 .mail-page-title {
@@ -2902,6 +2915,7 @@ function looksLikeEmail(value: string) {
 .mail-count {
   margin: 4px 0 0;
   color: var(--muted-color);
+  white-space: nowrap;
 }
 
 .mail-filter-bar {
@@ -3379,15 +3393,15 @@ function looksLikeEmail(value: string) {
 .reader-title-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 10px 14px;
+  margin-bottom: 16px;
 }
 
 .reader-title-main {
   display: grid;
-  flex: 1 1 420px;
-  min-width: min(100%, 360px);
+  min-width: 0;
   max-width: 100%;
   gap: 8px;
 }
@@ -3395,7 +3409,6 @@ function looksLikeEmail(value: string) {
 .reader-actions {
   flex: 0 1 auto;
   margin-left: auto;
-  padding-top: 1px;
 }
 
 .reader-actions-mobile {
@@ -3406,6 +3419,7 @@ function looksLikeEmail(value: string) {
 .reader-status-row {
   display: flex;
   min-width: 0;
+  flex: 1 1 220px;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
