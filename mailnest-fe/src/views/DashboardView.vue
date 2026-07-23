@@ -3378,6 +3378,7 @@ function looksLikeEmail(value: string) {
 
 .reader-title-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
@@ -3385,12 +3386,15 @@ function looksLikeEmail(value: string) {
 
 .reader-title-main {
   display: grid;
-  min-width: 0;
+  flex: 1 1 420px;
+  min-width: min(100%, 360px);
+  max-width: 100%;
   gap: 8px;
 }
 
 .reader-actions {
-  flex: none;
+  flex: 0 1 auto;
+  margin-left: auto;
   padding-top: 1px;
 }
 
@@ -3451,7 +3455,7 @@ function looksLikeEmail(value: string) {
   font-size: 22px;
   font-weight: 700;
   line-height: 1.35;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .thread-reader {
