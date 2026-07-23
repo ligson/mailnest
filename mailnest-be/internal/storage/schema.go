@@ -210,6 +210,9 @@ func sqliteExistingIndexStatements() []string {
 }
 
 func (s *Store) createSupplementalIndexes() error {
+	if err := s.ensureDialectColumnTypes(); err != nil {
+		return err
+	}
 	for _, stmt := range supplementalIndexStatements(s.db.dialect) {
 		if _, err := s.db.Exec(stmt); err != nil {
 			if isSchemaAlreadyExistsError(err) {
@@ -217,6 +220,17 @@ func (s *Store) createSupplementalIndexes() error {
 			}
 			return fmt.Errorf("create supplemental index %s: %w", s.db.dialect, err)
 		}
+	}
+	return nil
+}
+
+func (s *Store) ensureDialectColumnTypes() error {
+	if s.db.dialect != dialectMySQL {
+		return nil
+	}
+	_, err := s.db.Exec(`ALTER TABLE mail_messages MODIFY COLUMN search_text LONGTEXT NULL`)
+	if err != nil {
+		return fmt.Errorf("ensure mysql long text columns: %w", err)
 	}
 	return nil
 }
