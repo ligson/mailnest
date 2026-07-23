@@ -21,20 +21,20 @@ func main() {
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		log.Fatalf("加载配置失败：%v", err)
 	}
 
 	app, err := api.NewApp(cfg)
 	if err != nil {
-		log.Fatalf("init app: %v", err)
+		log.Fatalf("初始化应用失败：%v", err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	app.StartBackgroundTasks(ctx)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	log.Printf("mailnest backend listening on %s", addr)
+	log.Printf("Mail Nest 后端服务已启动 addr=%s", addr)
 	if err := http.ListenAndServe(addr, app.Routes()); err != nil {
-		log.Fatalf("serve: %v", err)
+		log.Fatalf("后端服务异常退出：%v", err)
 	}
 }
