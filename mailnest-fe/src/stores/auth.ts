@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { authApi, tokenStorageKey, type User } from '../api/client';
+import { authApi, tokenStorageKey, type CaptchaPayload, type User } from '../api/client';
 
 interface AuthState {
   token: string;
@@ -23,11 +23,11 @@ export const useAuthStore = defineStore('auth', {
     setUser(user: User) {
       this.user = user;
     },
-    async register(payload: { username: string; email: string; password: string }) {
+    async register(payload: { username: string; email: string; password: string } & CaptchaPayload) {
       const data = await authApi.register(payload);
       this.setSession(data.token, data.user);
     },
-    async login(payload: { account: string; password: string }) {
+    async login(payload: { account: string; password: string } & CaptchaPayload) {
       const data = await authApi.login(payload);
       this.setSession(data.token, data.user);
     },

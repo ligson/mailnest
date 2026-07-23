@@ -38,6 +38,10 @@
           <user-outlined />
           <span>设置</span>
         </a-menu-item>
+        <a-menu-item v-if="auth.user?.isAdmin" key="/admin/users">
+          <team-outlined />
+          <span>系统管理</span>
+        </a-menu-item>
       </a-menu>
       <div class="shell-collapse-panel" :class="{ collapsed }">
         <a-tooltip :title="collapsed ? '展开菜单' : '锁起菜单'" placement="right">

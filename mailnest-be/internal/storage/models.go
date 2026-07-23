@@ -14,8 +14,23 @@ type User struct {
 	AvatarPath   sql.NullString
 	Bio          sql.NullString
 	UITheme      string
+	IsAdmin      bool
+	Enabled      bool
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+}
+
+type AdminUserSummary struct {
+	User             User
+	MailAccountCount int
+	MessageCount     int
+	AttachmentCount  int
+	AttachmentBytes  int64
+	ContactCount     int
+	FolderCount      int
+	RuleCount        int
+	LastMessageAt    sql.NullTime
+	LastSyncAt       sql.NullTime
 }
 
 type MailAccount struct {

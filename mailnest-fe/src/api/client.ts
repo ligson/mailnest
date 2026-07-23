@@ -15,11 +15,24 @@ export interface User {
   avatarUrl: string | null;
   bio: string | null;
   uiTheme: string;
+  isAdmin: boolean;
+  enabled: boolean;
 }
 
 export interface AuthData {
   user: User;
   token: string;
+}
+
+export interface CaptchaData {
+  id: string;
+  imageData: string;
+  expireSeconds: number;
+}
+
+export interface CaptchaPayload {
+  captchaId: string;
+  captchaAnswer: string;
 }
 
 export interface ChangePasswordPayload {
@@ -32,6 +45,30 @@ export interface UpdateProfilePayload {
   nickname: string;
   bio: string;
   uiTheme: string;
+}
+
+export interface AdminUserSummary {
+  id: string;
+  username: string;
+  email: string;
+  nickname: string | null;
+  isAdmin: boolean;
+  enabled: boolean;
+  mailAccountCount: number;
+  messageCount: number;
+  attachmentCount: number;
+  attachmentBytes: number;
+  contactCount: number;
+  folderCount: number;
+  ruleCount: number;
+  lastMessageAt: string | null;
+  lastSyncAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminUserListData {
+  items: AdminUserSummary[];
 }
 
 export interface MailAccount {
@@ -412,10 +449,13 @@ export async function requestEnvelope<T>(request: Promise<{ data: Envelope<T> }>
 }
 
 export const authApi = {
-  register(payload: { username: string; email: string; password: string }) {
+  captcha() {
+    return requestEnvelope<CaptchaData>(apiClient.get('/auth/captcha'));
+  },
+  register(payload: { username: string; email: string; password: string } & CaptchaPayload) {
     return requestEnvelope<AuthData>(apiClient.post('/auth/register', payload));
   },
-  login(payload: { account: string; password: string }) {
+  login(payload: { account: string; password: string } & CaptchaPayload) {
     return requestEnvelope<AuthData>(apiClient.post('/auth/login', payload));
   },
   me() {
@@ -426,6 +466,15 @@ export const authApi = {
   },
   logout() {
     return requestEnvelope<Record<string, never>>(apiClient.post('/auth/logout'));
+  },
+};
+
+export const adminApi = {
+  users() {
+    return requestEnvelope<AdminUserListData>(apiClient.get('/admin/users'));
+  },
+  updateUserEnabled(id: string, enabled: boolean) {
+    return requestEnvelope<AdminUserSummary>(apiClient.put(`/admin/users/${id}/enabled`, { enabled }));
   },
 };
 

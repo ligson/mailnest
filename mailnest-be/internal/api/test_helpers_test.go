@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -186,7 +188,8 @@ func performMultipartRequest(handler http.Handler, method, path string, body []b
 func registerTestUser(t *testing.T, router http.Handler, username, email string) string {
 	t.Helper()
 
-	body := `{"username":"` + username + `","email":"` + email + `","password":"password123"}`
+	captchaID, captchaAnswer := captchaChallenge(t, router)
+	body := fmt.Sprintf(`{"username":%q,"email":%q,"password":"password123","captchaId":%q,"captchaAnswer":%q}`, username, email, captchaID, captchaAnswer)
 	resp := performRequest(router, http.MethodPost, "/api/v1/auth/register", body, "")
 	if resp.Code != http.StatusCreated {
 		t.Fatalf("register %s failed: %d %s", username, resp.Code, resp.Body.String())
@@ -196,6 +199,47 @@ func registerTestUser(t *testing.T, router http.Handler, username, email string)
 		t.Fatalf("unmarshal register response: %v", err)
 	}
 	return nestedString(t, envelope, "data", "token")
+}
+
+func loginTestUser(t *testing.T, router http.Handler, account, password string) *httptest.ResponseRecorder {
+	t.Helper()
+	captchaID, captchaAnswer := captchaChallenge(t, router)
+	body := fmt.Sprintf(`{"account":%q,"password":%q,"captchaId":%q,"captchaAnswer":%q}`, account, password, captchaID, captchaAnswer)
+	return performRequest(router, http.MethodPost, "/api/v1/auth/login", body, "")
+}
+
+func captchaChallenge(t *testing.T, router http.Handler) (string, string) {
+	t.Helper()
+	resp := performRequest(router, http.MethodGet, "/api/v1/auth/captcha", "", "")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("captcha failed: %d %s", resp.Code, resp.Body.String())
+	}
+	data := decodeEnvelope(t, resp.Body.Bytes())["data"].(map[string]any)
+	id, ok := data["id"].(string)
+	if !ok || id == "" {
+		t.Fatalf("expected captcha id, got %#v", data)
+	}
+	imageData, ok := data["imageData"].(string)
+	if !ok || imageData == "" {
+		t.Fatalf("expected captcha imageData, got %#v", data)
+	}
+	parts := strings.SplitN(imageData, ",", 2)
+	if len(parts) != 2 {
+		t.Fatalf("invalid captcha data URL: %s", imageData)
+	}
+	decoded, err := url.PathUnescape(parts[1])
+	if err != nil {
+		t.Fatalf("decode captcha svg: %v", err)
+	}
+	matches := regexp.MustCompile(`>([2-9A-Z])</text>`).FindAllStringSubmatch(decoded, -1)
+	if len(matches) == 0 {
+		t.Fatalf("captcha answer not found in svg: %s", decoded)
+	}
+	var answer strings.Builder
+	for _, match := range matches {
+		answer.WriteString(match[1])
+	}
+	return id, answer.String()
 }
 
 func createTestAccount(t *testing.T, router http.Handler, token string) string {

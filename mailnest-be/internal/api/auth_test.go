@@ -11,7 +11,8 @@ import (
 func TestAuthFlowRegisterLoginAndMe(t *testing.T) {
 	router := newTestRouter(t, true)
 
-	registerBody := `{"username":"demo","email":"demo@example.com","password":"password123"}`
+	captchaID, captchaAnswer := captchaChallenge(t, router)
+	registerBody := `{"username":"demo","email":"demo@example.com","password":"password123","captchaId":"` + captchaID + `","captchaAnswer":"` + captchaAnswer + `"}`
 	registerResp := performRequest(router, http.MethodPost, "/api/v1/auth/register", registerBody, "")
 	if registerResp.Code != http.StatusCreated {
 		t.Fatalf("expected register status 201, got %d: %s", registerResp.Code, registerResp.Body.String())
@@ -29,8 +30,7 @@ func TestAuthFlowRegisterLoginAndMe(t *testing.T) {
 		t.Fatal("expected token in register response")
 	}
 
-	loginBody := `{"account":"demo","password":"password123"}`
-	loginResp := performRequest(router, http.MethodPost, "/api/v1/auth/login", loginBody, "")
+	loginResp := loginTestUser(t, router, "demo", "password123")
 	if loginResp.Code != http.StatusOK {
 		t.Fatalf("expected login status 200, got %d: %s", loginResp.Code, loginResp.Body.String())
 	}
@@ -49,6 +49,12 @@ func TestAuthFlowRegisterLoginAndMe(t *testing.T) {
 	}
 	if nestedString(t, meEnvelope, "data", "uiTheme") != "forest" {
 		t.Fatalf("expected default uiTheme forest, got %#v", meEnvelope)
+	}
+	if meEnvelope["data"].(map[string]any)["isAdmin"] != true {
+		t.Fatalf("expected first registered user to be admin, got %#v", meEnvelope)
+	}
+	if meEnvelope["data"].(map[string]any)["enabled"] != true {
+		t.Fatalf("expected first registered user enabled, got %#v", meEnvelope)
 	}
 }
 
@@ -100,12 +106,12 @@ func TestChangePasswordRequiresLoginAndUpdatesLoginCredential(t *testing.T) {
 		t.Fatalf("expected change password success, got %s", changeResp.Body.String())
 	}
 
-	oldLoginResp := performRequest(router, http.MethodPost, "/api/v1/auth/login", `{"account":"change-password","password":"password123"}`, "")
+	oldLoginResp := loginTestUser(t, router, "change-password", "password123")
 	if oldLoginResp.Code != http.StatusUnauthorized {
 		t.Fatalf("expected old password login status 401, got %d: %s", oldLoginResp.Code, oldLoginResp.Body.String())
 	}
 
-	newLoginResp := performRequest(router, http.MethodPost, "/api/v1/auth/login", `{"account":"change-password","password":"new-password-123"}`, "")
+	newLoginResp := loginTestUser(t, router, "change-password", "new-password-123")
 	if newLoginResp.Code != http.StatusOK {
 		t.Fatalf("expected new password login status 200, got %d: %s", newLoginResp.Code, newLoginResp.Body.String())
 	}

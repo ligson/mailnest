@@ -1,14 +1,18 @@
 package api
 
 type registerRequest struct {
-	Username string `json:"username"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Username      string `json:"username"`
+	Email         string `json:"email"`
+	Password      string `json:"password"`
+	CaptchaID     string `json:"captchaId"`
+	CaptchaAnswer string `json:"captchaAnswer"`
 }
 
 type loginRequest struct {
-	Account  string `json:"account"`
-	Password string `json:"password"`
+	Account       string `json:"account"`
+	Password      string `json:"password"`
+	CaptchaID     string `json:"captchaId"`
+	CaptchaAnswer string `json:"captchaAnswer"`
 }
 
 type changePasswordRequest struct {
@@ -126,4 +130,8 @@ type messageBatchActionRequest struct {
 
 type messageBatchPreviewRequest struct {
 	MessageIDs []string `json:"messageIds"`
+}
+
+type updateUserEnabledRequest struct {
+	Enabled bool `json:"enabled"`
 }

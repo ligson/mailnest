@@ -24,6 +24,11 @@ func (a *App) handleRegister(w http.ResponseWriter, r *http.Request) {
 	req.Username = strings.TrimSpace(req.Username)
 	req.Email = strings.TrimSpace(req.Email)
 
+	if !a.captchas.verify(req.CaptchaID, req.CaptchaAnswer) {
+		response.Error(w, http.StatusBadRequest, "验证码错误或已过期")
+		return
+	}
+
 	if req.Username == "" || req.Email == "" || len(req.Password) < 8 {
 		response.Error(w, http.StatusBadRequest, "用户名、邮箱不能为空，密码至少 8 位")
 		return
@@ -60,6 +65,11 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !a.captchas.verify(req.CaptchaID, req.CaptchaAnswer) {
+		response.Error(w, http.StatusBadRequest, "验证码错误或已过期")
+		return
+	}
+
 	user, err := a.store.FindUserByAccount(strings.TrimSpace(req.Account))
 	if errors.Is(err, storage.ErrNotFound) || !auth.CheckPassword(user.PasswordHash, req.Password) {
 		response.Error(w, http.StatusUnauthorized, "账号或密码错误")
@@ -67,6 +77,10 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "登录失败")
+		return
+	}
+	if !user.Enabled {
+		response.Error(w, http.StatusForbidden, "账号已停用，请联系管理员")
 		return
 	}
 

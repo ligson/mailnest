@@ -263,6 +263,38 @@ body {
   padding: 18px 28px 28px;
 }
 
+.captcha-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 10px;
+  align-items: center;
+}
+
+.captcha-image-button {
+  display: inline-flex;
+  width: 150px;
+  height: 42px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--muted-color);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.captcha-image-button:hover {
+  border-color: var(--accent);
+}
+
+.captcha-image-button img {
+  width: 150px;
+  height: 48px;
+  object-fit: cover;
+}
+
 .app-shell {
   height: 100vh;
   min-height: 0;

@@ -64,6 +64,9 @@ func (s *Store) migrateExistingSQLite() error {
 	if err := s.createSQLiteExistingIndexes(); err != nil {
 		return err
 	}
+	if err := s.ensureFirstUserAdmin(); err != nil {
+		return err
+	}
 	return s.createSupplementalIndexes()
 }
 
@@ -181,6 +184,8 @@ func sqliteExistingColumnStatements() []sqliteColumnStatement {
 		{table: "users", name: "avatar_path", definition: `avatar_path TEXT`},
 		{table: "users", name: "bio", definition: `bio TEXT`},
 		{table: "users", name: "ui_theme", definition: `ui_theme TEXT NOT NULL DEFAULT 'forest'`},
+		{table: "users", name: "is_admin", definition: `is_admin INTEGER NOT NULL DEFAULT 0`},
+		{table: "users", name: "enabled", definition: `enabled INTEGER NOT NULL DEFAULT 1`},
 		{table: "mail_rules", name: "priority", definition: `priority INTEGER NOT NULL DEFAULT 0`},
 		{table: "mail_rules", name: "stop_on_match", definition: `stop_on_match INTEGER NOT NULL DEFAULT 1`},
 		{table: "mail_rules", name: "action_type", definition: `action_type TEXT NOT NULL DEFAULT 'move_folder'`},
@@ -214,6 +219,9 @@ func sqliteExistingIndexStatements() []string {
 
 func (s *Store) createSupplementalIndexes() error {
 	if err := s.ensureDialectColumnTypes(); err != nil {
+		return err
+	}
+	if err := s.ensureFirstUserAdmin(); err != nil {
 		return err
 	}
 	for _, stmt := range supplementalIndexStatements(s.db.dialect) {
@@ -284,6 +292,8 @@ type userModel struct {
 	AvatarPath   *string   `gorm:"column:avatar_path;type:text"`
 	Bio          *string   `gorm:"column:bio;type:text"`
 	UITheme      string    `gorm:"column:ui_theme;size:32;not null;default:forest"`
+	IsAdmin      int       `gorm:"column:is_admin;not null;default:0"`
+	Enabled      int       `gorm:"column:enabled;not null;default:1"`
 	CreatedAt    time.Time `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt    time.Time `gorm:"column:updated_at;not null;default:CURRENT_TIMESTAMP"`
 }

@@ -19,7 +19,31 @@ func userPayload(user storage.User) map[string]any {
 		"nickname":  nullableString(user.Nickname),
 		"bio":       nullableString(user.Bio),
 		"uiTheme":   normalizeUITheme(user.UITheme),
+		"isAdmin":   user.IsAdmin,
+		"enabled":   user.Enabled,
 		"avatarUrl": profileAvatarURL(user),
+	}
+}
+
+func adminUserSummaryPayload(summary storage.AdminUserSummary) map[string]any {
+	return map[string]any{
+		"id":               strconv.FormatInt(summary.User.ID, 10),
+		"username":         summary.User.Username,
+		"email":            summary.User.Email,
+		"nickname":         nullableString(summary.User.Nickname),
+		"isAdmin":          summary.User.IsAdmin,
+		"enabled":          summary.User.Enabled,
+		"mailAccountCount": summary.MailAccountCount,
+		"messageCount":     summary.MessageCount,
+		"attachmentCount":  summary.AttachmentCount,
+		"attachmentBytes":  summary.AttachmentBytes,
+		"contactCount":     summary.ContactCount,
+		"folderCount":      summary.FolderCount,
+		"ruleCount":        summary.RuleCount,
+		"lastMessageAt":    nullableTime(summary.LastMessageAt),
+		"lastSyncAt":       nullableTime(summary.LastSyncAt),
+		"createdAt":        summary.User.CreatedAt,
+		"updatedAt":        summary.User.UpdatedAt,
 	}
 }
 

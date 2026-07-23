@@ -9,6 +9,7 @@ import MailRulesView from '../views/MailRulesView.vue';
 import ContactsView from '../views/ContactsView.vue';
 import ProfileSettingsView from '../views/ProfileSettingsView.vue';
 import MicrosoftOAuthCallbackView from '../views/MicrosoftOAuthCallbackView.vue';
+import AdminUsersView from '../views/AdminUsersView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -23,6 +24,7 @@ export const router = createRouter({
     { path: '/contacts', component: ContactsView },
     { path: '/rules', component: MailRulesView },
     { path: '/settings/profile', component: ProfileSettingsView },
+    { path: '/admin/users', component: AdminUsersView, meta: { admin: true } },
   ],
 });
 
@@ -38,6 +40,9 @@ router.beforeEach(async (to) => {
     await auth.loadMe().catch(async () => {
       await auth.logout();
     });
+  }
+  if (to.meta.admin && !auth.user?.isAdmin) {
+    return '/mail';
   }
   return auth.token ? true : '/login';
 });

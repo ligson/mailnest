@@ -18,6 +18,7 @@ type App struct {
 	store       *storage.Store
 	mailService *mail.Service
 	oauth       *oauth.Service
+	captchas    *captchaStore
 }
 
 func NewApp(cfg config.Config) (*App, error) {
@@ -50,12 +51,14 @@ func NewAppWithDependencies(cfg config.Config, fetcher mail.Fetcher, exchanger o
 		store:       store,
 		mailService: mailService,
 		oauth:       oauth.NewService(store, exchanger, cfg.App.CredentialSecret, cfg.OAuth.Microsoft.RedirectURL),
+		captchas:    newCaptchaStore(),
 	}, nil
 }
 
 func (a *App) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", a.handleHealth)
+	mux.HandleFunc("GET /api/v1/auth/captcha", a.handleCaptcha)
 	mux.HandleFunc("POST /api/v1/auth/register", a.handleRegister)
 	mux.HandleFunc("POST /api/v1/auth/login", a.handleLogin)
 	mux.Handle("GET /api/v1/auth/me", a.authMiddleware(http.HandlerFunc(a.handleMe)))
@@ -104,6 +107,8 @@ func (a *App) Routes() http.Handler {
 	mux.Handle("POST /api/v1/mail-rules/preview", a.authMiddleware(http.HandlerFunc(a.handlePreviewMailRule)))
 	mux.Handle("POST /api/v1/oauth/microsoft/start", a.authMiddleware(http.HandlerFunc(a.handleMicrosoftOAuthStart)))
 	mux.Handle("POST /api/v1/oauth/microsoft/complete", a.authMiddleware(http.HandlerFunc(a.handleMicrosoftOAuthComplete)))
+	mux.Handle("GET /api/v1/admin/users", a.adminMiddleware(http.HandlerFunc(a.handleAdminListUsers)))
+	mux.Handle("PUT /api/v1/admin/users/{id}/enabled", a.adminMiddleware(http.HandlerFunc(a.handleAdminUpdateUserEnabled)))
 	return mux
 }
 
