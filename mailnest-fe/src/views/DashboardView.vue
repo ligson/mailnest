@@ -192,10 +192,20 @@
 
         <a-spin :spinning="loading">
           <div v-if="loading && !hasLoadedMessages" class="mail-list-skeleton">
-            <a-skeleton active :paragraph="{ rows: 8 }" />
+            <div v-for="index in 8" :key="index" class="mail-skeleton-item">
+              <a-skeleton-avatar active shape="square" :size="36" />
+              <a-skeleton active :title="{ width: '72%' }" :paragraph="{ rows: 2, width: ['96%', '54%'] }" />
+            </div>
           </div>
           <div v-else-if="messages.length === 0" class="mail-list-empty">
-            <a-empty description="没有符合条件的邮件" />
+            <a-empty :description="mailEmptyTitle">
+              <template #image>
+                <mail-outlined class="mail-empty-icon" />
+              </template>
+              <p class="mail-empty-copy">{{ mailEmptyDescription }}</p>
+              <a-button v-if="!accounts.length" type="primary" @click="router.push('/accounts')">配置邮箱账号</a-button>
+              <a-button v-else @click="refreshAll">刷新邮件</a-button>
+            </a-empty>
           </div>
           <div v-else class="mail-list">
             <div
@@ -255,12 +265,24 @@
       <div class="mail-resizer" title="拖拽调整邮件列表宽度" @mousedown="startResize('list', $event)"></div>
 
       <section class="mail-reader-pane">
-        <a-skeleton v-if="detailLoading" active />
+        <div v-if="detailLoading" class="reader-skeleton">
+          <a-skeleton active :title="{ width: '70%' }" :paragraph="{ rows: 4 }" />
+          <a-skeleton active :paragraph="{ rows: 8 }" />
+        </div>
         <div v-else-if="detail" class="mail-reader">
           <div class="reader-header">
             <div class="reader-title-row">
-              <h3 class="mail-subject">{{ detail.subject || '无主题' }}</h3>
-              <a-space class="reader-actions" size="small" wrap>
+              <div class="reader-title-main">
+                <div class="reader-status-row">
+                  <span v-for="badge in readerStatusBadges" :key="badge.label" class="reader-status-chip" :class="badge.tone">
+                    <component :is="badge.icon" />
+                    {{ badge.label }}
+                  </span>
+                </div>
+                <h3 class="mail-subject">{{ detail.subject || '无主题' }}</h3>
+                <div class="reader-time">{{ formatTime(detail.sentAt || detail.receivedAt) }}</div>
+              </div>
+              <a-space class="reader-actions reader-actions-desktop" size="small" wrap>
                 <a-button size="small" @click="openReply('reply')">
                   <template #icon><rollback-outlined /></template>
                   回复
@@ -274,103 +296,71 @@
                   转发
                 </a-button>
               </a-space>
+              <a-dropdown class="reader-actions-mobile" :trigger="['click']">
+                <a-button size="small" aria-label="更多邮件操作">
+                  <template #icon><more-outlined /></template>
+                </a-button>
+                <template #overlay>
+                  <a-menu @click="handleReaderActionMenu">
+                    <a-menu-item key="reply">
+                      <rollback-outlined />
+                      <span>回复</span>
+                    </a-menu-item>
+                    <a-menu-item key="replyAll">
+                      <retweet-outlined />
+                      <span>回复全部</span>
+                    </a-menu-item>
+                    <a-menu-item key="forward">
+                      <forward-outlined />
+                      <span>转发</span>
+                    </a-menu-item>
+                  </a-menu>
+                </template>
+              </a-dropdown>
             </div>
-            <div class="reader-time">{{ formatTime(detail.sentAt || detail.receivedAt) }}</div>
-            <div class="reader-address-row">
-              <span class="reader-address-label">发件人</span>
-              <div class="reader-contact-list">
-                <a-popover trigger="click" placement="bottomLeft">
-                  <template #content>
-                    <div class="contact-popover">
-                      <div class="contact-popover-header">
-                        <strong>{{ displayAddressName(detailFromAddress) }}</strong>
-                        <a-tooltip title="编辑联系人">
-                          <a-button
-                            class="contact-popover-edit"
-                            type="text"
-                            size="small"
-                            aria-label="编辑联系人"
-                            @click.stop="editAddressContact(detailFromAddress)"
-                          >
-                            <template #icon><edit-outlined /></template>
-                          </a-button>
-                        </a-tooltip>
+
+            <div class="reader-address-grid">
+              <div v-for="section in readerAddressSections" :key="section.key" class="reader-address-row">
+                <span class="reader-address-label">{{ section.label }}</span>
+                <div class="reader-contact-list">
+                  <span v-if="!section.addresses.length" class="reader-address-empty">-</span>
+                  <a-popover
+                    v-for="(address, index) in section.addresses"
+                    :key="`${section.key}-${address.raw}-${index}`"
+                    trigger="click"
+                    placement="bottomLeft"
+                  >
+                    <template #content>
+                      <div class="contact-popover">
+                        <div class="contact-popover-header">
+                          <div class="contact-popover-avatar">{{ addressInitial(address) }}</div>
+                          <div>
+                            <strong>{{ displayAddressName(address) }}</strong>
+                            <span>{{ contactEmail(address) || address.raw }}</span>
+                          </div>
+                          <a-tooltip title="编辑联系人">
+                            <a-button
+                              class="contact-popover-edit"
+                              type="text"
+                              size="small"
+                              aria-label="编辑联系人"
+                              @click.stop="editAddressContact(address)"
+                            >
+                              <template #icon><edit-outlined /></template>
+                            </a-button>
+                          </a-tooltip>
+                        </div>
+                        <span v-if="contactInfo(address)?.phone">电话：{{ contactInfo(address)?.phone }}</span>
+                        <span v-if="contactInfo(address)?.company">公司：{{ contactInfo(address)?.company }}</span>
+                        <span v-if="contactInfo(address)?.notes">备注：{{ contactInfo(address)?.notes }}</span>
                       </div>
-                      <span>{{ contactEmail(detailFromAddress) || detailFromAddress.raw }}</span>
-                      <span v-if="contactInfo(detailFromAddress)?.phone">电话：{{ contactInfo(detailFromAddress)?.phone }}</span>
-                      <span v-if="contactInfo(detailFromAddress)?.company">公司：{{ contactInfo(detailFromAddress)?.company }}</span>
-                      <span v-if="contactInfo(detailFromAddress)?.notes">备注：{{ contactInfo(detailFromAddress)?.notes }}</span>
-                    </div>
-                  </template>
-                  <button class="reader-contact-chip" type="button">
-                    <span class="reader-contact-name">{{ displayAddressName(detailFromAddress) }}</span>
-                  </button>
-                </a-popover>
-              </div>
-            </div>
-            <div class="reader-address-row">
-              <span class="reader-address-label">收件人</span>
-              <div class="reader-contact-list">
-                <span v-if="!detailToAddresses.length" class="reader-address-empty">-</span>
-                <a-popover v-for="(address, index) in detailToAddresses" :key="`${address.raw}-${index}`" trigger="click" placement="bottomLeft">
-                  <template #content>
-                    <div class="contact-popover">
-                      <div class="contact-popover-header">
-                        <strong>{{ displayAddressName(address) }}</strong>
-                        <a-tooltip title="编辑联系人">
-                          <a-button
-                            class="contact-popover-edit"
-                            type="text"
-                            size="small"
-                            aria-label="编辑联系人"
-                            @click.stop="editAddressContact(address)"
-                          >
-                            <template #icon><edit-outlined /></template>
-                          </a-button>
-                        </a-tooltip>
-                      </div>
-                      <span>{{ contactEmail(address) || address.raw }}</span>
-                      <span v-if="contactInfo(address)?.phone">电话：{{ contactInfo(address)?.phone }}</span>
-                      <span v-if="contactInfo(address)?.company">公司：{{ contactInfo(address)?.company }}</span>
-                      <span v-if="contactInfo(address)?.notes">备注：{{ contactInfo(address)?.notes }}</span>
-                    </div>
-                  </template>
-                  <button class="reader-contact-chip" type="button">
-                    <span class="reader-contact-name">{{ displayAddressName(address) }}</span>
-                  </button>
-                </a-popover>
-              </div>
-            </div>
-            <div v-if="detailCcAddresses.length" class="reader-address-row">
-              <span class="reader-address-label">抄送</span>
-              <div class="reader-contact-list">
-                <a-popover v-for="(address, index) in detailCcAddresses" :key="`${address.raw}-${index}`" trigger="click" placement="bottomLeft">
-                  <template #content>
-                    <div class="contact-popover">
-                      <div class="contact-popover-header">
-                        <strong>{{ displayAddressName(address) }}</strong>
-                        <a-tooltip title="编辑联系人">
-                          <a-button
-                            class="contact-popover-edit"
-                            type="text"
-                            size="small"
-                            aria-label="编辑联系人"
-                            @click.stop="editAddressContact(address)"
-                          >
-                            <template #icon><edit-outlined /></template>
-                          </a-button>
-                        </a-tooltip>
-                      </div>
-                      <span>{{ contactEmail(address) || address.raw }}</span>
-                      <span v-if="contactInfo(address)?.phone">电话：{{ contactInfo(address)?.phone }}</span>
-                      <span v-if="contactInfo(address)?.company">公司：{{ contactInfo(address)?.company }}</span>
-                      <span v-if="contactInfo(address)?.notes">备注：{{ contactInfo(address)?.notes }}</span>
-                    </div>
-                  </template>
-                  <button class="reader-contact-chip" type="button">
-                    <span class="reader-contact-name">{{ displayAddressName(address) }}</span>
-                  </button>
-                </a-popover>
+                    </template>
+                    <button class="reader-contact-chip" type="button">
+                      <span class="reader-contact-name">{{ displayAddressName(address) }}</span>
+                      <span v-if="contactEmail(address)" class="reader-contact-email">{{ contactEmail(address) }}</span>
+                    </button>
+                  </a-popover>
+                </div>
               </div>
             </div>
           </div>
@@ -378,19 +368,16 @@
           <pre v-else class="mail-text-body">{{ detail.textBody || '没有正文内容' }}</pre>
           <section v-if="normalAttachments.length" class="attachments-panel">
             <h4 class="attachments-title">附件</h4>
-            <a-list :data-source="normalAttachments" size="small">
-              <template #renderItem="{ item }">
-                <a-list-item>
-                  <template #actions>
-                    <a-button type="link" size="small" @click="downloadAttachment(item)">下载</a-button>
-                  </template>
-                  <a-list-item-meta>
-                    <template #title>{{ item.filename }}</template>
-                    <template #description>{{ attachmentDescription(item) }}</template>
-                  </a-list-item-meta>
-                </a-list-item>
-              </template>
-            </a-list>
+            <div class="attachment-card-grid">
+              <div v-for="item in normalAttachments" :key="item.id" class="attachment-card">
+                <paper-clip-outlined />
+                <div>
+                  <strong>{{ item.filename }}</strong>
+                  <span>{{ attachmentDescription(item) }}</span>
+                </div>
+                <a-button type="link" size="small" @click="downloadAttachment(item)">下载</a-button>
+              </div>
+            </div>
           </section>
         </div>
         <div v-else class="reader-empty">
@@ -441,253 +428,263 @@
       >
         <a-spin :spinning="composeLoading" tip="正在准备邮件...">
           <a-form layout="vertical" :model="composeForm" class="compose-form">
-            <a-form-item label="发件账号">
-              <a-select v-model:value="composeForm.accountId" placeholder="选择发件邮箱" @change="onComposeAccountChanged">
-                <a-select-option v-for="account in visibleAccounts" :key="account.id" :value="account.id">
-                  {{ account.displayName }} &lt;{{ account.email }}&gt;
-                </a-select-option>
-              </a-select>
-            </a-form-item>
-            <a-form-item label="收件人">
-              <a-select
-                v-model:value="composeForm.to"
-                mode="tags"
-                :options="contactOptions"
-                placeholder="输入邮箱后回车"
-                :token-separators="[',', ';', '，', '；']"
-              />
-            </a-form-item>
-            <div class="compose-address-grid">
-              <a-form-item label="抄送">
+            <div class="compose-fields">
+              <a-form-item label="发件账号">
+                <a-select v-model:value="composeForm.accountId" placeholder="选择发件邮箱" @change="onComposeAccountChanged">
+                  <a-select-option v-for="account in visibleAccounts" :key="account.id" :value="account.id">
+                    {{ account.displayName }} &lt;{{ account.email }}&gt;
+                  </a-select-option>
+                </a-select>
+              </a-form-item>
+              <a-form-item label="收件人">
                 <a-select
-                  v-model:value="composeForm.cc"
+                  v-model:value="composeForm.to"
                   mode="tags"
                   :options="contactOptions"
-                  placeholder="可选"
+                  placeholder="输入邮箱后回车"
                   :token-separators="[',', ';', '，', '；']"
                 />
               </a-form-item>
-              <a-form-item label="密送">
-                <a-select
-                  v-model:value="composeForm.bcc"
-                  mode="tags"
-                  :options="contactOptions"
-                  placeholder="可选"
-                  :token-separators="[',', ';', '，', '；']"
-                />
+              <div class="compose-address-grid">
+                <a-form-item label="抄送">
+                  <a-select
+                    v-model:value="composeForm.cc"
+                    mode="tags"
+                    :options="contactOptions"
+                    placeholder="可选"
+                    :token-separators="[',', ';', '，', '；']"
+                  />
+                </a-form-item>
+                <a-form-item label="密送">
+                  <a-select
+                    v-model:value="composeForm.bcc"
+                    mode="tags"
+                    :options="contactOptions"
+                    placeholder="可选"
+                    :token-separators="[',', ';', '，', '；']"
+                  />
+                </a-form-item>
+              </div>
+              <a-form-item label="主题">
+                <a-input v-model:value="composeForm.subject" placeholder="邮件主题" />
               </a-form-item>
             </div>
-            <a-form-item label="主题">
-              <a-input v-model:value="composeForm.subject" placeholder="邮件主题" />
-            </a-form-item>
-            <a-form-item label="正文" class="compose-body-item">
-              <div class="compose-editor">
-                <div class="compose-toolbar">
-                  <input
-                    ref="composeAttachmentInput"
-                    class="compose-file-input"
-                    hidden
-                    type="file"
-                    multiple
-                    @change="onComposeFilesSelected"
-                  />
-                  <input
-                    ref="composeImageInput"
-                    class="compose-file-input"
-                    hidden
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    @change="onComposeImagesSelected"
-                  />
-                  <div class="compose-toolbar-group" @mousedown="saveComposeSelection">
-                    <a-tooltip title="添加附件">
-                      <a-button type="text" class="compose-tool-button" aria-label="添加附件" @mousedown.prevent @click="chooseComposeFiles">
-                        <template #icon><paper-clip-outlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                    <a-tooltip title="插入图片">
-                      <a-button type="text" class="compose-tool-button" aria-label="插入图片" @mousedown.prevent @click="chooseComposeImages">
-                        <template #icon><file-image-outlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                    <a-tooltip title="插入签名">
-                      <a-button type="text" class="compose-tool-button" aria-label="插入签名" @mousedown.prevent @click="insertComposeSignature">
-                        <template #icon><edit-outlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                  </div>
-                  <span class="compose-toolbar-divider"></span>
-                  <div class="compose-toolbar-group compose-toolbar-selects" @mousedown="saveComposeSelection">
-                    <a-select
-                      v-model:value="composeFontFamily"
-                      class="compose-font-select"
-                      size="small"
-                      @change="applyComposeFontFamily"
-                    >
-                      <template #suffixIcon><font-size-outlined /></template>
-                      <a-select-option v-for="font in composeFontFamilies" :key="font.value" :value="font.value">
-                        {{ font.label }}
-                      </a-select-option>
-                    </a-select>
-                    <a-select
-                      v-model:value="composeFontSize"
-                      class="compose-size-select"
-                      size="small"
-                      @change="applyComposeFontSize"
-                    >
-                      <a-select-option v-for="size in composeFontSizes" :key="size.value" :value="size.value">
-                        {{ size.label }}
-                      </a-select-option>
-                    </a-select>
-                  </div>
-                  <span class="compose-toolbar-divider"></span>
-                  <div class="compose-toolbar-group" @mousedown="saveComposeSelection">
-                    <a-tooltip title="加粗">
-                      <a-button type="text" class="compose-tool-button" aria-label="加粗" @mousedown.prevent @click="runComposeCommand('bold')">
-                        <template #icon><bold-outlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                    <a-tooltip title="斜体">
-                      <a-button type="text" class="compose-tool-button" aria-label="斜体" @mousedown.prevent @click="runComposeCommand('italic')">
-                        <template #icon><italic-outlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                    <a-tooltip title="下划线">
-                      <a-button type="text" class="compose-tool-button" aria-label="下划线" @mousedown.prevent @click="runComposeCommand('underline')">
-                        <template #icon><underline-outlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                    <a-tooltip title="删除线">
-                      <a-button type="text" class="compose-tool-button" aria-label="删除线" @mousedown.prevent @click="runComposeCommand('strikeThrough')">
-                        <template #icon><strikethrough-outlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                    <a-popover trigger="click" placement="bottomLeft">
-                      <template #content>
-                        <div class="compose-color-grid" @mousedown.prevent>
-                          <button
-                            v-for="color in composeTextColors"
-                            :key="color"
-                            class="compose-color-swatch"
-                            :class="{ selected: composeTextColor === color }"
-                            :style="{ '--compose-swatch-color': color }"
-                            type="button"
-                            :aria-label="`文字颜色 ${color}`"
-                            @click="applyComposeTextColor(color)"
-                          >
-                            <check-outlined v-if="composeTextColor === color" />
-                          </button>
-                        </div>
-                      </template>
-                      <a-button type="text" class="compose-tool-button compose-color-button" aria-label="字体颜色" @mousedown.prevent>
-                        <template #icon><bg-colors-outlined /></template>
-                        <span class="compose-color-indicator" :style="{ background: composeTextColor }"></span>
-                      </a-button>
-                    </a-popover>
-                    <a-popover trigger="click" placement="bottomLeft">
-                      <template #content>
-                        <div class="compose-color-panel" @mousedown.prevent>
-                          <button class="compose-color-clear" type="button" @click="clearComposeBackgroundColor">
-                            无背景
-                          </button>
-                          <div class="compose-color-grid">
+            <section class="compose-body-shell">
+              <div class="compose-body-header">
+                <span>正文</span>
+                <small>{{ composeBodyHint }}</small>
+              </div>
+              <a-form-item class="compose-body-item">
+                <div class="compose-editor">
+                  <div class="compose-toolbar">
+                    <input
+                      ref="composeAttachmentInput"
+                      class="compose-file-input"
+                      hidden
+                      type="file"
+                      multiple
+                      @change="onComposeFilesSelected"
+                    />
+                    <input
+                      ref="composeImageInput"
+                      class="compose-file-input"
+                      hidden
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      @change="onComposeImagesSelected"
+                    />
+                    <div class="compose-toolbar-group" @mousedown="saveComposeSelection">
+                      <a-tooltip title="添加附件">
+                        <a-button type="text" class="compose-tool-button" aria-label="添加附件" @mousedown.prevent @click="chooseComposeFiles">
+                          <template #icon><paper-clip-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip title="插入图片">
+                        <a-button type="text" class="compose-tool-button" aria-label="插入图片" @mousedown.prevent @click="chooseComposeImages">
+                          <template #icon><file-image-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip title="插入签名">
+                        <a-button type="text" class="compose-tool-button" aria-label="插入签名" @mousedown.prevent @click="insertComposeSignature">
+                          <template #icon><edit-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                    </div>
+                    <span class="compose-toolbar-divider"></span>
+                    <div class="compose-toolbar-group compose-toolbar-selects" @mousedown="saveComposeSelection">
+                      <a-select
+                        v-model:value="composeFontFamily"
+                        class="compose-font-select"
+                        size="small"
+                        @change="applyComposeFontFamily"
+                      >
+                        <template #suffixIcon><font-size-outlined /></template>
+                        <a-select-option v-for="font in composeFontFamilies" :key="font.value" :value="font.value">
+                          {{ font.label }}
+                        </a-select-option>
+                      </a-select>
+                      <a-select
+                        v-model:value="composeFontSize"
+                        class="compose-size-select"
+                        size="small"
+                        @change="applyComposeFontSize"
+                      >
+                        <a-select-option v-for="size in composeFontSizes" :key="size.value" :value="size.value">
+                          {{ size.label }}
+                        </a-select-option>
+                      </a-select>
+                    </div>
+                    <span class="compose-toolbar-divider"></span>
+                    <div class="compose-toolbar-group" @mousedown="saveComposeSelection">
+                      <a-tooltip title="加粗">
+                        <a-button type="text" class="compose-tool-button" aria-label="加粗" @mousedown.prevent @click="runComposeCommand('bold')">
+                          <template #icon><bold-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip title="斜体">
+                        <a-button type="text" class="compose-tool-button" aria-label="斜体" @mousedown.prevent @click="runComposeCommand('italic')">
+                          <template #icon><italic-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip title="下划线">
+                        <a-button type="text" class="compose-tool-button" aria-label="下划线" @mousedown.prevent @click="runComposeCommand('underline')">
+                          <template #icon><underline-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip title="删除线">
+                        <a-button type="text" class="compose-tool-button" aria-label="删除线" @mousedown.prevent @click="runComposeCommand('strikeThrough')">
+                          <template #icon><strikethrough-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-popover trigger="click" placement="bottomLeft">
+                        <template #content>
+                          <div class="compose-color-grid" @mousedown.prevent>
                             <button
-                              v-for="color in composeBackgroundColors"
+                              v-for="color in composeTextColors"
                               :key="color"
                               class="compose-color-swatch"
-                              :class="{ selected: composeBackgroundColor === color }"
+                              :class="{ selected: composeTextColor === color }"
                               :style="{ '--compose-swatch-color': color }"
                               type="button"
-                              :aria-label="`背景颜色 ${color}`"
-                              @click="applyComposeBackgroundColor(color)"
+                              :aria-label="`文字颜色 ${color}`"
+                              @click="applyComposeTextColor(color)"
                             >
-                              <check-outlined v-if="composeBackgroundColor === color" />
+                              <check-outlined v-if="composeTextColor === color" />
                             </button>
                           </div>
-                        </div>
-                      </template>
-                      <a-button type="text" class="compose-tool-button compose-color-button" aria-label="背景颜色" @mousedown.prevent>
-                        <span class="compose-bg-label">A</span>
-                        <span class="compose-color-indicator" :style="{ background: composeBackgroundColor || 'transparent' }"></span>
-                      </a-button>
-                    </a-popover>
+                        </template>
+                        <a-button type="text" class="compose-tool-button compose-color-button" aria-label="字体颜色" @mousedown.prevent>
+                          <template #icon><bg-colors-outlined /></template>
+                          <span class="compose-color-indicator" :style="{ background: composeTextColor }"></span>
+                        </a-button>
+                      </a-popover>
+                      <a-popover trigger="click" placement="bottomLeft">
+                        <template #content>
+                          <div class="compose-color-panel" @mousedown.prevent>
+                            <button class="compose-color-clear" type="button" @click="clearComposeBackgroundColor">
+                              无背景
+                            </button>
+                            <div class="compose-color-grid">
+                              <button
+                                v-for="color in composeBackgroundColors"
+                                :key="color"
+                                class="compose-color-swatch"
+                                :class="{ selected: composeBackgroundColor === color }"
+                                :style="{ '--compose-swatch-color': color }"
+                                type="button"
+                                :aria-label="`背景颜色 ${color}`"
+                                @click="applyComposeBackgroundColor(color)"
+                              >
+                                <check-outlined v-if="composeBackgroundColor === color" />
+                              </button>
+                            </div>
+                          </div>
+                        </template>
+                        <a-button type="text" class="compose-tool-button compose-color-button" aria-label="背景颜色" @mousedown.prevent>
+                          <span class="compose-bg-label">A</span>
+                          <span class="compose-color-indicator" :style="{ background: composeBackgroundColor || 'transparent' }"></span>
+                        </a-button>
+                      </a-popover>
+                    </div>
+                    <span class="compose-toolbar-divider"></span>
+                    <div class="compose-toolbar-group" @mousedown="saveComposeSelection">
+                      <a-tooltip title="项目列表">
+                        <a-button type="text" class="compose-tool-button" aria-label="项目列表" @mousedown.prevent @click="runComposeCommand('insertUnorderedList')">
+                          <template #icon><unordered-list-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip title="编号列表">
+                        <a-button type="text" class="compose-tool-button" aria-label="编号列表" @mousedown.prevent @click="runComposeCommand('insertOrderedList')">
+                          <template #icon><ordered-list-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip title="左对齐">
+                        <a-button type="text" class="compose-tool-button" aria-label="左对齐" @mousedown.prevent @click="runComposeCommand('justifyLeft')">
+                          <template #icon><align-left-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip title="居中">
+                        <a-button type="text" class="compose-tool-button" aria-label="居中" @mousedown.prevent @click="runComposeCommand('justifyCenter')">
+                          <template #icon><align-center-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip title="右对齐">
+                        <a-button type="text" class="compose-tool-button" aria-label="右对齐" @mousedown.prevent @click="runComposeCommand('justifyRight')">
+                          <template #icon><align-right-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip title="插入链接">
+                        <a-button type="text" class="compose-tool-button" aria-label="插入链接" @mousedown.prevent @click="insertComposeLink">
+                          <template #icon><link-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip title="清除格式">
+                        <a-button type="text" class="compose-tool-button" aria-label="清除格式" @mousedown.prevent @click="runComposeCommand('removeFormat')">
+                          <template #icon><clear-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                    </div>
                   </div>
-                  <span class="compose-toolbar-divider"></span>
-                  <div class="compose-toolbar-group" @mousedown="saveComposeSelection">
-                    <a-tooltip title="项目列表">
-                      <a-button type="text" class="compose-tool-button" aria-label="项目列表" @mousedown.prevent @click="runComposeCommand('insertUnorderedList')">
-                        <template #icon><unordered-list-outlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                    <a-tooltip title="编号列表">
-                      <a-button type="text" class="compose-tool-button" aria-label="编号列表" @mousedown.prevent @click="runComposeCommand('insertOrderedList')">
-                        <template #icon><ordered-list-outlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                    <a-tooltip title="左对齐">
-                      <a-button type="text" class="compose-tool-button" aria-label="左对齐" @mousedown.prevent @click="runComposeCommand('justifyLeft')">
-                        <template #icon><align-left-outlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                    <a-tooltip title="居中">
-                      <a-button type="text" class="compose-tool-button" aria-label="居中" @mousedown.prevent @click="runComposeCommand('justifyCenter')">
-                        <template #icon><align-center-outlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                    <a-tooltip title="右对齐">
-                      <a-button type="text" class="compose-tool-button" aria-label="右对齐" @mousedown.prevent @click="runComposeCommand('justifyRight')">
-                        <template #icon><align-right-outlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                    <a-tooltip title="插入链接">
-                      <a-button type="text" class="compose-tool-button" aria-label="插入链接" @mousedown.prevent @click="insertComposeLink">
-                        <template #icon><link-outlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                    <a-tooltip title="清除格式">
-                      <a-button type="text" class="compose-tool-button" aria-label="清除格式" @mousedown.prevent @click="runComposeCommand('removeFormat')">
-                        <template #icon><clear-outlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                  </div>
+                  <div
+                    ref="composeEditor"
+                    class="compose-editor-body"
+                    contenteditable="true"
+                    data-placeholder="输入邮件正文"
+                    @input="onComposeEditorInput"
+                    @focus="saveComposeSelection"
+                    @keyup="saveComposeSelection"
+                    @mouseup="saveComposeSelection"
+                    @paste="onComposeEditorPaste"
+                    @blur="onComposeEditorInput"
+                  ></div>
                 </div>
-                <div
-                  ref="composeEditor"
-                  class="compose-editor-body"
-                  contenteditable="true"
-                  data-placeholder="输入邮件正文"
-                  @input="onComposeEditorInput"
-                  @focus="saveComposeSelection"
-                  @keyup="saveComposeSelection"
-                  @mouseup="saveComposeSelection"
-                  @paste="onComposeEditorPaste"
-                  @blur="onComposeEditorInput"
-                ></div>
+              </a-form-item>
+            </section>
+            <section v-if="composeForwardAttachments.length || composeForm.attachments.length" class="compose-attachment-zone">
+              <div v-if="composeForwardAttachments.length" class="compose-forward-box">
+                <div class="compose-forward-title">转发附件</div>
+                <a-checkbox-group v-model:value="selectedForwardAttachmentIds" class="compose-forward-list">
+                  <a-checkbox
+                    v-for="item in composeForwardAttachments"
+                    :key="item.id"
+                    :value="item.id"
+                  >
+                    {{ item.filename }} · {{ formatSize(item.size) }}
+                  </a-checkbox>
+                </a-checkbox-group>
               </div>
-            </a-form-item>
-            <div v-if="composeForwardAttachments.length" class="compose-forward-box">
-              <div class="compose-forward-title">转发附件</div>
-              <a-checkbox-group v-model:value="selectedForwardAttachmentIds" class="compose-forward-list">
-                <a-checkbox
-                  v-for="item in composeForwardAttachments"
-                  :key="item.id"
-                  :value="item.id"
-                >
-                  {{ item.filename }} · {{ formatSize(item.size) }}
-                </a-checkbox>
-              </a-checkbox-group>
-            </div>
-            <div v-if="composeForm.attachments.length" class="compose-attachments">
-              <div v-for="(file, index) in composeForm.attachments" :key="`${file.name}-${file.size}-${index}`" class="compose-attachment-item">
-                <paper-clip-outlined />
-                <span>{{ file.name }}</span>
-                <small>{{ formatSize(file.size) }}</small>
-                <a-button type="text" size="small" aria-label="移除附件" @click="removeComposeAttachment(index)">
-                  移除
-                </a-button>
+              <div v-if="composeForm.attachments.length" class="compose-attachments">
+                <div v-for="(file, index) in composeForm.attachments" :key="`${file.name}-${file.size}-${index}`" class="compose-attachment-item">
+                  <paper-clip-outlined />
+                  <span>{{ file.name }}</span>
+                  <small>{{ formatSize(file.size) }}</small>
+                  <a-button type="text" size="small" aria-label="移除附件" @click="removeComposeAttachment(index)">
+                    移除
+                  </a-button>
+                </div>
               </div>
-            </div>
+            </section>
             <div class="compose-footer">
               <a-button @click="closeCompose">取消</a-button>
               <a-button type="primary" :loading="sending" @click="sendMail">
@@ -703,7 +700,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, markRaw, onBeforeUnmount, onMounted, reactive, ref, watch, type Component } from 'vue';
 import {
   AlignCenterOutlined,
   AlignLeftOutlined,
@@ -723,6 +720,7 @@ import {
   ItalicOutlined,
   LinkOutlined,
   MailOutlined,
+  MoreOutlined,
   OrderedListOutlined,
   PaperClipOutlined,
   ForwardOutlined,
@@ -887,6 +885,42 @@ const selectedComposeAccount = computed(() => visibleAccounts.value.find((accoun
 const detailFromAddress = computed(() => parseContactAddress(detail.value?.from || ''));
 const detailToAddresses = computed(() => parseContactAddresses(detail.value?.to || []));
 const detailCcAddresses = computed(() => parseContactAddresses(detail.value?.cc || []));
+const readerAddressSections = computed(() => [
+  {
+    key: 'from',
+    label: '发件人',
+    addresses: detail.value?.from ? [detailFromAddress.value] : [],
+  },
+  {
+    key: 'to',
+    label: '收件人',
+    addresses: detailToAddresses.value,
+  },
+  {
+    key: 'cc',
+    label: '抄送',
+    addresses: detailCcAddresses.value,
+  },
+].filter((section) => section.key !== 'cc' || section.addresses.length > 0));
+const readerStatusBadges = computed(() => {
+  if (!detail.value) {
+    return [];
+  }
+  const badges: Array<{ label: string; tone: string; icon: Component }> = [];
+  if (detail.value.starred) {
+    badges.push({ label: '星标', tone: 'warning', icon: markRaw(StarFilled) });
+  }
+  if (detail.value.hasAttachments) {
+    badges.push({ label: `${normalAttachments.value.length || detail.value.attachments.length} 个附件`, tone: 'neutral', icon: markRaw(PaperClipOutlined) });
+  }
+  if (detail.value.isSpam) {
+    badges.push({ label: '垃圾邮件', tone: 'danger', icon: markRaw(StopOutlined) });
+  }
+  if (detail.value.deletedAt) {
+    badges.push({ label: '已删除', tone: 'muted', icon: markRaw(DeleteOutlined) });
+  }
+  return badges.length ? badges : [{ label: '普通邮件', tone: 'neutral', icon: markRaw(MailOutlined) }];
+});
 const contactByEmail = computed(() => {
   const map = new Map<string, Contact>();
   for (const contact of contacts.value) {
@@ -932,6 +966,30 @@ const activeFolderLabel = computed(() => {
   return systemFolders.find((item) => item.key === activeSystemFolder.value)?.label || '邮件';
 });
 const mailCountText = computed(() => (hasLoadedMessages.value ? `${total.value} 封邮件` : '加载中...'));
+const mailEmptyTitle = computed(() => {
+  if (!accounts.value.length) {
+    return '还没有邮箱账号';
+  }
+  if (!visibleAccounts.value.length) {
+    return '暂无启用邮箱账号';
+  }
+  if (activeAdvancedFilterCount.value || filters.keyword.trim()) {
+    return '没有匹配的邮件';
+  }
+  return '这个邮箱夹暂时没有邮件';
+});
+const mailEmptyDescription = computed(() => {
+  if (!accounts.value.length) {
+    return '配置一个邮箱账号后，Mail Nest 会开始收取和展示邮件。';
+  }
+  if (!visibleAccounts.value.length) {
+    return '启用至少一个邮箱账号后，邮件页才会展示可收取的邮件。';
+  }
+  if (activeAdvancedFilterCount.value || filters.keyword.trim()) {
+    return '可以调整搜索词、日期范围或状态筛选后再试一次。';
+  }
+  return '可以点击刷新重新检查，或切换到其他账号和文件夹。';
+});
 const folderModalTitle = computed(() => (editingFolderId.value ? '编辑文件夹' : '新增文件夹'));
 const folderModalOkText = computed(() => (editingFolderId.value ? '保存' : '创建'));
 const selectedMessageIds = computed(() => Array.from(selectedMessageSet.value));
@@ -947,6 +1005,15 @@ const composeDrawerTitle = computed(() => {
     forward: '转发邮件',
   };
   return titles[composeMode.value];
+});
+const composeBodyHint = computed(() => {
+  const hints: Record<ComposeMode, string> = {
+    new: '支持富文本、正文图片和附件',
+    reply: '已准备原邮件引用内容',
+    replyAll: '已合并原发件人、收件人和抄送人',
+    forward: '可选择是否带上原附件',
+  };
+  return hints[composeMode.value];
 });
 
 onMounted(() => {
@@ -1119,6 +1186,12 @@ function handleBatchMenuClick(info: { key: string }) {
     return;
   }
   void runBatchAction(info.key);
+}
+
+function handleReaderActionMenu(info: { key: string }) {
+  if (info.key === 'reply' || info.key === 'replyAll' || info.key === 'forward') {
+    void openReply(info.key);
+  }
 }
 
 function pruneSelectedMessages() {
@@ -1904,6 +1977,10 @@ function displayAddressName(address: ContactAddress) {
   return contact?.nickname || contact?.displayName || address.name || address.email || '未知联系人';
 }
 
+function addressInitial(address: ContactAddress) {
+  return displayAddressName(address).trim().slice(0, 1).toUpperCase() || '?';
+}
+
 function contactEmail(address: ContactAddress) {
   return address.email || (looksLikeEmail(address.raw) ? address.raw : '');
 }
@@ -2383,11 +2460,15 @@ function looksLikeEmail(value: string) {
   }
 
   .reader-title-row {
-    display: grid;
+    display: flex;
   }
 
-  .reader-actions {
-    padding-top: 0;
+  .reader-actions-desktop {
+    display: none;
+  }
+
+  .reader-actions-mobile {
+    display: inline-flex;
   }
 }
 
@@ -2407,10 +2488,34 @@ function looksLikeEmail(value: string) {
 }
 
 .mail-list-skeleton {
+  display: grid;
+  gap: 0;
   flex: 1;
   min-height: 0;
-  padding: 16px 18px 0;
   overflow: hidden;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-bg);
+}
+
+.mail-skeleton-item {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mail-empty-icon {
+  color: var(--accent);
+  font-size: 44px;
+}
+
+.mail-empty-copy {
+  max-width: 270px;
+  margin: 8px auto 14px;
+  color: var(--muted-color);
+  font-size: 13px;
+  line-height: 1.7;
 }
 
 .mail-list-pane :deep(.ant-spin-nested-loading),
@@ -2595,10 +2700,18 @@ function looksLikeEmail(value: string) {
   max-width: 880px;
 }
 
+.reader-skeleton {
+  display: grid;
+  max-width: 880px;
+  gap: 24px;
+}
+
 .reader-header {
-  padding-bottom: 18px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 18px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
   margin-bottom: 18px;
+  background: linear-gradient(180deg, var(--surface-muted), var(--surface-bg));
 }
 
 .reader-title-row {
@@ -2608,9 +2721,60 @@ function looksLikeEmail(value: string) {
   gap: 14px;
 }
 
+.reader-title-main {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
 .reader-actions {
   flex: none;
   padding-top: 1px;
+}
+
+.reader-actions-mobile {
+  display: none;
+  flex: none;
+}
+
+.reader-status-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.reader-status-chip {
+  display: inline-flex;
+  height: 24px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--surface-bg);
+  color: var(--muted-color);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.reader-status-chip.warning {
+  background: #fff7ed;
+  color: #b45309;
+}
+
+.reader-status-chip.danger {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.reader-status-chip.muted {
+  background: var(--border-subtle);
+  color: var(--muted-color);
+}
+
+.reader-status-chip.neutral {
+  border: 1px solid var(--border-subtle);
 }
 
 .mail-subject {
@@ -2624,9 +2788,14 @@ function looksLikeEmail(value: string) {
 }
 
 .reader-time {
-  margin-bottom: 12px;
   color: var(--muted-color);
   font-size: 13px;
+}
+
+.reader-address-grid {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
 }
 
 .reader-address-row {
@@ -2658,9 +2827,9 @@ function looksLikeEmail(value: string) {
 .reader-contact-chip {
   display: inline-flex;
   max-width: 100%;
-  align-items: baseline;
-  gap: 5px;
-  padding: 2px 8px;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 8px;
   border: 1px solid var(--border-color);
   border-radius: 6px;
   background: var(--surface-muted);
@@ -2696,9 +2865,9 @@ function looksLikeEmail(value: string) {
 
 .contact-popover {
   display: grid;
-  max-width: 280px;
-  min-width: 190px;
-  gap: 6px;
+  max-width: 320px;
+  min-width: 230px;
+  gap: 8px;
   color: var(--text-color);
   font-size: 13px;
   line-height: 1.5;
@@ -2707,9 +2876,27 @@ function looksLikeEmail(value: string) {
 
 .contact-popover-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 26px;
+  grid-template-columns: 34px minmax(0, 1fr) 26px;
   align-items: center;
   gap: 10px;
+}
+
+.contact-popover-avatar {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
+.contact-popover-header > div:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
 }
 
 .contact-popover strong {
@@ -2771,6 +2958,47 @@ function looksLikeEmail(value: string) {
   font-weight: 700;
 }
 
+.attachment-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.attachment-card {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.attachment-card > .anticon {
+  color: var(--accent);
+  font-size: 18px;
+}
+
+.attachment-card div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.attachment-card strong,
+.attachment-card span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-card span {
+  color: var(--muted-color);
+  font-size: 12px;
+}
+
 .reader-empty {
   display: grid;
   min-height: 55vh;
@@ -2824,8 +3052,11 @@ function looksLikeEmail(value: string) {
 .compose-form {
   display: grid;
   min-width: 0;
-  gap: 12px;
-  padding: 16px 24px 0;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  max-height: calc(100vh - 116px);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
 }
 
 .compose-form :deep(.ant-form-item) {
@@ -2843,6 +3074,15 @@ function looksLikeEmail(value: string) {
   width: 100%;
 }
 
+.compose-fields {
+  display: grid;
+  gap: 10px;
+  flex: none;
+  padding: 16px 24px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-bg);
+}
+
 .compose-address-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -2854,14 +3094,60 @@ function looksLikeEmail(value: string) {
   margin-bottom: 0;
 }
 
+.compose-body-shell {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  padding: 14px 24px;
+  overflow: hidden;
+}
+
+.compose-body-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  color: var(--heading-color);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.compose-body-header small {
+  min-width: 0;
+  color: var(--muted-color);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: right;
+}
+
+.compose-body-item {
+  min-height: 0;
+}
+
+.compose-body-item :deep(.ant-form-item-row),
+.compose-body-item :deep(.ant-form-item-control),
+.compose-body-item :deep(.ant-form-item-control-input),
+.compose-body-item :deep(.ant-form-item-control-input-content) {
+  height: 100%;
+  min-height: 0;
+}
+
+.compose-attachment-zone {
+  display: grid;
+  max-height: 22vh;
+  gap: 10px;
+  padding: 0 24px 12px;
+  overflow: auto;
+}
+
 .compose-footer {
-  position: sticky;
-  bottom: 0;
   z-index: 2;
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  margin: 12px -24px 0;
+  flex: none;
+  margin: 0;
   padding: 14px 24px;
   border-top: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--surface-bg) 94%, transparent);
@@ -2869,6 +3155,10 @@ function looksLikeEmail(value: string) {
 }
 
 .compose-editor {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   background: var(--surface-bg);
@@ -3018,8 +3308,7 @@ function looksLikeEmail(value: string) {
 }
 
 .compose-editor-body {
-  min-height: 360px;
-  max-height: 54vh;
+  min-height: 280px;
   padding: 14px 16px;
   background: var(--surface-bg);
   color: var(--text-color);
@@ -3135,6 +3424,35 @@ function looksLikeEmail(value: string) {
 
   .mail-resizer {
     display: none;
+  }
+
+  .reader-address-row {
+    display: grid;
+    gap: 5px;
+  }
+
+  .reader-address-label {
+    width: auto;
+    text-align: left;
+  }
+
+  .compose-address-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .compose-fields,
+  .compose-body-shell,
+  .compose-footer {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .compose-body-header {
+    display: grid;
+  }
+
+  .compose-body-header small {
+    text-align: left;
   }
 }
 </style>
