@@ -843,6 +843,7 @@ JSON 请求：
 - 当前实现支持纯文本正文、HTML 正文和普通附件；附件数量最多 20 个，总大小最多 25MB。
 - SMTP 发送成功后，后端会把该邮件保存到本地已发送目录，目录名使用账号配置的 `sentFolder`，邮件列表可通过 `systemFolder=sent` 查询。
 - 发送成功后会自动沉淀收件人、抄送人和密送人为联系人；本地保存的邮件不会在邮件头中展示密送人。
+- 如果请求携带 `draftId`，发送成功后会删除对应草稿；发送失败不会删除草稿。
 
 响应：
 
@@ -863,11 +864,59 @@ JSON 请求：
 }
 ```
 
-### 7.4 回复与转发接口
+### 7.4 草稿箱接口
+
+#### 7.4.1 草稿列表
+
+`GET /api/v1/drafts?page=1&pageSize=20`
+
+返回当前用户的草稿，按最近保存时间倒序排列。草稿只保存当前用户自己的写信状态。
+
+#### 7.4.2 创建或更新草稿
+
+`POST /api/v1/drafts`
+
+`PUT /api/v1/drafts/{id}`
+
+请求：
+
+```json
+{
+  "accountId": "account-id",
+  "composeMode": "reply",
+  "sourceMessageId": "message-id",
+  "to": ["好友 <friend@example.com>"],
+  "cc": [],
+  "bcc": [],
+  "subject": "Re: 项目进展",
+  "textBody": "草稿正文",
+  "htmlBody": "<p>草稿正文</p>",
+  "forwardAttachmentIds": ["attachment-id"],
+  "localAttachmentNames": ["report.pdf"]
+}
+```
+
+说明：
+
+- `composeMode` 支持 `new`、`reply`、`replyAll`、`forward`。
+- `accountId` 必须属于当前用户；`sourceMessageId` 非空时来源邮件也必须属于当前用户。
+- 草稿保存允许暂存未完成的地址文本；真正发送时仍会按标准邮件地址校验。
+- `forwardAttachmentIds` 用于保存转发原邮件附件选择。
+- `localAttachmentNames` 只保存本地附件文件名提示。浏览器刷新或重新打开草稿后，网页不能自动恢复本地文件内容，需要用户重新选择附件。
+
+#### 7.4.3 草稿详情、删除和发送
+
+- `GET /api/v1/drafts/{id}`
+- `DELETE /api/v1/drafts/{id}`
+- `POST /api/v1/drafts/{id}/send`
+
+`POST /api/v1/drafts/{id}/send` 会使用草稿中保存的地址、主题、正文和转发附件发送邮件，发送成功后删除草稿。若草稿包含 `localAttachmentNames`，接口会拒绝直接发送并提示先打开草稿重新选择附件，避免漏发本地附件。
+
+### 7.5 回复与转发接口
 
 回复、回复全部和转发复用发信能力，但写信初始值和线程头应由后端生成，避免前端重复实现复杂邮件规则。
 
-#### 7.4.1 获取写信上下文
+#### 7.5.1 获取写信上下文
 
 `GET /api/v1/messages/{id}/compose-context?mode=reply|replyAll|forward`
 

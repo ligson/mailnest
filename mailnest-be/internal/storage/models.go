@@ -106,6 +106,24 @@ type MailMessage struct {
 	UpdatedAt       time.Time
 }
 
+type MailDraft struct {
+	ID                       int64
+	UserID                   int64
+	AccountID                int64
+	ComposeMode              string
+	SourceMessageID          sql.NullInt64
+	ToAddrsJSON              string
+	CCAddrsJSON              string
+	BCCAddrsJSON             string
+	Subject                  string
+	TextBody                 string
+	HTMLBody                 string
+	ForwardAttachmentIDsJSON string
+	LocalAttachmentNamesJSON string
+	CreatedAt                time.Time
+	UpdatedAt                time.Time
+}
+
 type MailAttachment struct {
 	ID          int64
 	UserID      int64
@@ -207,6 +225,28 @@ type UpdateMailMessageContentParams struct {
 	SearchText   string
 	InReplyTo    string
 	References   string
+}
+
+type SaveMailDraftParams struct {
+	ID                       int64
+	UserID                   int64
+	AccountID                int64
+	ComposeMode              string
+	SourceMessageID          sql.NullInt64
+	ToAddrsJSON              string
+	CCAddrsJSON              string
+	BCCAddrsJSON             string
+	Subject                  string
+	TextBody                 string
+	HTMLBody                 string
+	ForwardAttachmentIDsJSON string
+	LocalAttachmentNamesJSON string
+}
+
+type ListMailDraftsQuery struct {
+	UserID int64
+	Limit  int
+	Offset int
 }
 
 type ListMailMessagesQuery struct {

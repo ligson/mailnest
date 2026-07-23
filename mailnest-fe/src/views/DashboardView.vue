@@ -220,6 +220,7 @@
               @keydown.space.prevent="openDetail(item.id)"
             >
               <a-checkbox
+                v-if="!item.isDraft"
                 class="mail-select-checkbox"
                 :checked="selectedMessageSet.has(item.id)"
                 @click.stop
@@ -661,7 +662,7 @@
                 </div>
               </a-form-item>
             </section>
-            <section v-if="composeForwardAttachments.length || composeForm.attachments.length" class="compose-attachment-zone">
+            <section v-if="composeForwardAttachments.length || composeForm.attachments.length || restoredLocalAttachmentNames.length" class="compose-attachment-zone">
               <div v-if="composeForwardAttachments.length" class="compose-forward-box">
                 <div class="compose-forward-title">转发附件</div>
                 <a-checkbox-group v-model:value="selectedForwardAttachmentIds" class="compose-forward-list">
@@ -673,6 +674,14 @@
                     {{ item.filename }} · {{ formatSize(item.size) }}
                   </a-checkbox>
                 </a-checkbox-group>
+              </div>
+              <div v-if="restoredLocalAttachmentNames.length" class="compose-restored-attachments">
+                <div class="compose-forward-title">草稿附件</div>
+                <div v-for="name in restoredLocalAttachmentNames" :key="name" class="compose-attachment-item muted">
+                  <paper-clip-outlined />
+                  <span>{{ name }}</span>
+                  <small>需重新选择</small>
+                </div>
               </div>
               <div v-if="composeForm.attachments.length" class="compose-attachments">
                 <div v-for="(file, index) in composeForm.attachments" :key="`${file.name}-${file.size}-${index}`" class="compose-attachment-item">
@@ -686,11 +695,15 @@
               </div>
             </section>
             <div class="compose-footer">
-              <a-button @click="closeCompose">取消</a-button>
-              <a-button type="primary" :loading="sending" @click="sendMail">
-                <template #icon><send-outlined /></template>
-                发送
-              </a-button>
+              <div class="compose-save-status" :class="{ error: !!draftSaveError }">{{ composeSaveStatusText }}</div>
+              <a-space>
+                <a-button v-if="currentDraftId" danger @click="deleteCurrentDraft">删除草稿</a-button>
+                <a-button @click="closeCompose">取消</a-button>
+                <a-button type="primary" :loading="sending" @click="sendMail">
+                  <template #icon><send-outlined /></template>
+                  发送
+                </a-button>
+              </a-space>
             </div>
           </a-form>
         </a-spin>
@@ -738,10 +751,11 @@ import {
 } from '@ant-design/icons-vue';
 import { Modal, message } from 'ant-design-vue';
 import type { Dayjs } from 'dayjs';
-import { useRoute, useRouter } from 'vue-router';
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import {
   mailAccountApi,
   contactApi,
+  draftApi,
   isCanceledRequest,
   mailFolderApi,
   messageApi,
@@ -749,6 +763,7 @@ import {
   type ComposeMode,
   type ComposeForwardAttachment,
   type ComposeContext,
+  type MailDraft,
   type MailAccount,
   type MailAttachment,
   type MailFolder,
@@ -757,9 +772,13 @@ import {
 } from '../api/client';
 import AppLayout from '../components/AppLayout.vue';
 
-type SystemFolderKey = 'inbox' | 'sent' | 'all' | 'starred' | 'spam' | 'trash' | 'attachments';
+type SystemFolderKey = 'inbox' | 'sent' | 'drafts' | 'all' | 'starred' | 'spam' | 'trash' | 'attachments';
 type ResizePane = 'folders' | 'list';
 type SearchField = 'all' | 'from' | 'subject' | 'body';
+type MailListItem = MailMessage & {
+  isDraft?: boolean;
+  draft?: MailDraft;
+};
 type ContactAddress = {
   raw: string;
   name: string;
@@ -769,6 +788,7 @@ type ContactAddress = {
 const systemFolders = [
   { key: 'inbox' as const, label: '收件箱', icon: markRaw(InboxOutlined) },
   { key: 'sent' as const, label: '发件箱', icon: markRaw(SendOutlined) },
+  { key: 'drafts' as const, label: '草稿箱', icon: markRaw(EditOutlined) },
   { key: 'all' as const, label: '全部邮件', icon: markRaw(MailOutlined) },
   { key: 'starred' as const, label: '星标邮件', icon: markRaw(StarOutlined) },
   { key: 'spam' as const, label: '垃圾邮件', icon: markRaw(StopOutlined) },
@@ -784,7 +804,7 @@ const detailLoading = ref(false);
 let detailRequestController: AbortController | null = null;
 const accounts = ref<MailAccount[]>([]);
 const folders = ref<MailFolder[]>([]);
-const messages = ref<MailMessage[]>([]);
+const messages = ref<MailListItem[]>([]);
 const contacts = ref<Contact[]>([]);
 const detail = ref<MailMessageDetail | null>(null);
 const selectedMessageId = ref<string | null>(null);
@@ -810,6 +830,7 @@ const composeImageInput = ref<HTMLInputElement | null>(null);
 const workspaceEl = ref<HTMLElement | null>(null);
 const composeForwardAttachments = ref<ComposeForwardAttachment[]>([]);
 const selectedForwardAttachmentIds = ref<string[]>([]);
+const restoredLocalAttachmentNames = ref<string[]>([]);
 const selectedMessageSet = ref(new Set<string>());
 const batchMoveFolderId = ref<string | undefined>();
 const folderPaneWidth = ref(210);
@@ -824,6 +845,8 @@ const resizeConstraints = {
 };
 let composeSignatureInserted = false;
 let composeContextRequestId = 0;
+let draftSaveTimer: number | undefined;
+let suppressDraftAutosave = false;
 let resizeState: {
   pane: ResizePane;
   startX: number;
@@ -845,6 +868,11 @@ const composeForm = reactive({
   htmlBody: '',
   attachments: [] as File[],
 });
+const currentDraftId = ref('');
+const draftSaving = ref(false);
+const draftDirty = ref(false);
+const draftLastSavedAt = ref<string | null>(null);
+const draftSaveError = ref('');
 const composeFontFamilies = [
   { label: '系统默认', value: 'system-ui' },
   { label: '微软雅黑', value: 'Microsoft YaHei' },
@@ -965,7 +993,27 @@ const activeFolderLabel = computed(() => {
   }
   return systemFolders.find((item) => item.key === activeSystemFolder.value)?.label || '邮件';
 });
-const mailCountText = computed(() => (hasLoadedMessages.value ? `${total.value} 封邮件` : '加载中...'));
+const mailCountText = computed(() => {
+  if (!hasLoadedMessages.value) {
+    return '加载中...';
+  }
+  return activeSystemFolder.value === 'drafts' && !activeLocalFolderId.value ? `${total.value} 封草稿` : `${total.value} 封邮件`;
+});
+const composeSaveStatusText = computed(() => {
+  if (draftSaveError.value) {
+    return draftSaveError.value;
+  }
+  if (draftSaving.value) {
+    return '正在保存草稿';
+  }
+  if (draftLastSavedAt.value) {
+    return `已自动保存 ${formatShortClock(draftLastSavedAt.value)}`;
+  }
+  if (draftDirty.value && hasDraftWorthSaving()) {
+    return '有未保存内容';
+  }
+  return currentDraftId.value ? '草稿已保存' : '';
+});
 const mailEmptyTitle = computed(() => {
   if (!accounts.value.length) {
     return '还没有邮箱账号';
@@ -975,6 +1023,9 @@ const mailEmptyTitle = computed(() => {
   }
   if (activeAdvancedFilterCount.value || filters.keyword.trim()) {
     return '没有匹配的邮件';
+  }
+  if (activeSystemFolder.value === 'drafts') {
+    return '草稿箱为空';
   }
   return '这个邮箱夹暂时没有邮件';
 });
@@ -988,12 +1039,15 @@ const mailEmptyDescription = computed(() => {
   if (activeAdvancedFilterCount.value || filters.keyword.trim()) {
     return '可以调整搜索词、日期范围或状态筛选后再试一次。';
   }
+  if (activeSystemFolder.value === 'drafts') {
+    return '开始写邮件后，未发送的内容会自动保存到这里。';
+  }
   return '可以点击刷新重新检查，或切换到其他账号和文件夹。';
 });
 const folderModalTitle = computed(() => (editingFolderId.value ? '编辑文件夹' : '新增文件夹'));
 const folderModalOkText = computed(() => (editingFolderId.value ? '保存' : '创建'));
 const selectedMessageIds = computed(() => Array.from(selectedMessageSet.value));
-const pageSelectableIds = computed(() => messages.value.map((item) => item.id));
+const pageSelectableIds = computed(() => messages.value.filter((item) => !item.isDraft).map((item) => item.id));
 const pageSelectedCount = computed(() => pageSelectableIds.value.filter((id) => selectedMessageSet.value.has(id)).length);
 const pageAllSelected = computed(() => pageSelectableIds.value.length > 0 && pageSelectedCount.value === pageSelectableIds.value.length);
 const pageSomeSelected = computed(() => pageSelectedCount.value > 0 && !pageAllSelected.value);
@@ -1019,18 +1073,51 @@ const composeBodyHint = computed(() => {
 onMounted(() => {
   fitPaneWidthsToViewport();
   window.addEventListener('resize', fitPaneWidthsToViewport);
+  window.addEventListener('beforeunload', handleBeforeUnload);
   document.addEventListener('selectionchange', saveComposeSelection);
   void refreshAll();
 });
 onBeforeUnmount(() => {
   stopResize();
   detailRequestController?.abort();
+  clearDraftSaveTimer();
   window.removeEventListener('resize', fitPaneWidthsToViewport);
+  window.removeEventListener('beforeunload', handleBeforeUnload);
   document.removeEventListener('selectionchange', saveComposeSelection);
+});
+onBeforeRouteLeave((_to, _from, next) => {
+  if (!shouldProtectComposeLeave()) {
+    next();
+    return;
+  }
+  Modal.confirm({
+    title: '保存草稿后离开？',
+    content: '当前邮件还没有发送，保存为草稿后可以继续编辑。',
+    okText: '保存并离开',
+    cancelText: '继续编辑',
+    async onOk() {
+      const saved = await saveDraftNow(false);
+      if (saved) {
+        forceCloseCompose();
+        next();
+      } else {
+        next(false);
+      }
+    },
+    onCancel() {
+      next(false);
+    },
+  });
 });
 watch(() => route.query.messageId, () => {
   void applyRouteMessageSelection();
 });
+watch(composeForm, () => {
+  markDraftDirty();
+}, { deep: true });
+watch(selectedForwardAttachmentIds, () => {
+  markDraftDirty();
+}, { deep: true });
 
 async function refreshAll() {
   await Promise.all([loadAccounts(), loadFolders(), loadContacts(), loadMessages()]);
@@ -1071,6 +1158,19 @@ async function loadContacts() {
 async function loadMessages() {
   loading.value = true;
   try {
+    if (!activeLocalFolderId.value && activeSystemFolder.value === 'drafts') {
+      const data = await draftApi.list({
+        page: page.value,
+        pageSize: pageSize.value,
+      });
+      messages.value = data.items.map(draftToListItem);
+      total.value = data.total;
+      hasLoadedMessages.value = true;
+      detail.value = null;
+      selectedMessageId.value = null;
+      selectedMessageSet.value = new Set();
+      return;
+    }
     const data = await messageApi.list({
       page: page.value,
       pageSize: pageSize.value,
@@ -1106,6 +1206,12 @@ async function loadMessages() {
 }
 
 async function openDetail(id: string) {
+  if (id.startsWith('draft:')) {
+    selectedMessageId.value = id;
+    detail.value = null;
+    await openDraft(id.replace(/^draft:/, ''));
+    return;
+  }
   detailRequestController?.abort();
   const controller = new AbortController();
   detailRequestController = controller;
@@ -1195,7 +1301,7 @@ function handleReaderActionMenu(info: { key: string }) {
 }
 
 function pruneSelectedMessages() {
-  const visible = new Set(messages.value.map((item) => item.id));
+  const visible = new Set(messages.value.filter((item) => !item.isDraft).map((item) => item.id));
   selectedMessageSet.value = new Set(Array.from(selectedMessageSet.value).filter((id) => visible.has(id)));
 }
 
@@ -1262,9 +1368,12 @@ function openFolderEdit(folder: MailFolder) {
 }
 
 function openCompose() {
-  startCompose('new');
+  if (!startCompose('new')) {
+    return;
+  }
   finishComposeOpen();
   composeLoading.value = false;
+  armDraftAutosave();
 }
 
 function startCompose(mode: ComposeMode) {
@@ -1273,6 +1382,7 @@ function startCompose(mode: ComposeMode) {
     message.warning(accounts.value.length === 0 ? '请先新增邮箱账号' : '请先启用一个邮箱账号');
     return false;
   }
+  suppressDraftAutosave = true;
   resetCompose();
   composeMode.value = mode;
   const filteredAccount = enabledAccounts.find((account) => account.id === filters.accountId);
@@ -1289,9 +1399,11 @@ function finishComposeOpen() {
     resetComposeEditor();
     if (composeForm.htmlBody || composeForm.textBody) {
       syncComposeEditorContent();
+      armDraftAutosave();
       return;
     }
     insertComposeSignatureIfEmpty();
+    armDraftAutosave();
   });
 }
 
@@ -1312,6 +1424,67 @@ function applyComposeContext(context: Partial<ComposeContext> | undefined) {
   }
   composeLoading.value = false;
   finishComposeOpen();
+}
+
+function draftToListItem(draft: MailDraft): MailListItem {
+  return {
+    id: `draft:${draft.id}`,
+    accountId: draft.accountId,
+    localFolderId: null,
+    subject: draft.subject || '无主题草稿',
+    from: '草稿',
+    to: draft.to,
+    sentAt: null,
+    receivedAt: draft.updatedAt,
+    hasAttachments: draft.forwardAttachmentIds.length > 0 || draft.localAttachmentNames.length > 0,
+    isRead: true,
+    starred: false,
+    isSpam: false,
+    spamAt: null,
+    deletedAt: null,
+    isDraft: true,
+    draft,
+  };
+}
+
+function applyDraftToCompose(draft: MailDraft) {
+  suppressDraftAutosave = true;
+  currentDraftId.value = draft.id;
+  composeMode.value = draft.composeMode;
+  composeSourceMessageId.value = draft.sourceMessageId || '';
+  composeForm.accountId = draft.accountId;
+  composeForm.to = [...draft.to];
+  composeForm.cc = [...draft.cc];
+  composeForm.bcc = [...draft.bcc];
+  composeForm.subject = draft.subject || '';
+  composeForm.textBody = draft.textBody || '';
+  composeForm.htmlBody = draft.htmlBody || '';
+  composeForm.attachments = [];
+  selectedForwardAttachmentIds.value = [...draft.forwardAttachmentIds];
+  restoredLocalAttachmentNames.value = [...draft.localAttachmentNames];
+  draftDirty.value = false;
+  draftSaveError.value = '';
+  draftLastSavedAt.value = draft.updatedAt;
+  composeLoading.value = false;
+  finishComposeOpen();
+}
+
+async function openDraft(id: string) {
+  const draft = await draftApi.detail(id);
+  if (!startCompose(draft.composeMode)) {
+    return;
+  }
+  composeLoading.value = true;
+  try {
+    if (draft.sourceMessageId && draft.composeMode !== 'new') {
+      const context = await messageApi.composeContext(draft.sourceMessageId, draft.composeMode);
+      composeForwardAttachments.value = context.forwardAttachments || [];
+    }
+    applyDraftToCompose(draft);
+  } catch (error) {
+    forceCloseCompose();
+    message.error(error instanceof Error ? error.message : '打开草稿失败');
+  }
 }
 
 async function openReply(mode: Exclude<ComposeMode, 'new'>) {
@@ -1347,13 +1520,14 @@ async function sendMail() {
     return;
   }
   syncComposeEditorContent();
-  if (!composeForm.subject.trim() && !hasComposeBodyContent() && composeForm.attachments.length === 0) {
+  if (!composeForm.subject.trim() && !hasComposeBodyContent() && composeForm.attachments.length === 0 && selectedForwardAttachmentIds.value.length === 0) {
     message.warning('主题和正文不能同时为空');
     return;
   }
   sending.value = true;
   try {
     const sent = await messageApi.send({
+      draftId: currentDraftId.value || undefined,
       accountId: composeForm.accountId,
       to,
       cc,
@@ -1367,7 +1541,7 @@ async function sendMail() {
       attachments: composeForm.attachments,
     });
     message.success('邮件已发送');
-    closeCompose();
+    forceCloseCompose();
     resetCompose();
     composeMode.value = 'new';
     composeSourceMessageId.value = '';
@@ -1385,6 +1559,145 @@ async function sendMail() {
   }
 }
 
+function markDraftDirty() {
+  if (suppressDraftAutosave || !composeOpen.value || composeLoading.value || sending.value) {
+    return;
+  }
+  draftDirty.value = true;
+  draftSaveError.value = '';
+  scheduleDraftSave();
+}
+
+function armDraftAutosave() {
+  window.setTimeout(() => {
+    suppressDraftAutosave = false;
+    draftDirty.value = false;
+  });
+}
+
+function scheduleDraftSave() {
+  clearDraftSaveTimer();
+  draftSaveTimer = window.setTimeout(() => {
+    void saveDraftNow(true);
+  }, 1200);
+}
+
+function clearDraftSaveTimer() {
+  if (draftSaveTimer !== undefined) {
+    window.clearTimeout(draftSaveTimer);
+    draftSaveTimer = undefined;
+  }
+}
+
+async function saveDraftNow(silent: boolean) {
+  clearDraftSaveTimer();
+  if (!composeOpen.value || composeLoading.value || sending.value) {
+    return true;
+  }
+  syncComposeEditorContent();
+  if (!hasDraftWorthSaving()) {
+    return true;
+  }
+  draftSaving.value = true;
+  try {
+    const payload = buildDraftPayload();
+    const saved = currentDraftId.value
+      ? await draftApi.update(currentDraftId.value, payload)
+      : await draftApi.create(payload);
+    currentDraftId.value = saved.id;
+    draftLastSavedAt.value = saved.updatedAt;
+    draftDirty.value = false;
+    draftSaveError.value = '';
+    if (!silent) {
+      message.success('草稿已保存');
+    }
+    return true;
+  } catch (error) {
+    draftSaveError.value = '草稿保存失败';
+    if (!silent) {
+      message.error(error instanceof Error ? error.message : '草稿保存失败');
+    }
+    return false;
+  } finally {
+    draftSaving.value = false;
+  }
+}
+
+function buildDraftPayload() {
+  return {
+    accountId: composeForm.accountId,
+    to: normalizeComposeAddresses(composeForm.to),
+    cc: normalizeComposeAddresses(composeForm.cc),
+    bcc: normalizeComposeAddresses(composeForm.bcc),
+    subject: composeForm.subject.trim(),
+    textBody: composeForm.textBody,
+    htmlBody: composeForm.htmlBody,
+    composeMode: composeMode.value,
+    sourceMessageId: composeSourceMessageId.value || undefined,
+    forwardAttachmentIds: composeMode.value === 'forward' ? selectedForwardAttachmentIds.value : [],
+    localAttachmentNames: composeForm.attachments.length
+      ? composeForm.attachments.map((file) => file.name)
+      : restoredLocalAttachmentNames.value,
+  };
+}
+
+function hasDraftWorthSaving() {
+  if (!composeForm.accountId) {
+    return false;
+  }
+  return Boolean(
+    composeSourceMessageId.value ||
+    normalizeComposeAddresses(composeForm.to).length ||
+    normalizeComposeAddresses(composeForm.cc).length ||
+    normalizeComposeAddresses(composeForm.bcc).length ||
+    composeForm.subject.trim() ||
+    hasComposeBodyContent() ||
+    composeForm.attachments.length ||
+    restoredLocalAttachmentNames.value.length ||
+    selectedForwardAttachmentIds.value.length,
+  );
+}
+
+function shouldProtectComposeLeave() {
+  if (!composeOpen.value || sending.value || composeLoading.value) {
+    return false;
+  }
+  syncComposeEditorContent();
+  return draftDirty.value && hasDraftWorthSaving();
+}
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  if (!shouldProtectComposeLeave()) {
+    return;
+  }
+  event.preventDefault();
+  event.returnValue = '';
+}
+
+async function deleteCurrentDraft() {
+  if (!currentDraftId.value) {
+    forceCloseCompose();
+    resetCompose();
+    return;
+  }
+  Modal.confirm({
+    title: '删除这封草稿？',
+    content: '删除后将无法继续编辑这封未发送邮件。',
+    okText: '删除',
+    okType: 'danger',
+    cancelText: '取消',
+    async onOk() {
+      await draftApi.remove(currentDraftId.value);
+      message.success('草稿已删除');
+      forceCloseCompose();
+      resetCompose();
+      if (activeSystemFolder.value === 'drafts') {
+        await loadMessages();
+      }
+    },
+  });
+}
+
 function resetCompose() {
   Object.assign(composeForm, {
     accountId: filters.accountId || '',
@@ -1397,6 +1710,13 @@ function resetCompose() {
     attachments: [],
   });
   composeSignatureInserted = false;
+  currentDraftId.value = '';
+  draftDirty.value = false;
+  draftSaving.value = false;
+  draftLastSavedAt.value = null;
+  draftSaveError.value = '';
+  restoredLocalAttachmentNames.value = [];
+  clearDraftSaveTimer();
   resetComposeEditor();
   composeForwardAttachments.value = [];
   selectedForwardAttachmentIds.value = [];
@@ -1415,9 +1735,32 @@ function resetCompose() {
 }
 
 function closeCompose() {
+  if (shouldProtectComposeLeave()) {
+    Modal.confirm({
+      title: '保存草稿后关闭？',
+      content: '当前邮件还没有发送，保存为草稿后可以继续编辑。',
+      okText: '保存并关闭',
+      cancelText: '继续编辑',
+      async onOk() {
+        const saved = await saveDraftNow(false);
+        if (saved) {
+          forceCloseCompose();
+          if (activeSystemFolder.value === 'drafts') {
+            await loadMessages();
+          }
+        }
+      },
+    });
+    return;
+  }
+  forceCloseCompose();
+}
+
+function forceCloseCompose() {
   composeContextRequestId += 1;
   composeLoading.value = false;
   composeOpen.value = false;
+  clearDraftSaveTimer();
 }
 
 function onComposeAccountChanged() {
@@ -1426,6 +1769,7 @@ function onComposeAccountChanged() {
 
 function onComposeEditorInput() {
   syncComposeEditorContent();
+  markDraftDirty();
 }
 
 function syncComposeEditorContent() {
@@ -1613,7 +1957,11 @@ function onComposeFilesSelected(event: Event) {
       existingKeys.add(key);
     }
   }
+  if (files.length > 0) {
+    restoredLocalAttachmentNames.value = [];
+  }
   input.value = '';
+  markDraftDirty();
 }
 
 async function onComposeImagesSelected(event: Event) {
@@ -1717,6 +2065,7 @@ function restoreComposeSelection() {
 
 function removeComposeAttachment(index: number) {
   composeForm.attachments.splice(index, 1);
+  markDraftDirty();
 }
 
 function normalizeComposeAddresses(values: string[]) {
@@ -1922,6 +2271,13 @@ function formatShortTime(value: string | null) {
   return new Date(value).toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+function formatShortClock(value: string | null) {
+  if (!value) {
+    return '';
+  }
+  return new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
 function formatTime(value: string | null) {
   if (!value) {
     return '-';
@@ -1937,7 +2293,7 @@ function senderInitial(messageItem: MailMessage) {
 function mailPreview(messageItem: MailMessage) {
   const recipients = addressSummary(messageItem.to);
   if (!recipients) {
-    return '无收件人';
+    return (messageItem as MailListItem).isDraft ? '尚未填写收件人' : '无收件人';
   }
   return `收件人 ${recipients}`;
 }
@@ -3144,6 +3500,7 @@ function looksLikeEmail(value: string) {
 .compose-footer {
   z-index: 2;
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 10px;
   flex: none;
@@ -3152,6 +3509,17 @@ function looksLikeEmail(value: string) {
   border-top: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--surface-bg) 94%, transparent);
   backdrop-filter: blur(10px);
+}
+
+.compose-save-status {
+  min-width: 0;
+  flex: 1;
+  color: var(--muted-color);
+  font-size: 12px;
+}
+
+.compose-save-status.error {
+  color: #dc2626;
 }
 
 .compose-editor {
@@ -3360,6 +3728,11 @@ function looksLikeEmail(value: string) {
   gap: 6px;
 }
 
+.compose-restored-attachments {
+  display: grid;
+  gap: 6px;
+}
+
 .compose-forward-list :deep(.ant-checkbox-wrapper) {
   min-width: 0;
   margin-inline-start: 0;
@@ -3387,6 +3760,12 @@ function looksLikeEmail(value: string) {
 }
 
 .compose-attachment-item small {
+  color: var(--muted-color);
+}
+
+.compose-attachment-item.muted {
+  border-style: dashed;
+  background: var(--surface-muted);
   color: var(--muted-color);
 }
 
@@ -3445,6 +3824,11 @@ function looksLikeEmail(value: string) {
   .compose-footer {
     padding-right: 16px;
     padding-left: 16px;
+  }
+
+  .compose-footer {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .compose-body-header {

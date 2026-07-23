@@ -15,7 +15,7 @@
 
 - 写新邮件、回复、回复全部、转发过程中关闭弹窗或页面刷新，不丢正文。
 - 用户可在草稿箱继续编辑、发送或删除草稿。
-- 附件草稿需要能保存普通附件元数据和临时文件。
+- 转发附件选择可随草稿保存；普通本地附件在当前弹窗和发送失败时保留，刷新或重新打开草稿后因浏览器安全限制需要用户重新选择文件，草稿会保留文件名提示。
 
 ### 数据模型建议
 
@@ -26,24 +26,15 @@
 - `account_id`
 - `compose_mode`：`new`、`reply`、`replyAll`、`forward`
 - `source_message_id`
-- `to_addrs`、`cc_addrs`、`bcc_addrs`
+- `to_addrs_json`、`cc_addrs_json`、`bcc_addrs_json`
 - `subject`
 - `text_body`
 - `html_body`
-- `forward_attachment_ids`
-- `last_saved_at`
+- `forward_attachment_ids_json`
+- `local_attachment_names_json`
 - `created_at`、`updated_at`
 
-新增 `mail_draft_attachments`：
-
-- `id`
-- `user_id`
-- `draft_id`
-- `filename`
-- `content_type`
-- `size`
-- `file_path`
-- `created_at`
+当前实现不把本地附件文件提前上传到草稿附件表，避免引入临时文件清理、过期和权限生命周期；后续如果需要跨刷新恢复本地附件，可再新增 `mail_draft_attachments` 和草稿附件上传接口。
 
 ### 接口建议
 
@@ -55,7 +46,7 @@
 
 ### 前端交互
 
-- 写信弹窗每 10 秒自动保存一次；关闭前如果有内容，提示保存草稿。
+- 写信弹窗内容变更后自动保存；关闭、刷新或切换页面前如果仍有未保存内容，提示先保存草稿。
 - 草稿箱作为系统文件夹展示。
 - 发送成功后自动删除对应草稿。
 

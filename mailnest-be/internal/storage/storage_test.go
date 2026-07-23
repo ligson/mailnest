@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -230,5 +231,110 @@ func TestListMailMessagesByQueryUsesSummaryFields(t *testing.T) {
 	}
 	if detail.SearchText.String != "正文搜索索引不应该出现在列表结果里" {
 		t.Fatalf("expected detail query to include search text, got %#v", detail.SearchText)
+	}
+}
+
+func TestSaveMailDraftLifecycleAndIsolation(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "mailnest.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	user, err := store.CreateUser("draft-user", "draft-user@example.com", "hash")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	otherUser, err := store.CreateUser("other-draft-user", "other-draft-user@example.com", "hash")
+	if err != nil {
+		t.Fatalf("create other user: %v", err)
+	}
+	account, err := store.CreateMailAccount(MailAccount{
+		UserID:              user.ID,
+		DisplayName:         "草稿账号",
+		Email:               "draft-user@example.com",
+		IMAPHost:            "imap.example.com",
+		IMAPPort:            993,
+		IMAPTLS:             true,
+		IMAPUsername:        "draft-user@example.com",
+		IMAPPasswordEncoded: "encrypted",
+		PollIntervalMinutes: 10,
+		Enabled:             true,
+	})
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+	message, _, err := store.InsertMailMessageIfNew(CreateMailMessageParams{
+		UserID:    user.ID,
+		AccountID: account.ID,
+		Folder:    "INBOX",
+		IMAPUID:   "draft-source",
+		Subject:   "来源邮件",
+		FromAddr:  "sender@example.com",
+		ToAddrs:   "draft-user@example.com",
+	})
+	if err != nil {
+		t.Fatalf("insert source message: %v", err)
+	}
+
+	draft, err := store.SaveMailDraft(SaveMailDraftParams{
+		UserID:                   user.ID,
+		AccountID:                account.ID,
+		ComposeMode:              "reply",
+		SourceMessageID:          sql.NullInt64{Int64: message.ID, Valid: true},
+		ToAddrsJSON:              `["sender@example.com"]`,
+		CCAddrsJSON:              `[]`,
+		BCCAddrsJSON:             `[]`,
+		Subject:                  "Re: 来源邮件",
+		TextBody:                 "草稿正文",
+		HTMLBody:                 "<p>草稿正文</p>",
+		ForwardAttachmentIDsJSON: `[]`,
+		LocalAttachmentNamesJSON: `["report.pdf"]`,
+	})
+	if err != nil {
+		t.Fatalf("save draft: %v", err)
+	}
+	if draft.ID == 0 || draft.Subject != "Re: 来源邮件" || draft.LocalAttachmentNamesJSON != `["report.pdf"]` {
+		t.Fatalf("unexpected draft: %#v", draft)
+	}
+
+	draft.Subject = "更新后的草稿"
+	updated, err := store.SaveMailDraft(SaveMailDraftParams{
+		ID:                       draft.ID,
+		UserID:                   user.ID,
+		AccountID:                account.ID,
+		ComposeMode:              "reply",
+		SourceMessageID:          sql.NullInt64{Int64: message.ID, Valid: true},
+		ToAddrsJSON:              `["sender@example.com"]`,
+		CCAddrsJSON:              `[]`,
+		BCCAddrsJSON:             `[]`,
+		Subject:                  draft.Subject,
+		TextBody:                 draft.TextBody,
+		HTMLBody:                 draft.HTMLBody,
+		ForwardAttachmentIDsJSON: `[]`,
+		LocalAttachmentNamesJSON: draft.LocalAttachmentNamesJSON,
+	})
+	if err != nil {
+		t.Fatalf("update draft: %v", err)
+	}
+	if updated.ID != draft.ID || updated.Subject != "更新后的草稿" {
+		t.Fatalf("unexpected updated draft: %#v", updated)
+	}
+
+	drafts, total, err := store.ListMailDrafts(ListMailDraftsQuery{UserID: user.ID, Limit: 20})
+	if err != nil {
+		t.Fatalf("list drafts: %v", err)
+	}
+	if total != 1 || len(drafts) != 1 || drafts[0].ID != draft.ID {
+		t.Fatalf("expected one draft, total=%d drafts=%#v", total, drafts)
+	}
+	if _, err := store.FindMailDraftByID(otherUser.ID, draft.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected other user not to see draft, got %v", err)
+	}
+	if err := store.DeleteMailDraft(user.ID, draft.ID); err != nil {
+		t.Fatalf("delete draft: %v", err)
+	}
+	if _, err := store.FindMailDraftByID(user.ID, draft.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected deleted draft not found, got %v", err)
 	}
 }

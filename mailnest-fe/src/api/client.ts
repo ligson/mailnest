@@ -198,6 +198,30 @@ export interface ComposeContext {
   forwardAttachments: ComposeForwardAttachment[];
 }
 
+export interface MailDraft {
+  id: string;
+  accountId: string;
+  composeMode: ComposeMode;
+  sourceMessageId: string | null;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  textBody: string;
+  htmlBody: string;
+  forwardAttachmentIds: string[];
+  localAttachmentNames: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MailDraftListData {
+  items: MailDraft[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
 export interface MessageListData {
   items: MailMessage[];
   page: number;
@@ -304,6 +328,7 @@ export interface CreateMailAccountPayload {
 export type UpdateMailAccountPayload = CreateMailAccountPayload;
 
 export interface SendMessagePayload {
+  draftId?: string;
   accountId: string;
   to: string[];
   cc: string[];
@@ -315,6 +340,20 @@ export interface SendMessagePayload {
   sourceMessageId?: string;
   forwardAttachmentIds?: string[];
   attachments?: File[];
+}
+
+export interface SaveDraftPayload {
+  accountId: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  textBody: string;
+  htmlBody: string;
+  composeMode?: ComposeMode;
+  sourceMessageId?: string;
+  forwardAttachmentIds?: string[];
+  localAttachmentNames?: string[];
 }
 
 export interface MailRulePayload {
@@ -572,6 +611,9 @@ export const messageApi = {
   },
   send(payload: SendMessagePayload) {
     const form = new FormData();
+    if (payload.draftId) {
+      form.append('draftId', payload.draftId);
+    }
     form.append('accountId', payload.accountId);
     form.append('to', JSON.stringify(payload.to));
     form.append('cc', JSON.stringify(payload.cc));
@@ -598,6 +640,27 @@ export const messageApi = {
       responseType: 'blob',
     });
     return response.data;
+  },
+};
+
+export const draftApi = {
+  list(params?: { page?: number; pageSize?: number }) {
+    return requestEnvelope<MailDraftListData>(apiClient.get('/drafts', { params }));
+  },
+  detail(id: string) {
+    return requestEnvelope<MailDraft>(apiClient.get(`/drafts/${id}`));
+  },
+  create(payload: SaveDraftPayload) {
+    return requestEnvelope<MailDraft>(apiClient.post('/drafts', payload));
+  },
+  update(id: string, payload: SaveDraftPayload) {
+    return requestEnvelope<MailDraft>(apiClient.put(`/drafts/${id}`, payload));
+  },
+  remove(id: string) {
+    return requestEnvelope<Record<string, never>>(apiClient.delete(`/drafts/${id}`));
+  },
+  send(id: string) {
+    return requestEnvelope<MailMessage>(apiClient.post(`/drafts/${id}/send`));
   },
 };
 

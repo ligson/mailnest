@@ -8,6 +8,9 @@ import (
 
 func (s *Store) migrateGORM() error {
 	if s.db.dialect == dialectMySQL && s.db.gormDB.Migrator().HasTable(&userModel{}) {
+		if err := s.db.gormDB.AutoMigrate(&mailDraftModel{}); err != nil {
+			return fmt.Errorf("gorm automigrate mysql mail_drafts: %w", err)
+		}
 		return s.createSupplementalIndexes()
 	}
 	if err := s.db.gormDB.AutoMigrate(
@@ -19,6 +22,7 @@ func (s *Store) migrateGORM() error {
 		&mailRuleModel{},
 		&mailRuleConditionModel{},
 		&mailAttachmentModel{},
+		&mailDraftModel{},
 		&mailSyncJobModel{},
 		&mailMessageStateModel{},
 		&mailSyncJobEventModel{},
@@ -41,6 +45,7 @@ func (s *Store) migrateExistingSQLite() error {
 		{table: "mail_rules", model: &mailRuleModel{}},
 		{table: "mail_rule_conditions", model: &mailRuleConditionModel{}},
 		{table: "mail_attachments", model: &mailAttachmentModel{}},
+		{table: "mail_drafts", model: &mailDraftModel{}},
 		{table: "mail_sync_jobs", model: &mailSyncJobModel{}},
 		{table: "mail_message_states", model: &mailMessageStateModel{}},
 		{table: "mail_sync_job_events", model: &mailSyncJobEventModel{}},
@@ -248,6 +253,7 @@ func sqliteExistingIndexStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_mail_attachments_user_content_type ON mail_attachments(user_id, content_type)`,
 		`CREATE INDEX IF NOT EXISTS idx_mail_attachments_user_created ON mail_attachments(user_id, created_at DESC, id DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_mail_attachments_user_inline ON mail_attachments(user_id, inline, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_drafts_user_updated ON mail_drafts(user_id, updated_at DESC, id DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_mail_message_states_user_message ON mail_message_states(user_id, message_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_mail_message_states_user_deleted ON mail_message_states(user_id, deleted_at, message_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_mail_message_states_user_spam ON mail_message_states(user_id, is_spam, message_id)`,
@@ -489,6 +495,26 @@ type mailAttachmentModel struct {
 }
 
 func (mailAttachmentModel) TableName() string { return "mail_attachments" }
+
+type mailDraftModel struct {
+	ID                       int64     `gorm:"primaryKey;autoIncrement;column:id;index:idx_mail_drafts_user_updated,priority:3,sort:desc"`
+	UserID                   int64     `gorm:"column:user_id;not null;index:idx_mail_drafts_user_updated,priority:1"`
+	AccountID                int64     `gorm:"column:account_id;not null;index"`
+	ComposeMode              string    `gorm:"column:compose_mode;size:64;not null;default:new"`
+	SourceMessageID          *int64    `gorm:"column:source_message_id"`
+	ToAddrsJSON              string    `gorm:"column:to_addrs_json;type:text;not null"`
+	CCAddrsJSON              string    `gorm:"column:cc_addrs_json;type:text;not null"`
+	BCCAddrsJSON             string    `gorm:"column:bcc_addrs_json;type:text;not null"`
+	Subject                  string    `gorm:"column:subject;type:text;not null"`
+	TextBody                 string    `gorm:"column:text_body;type:text;not null"`
+	HTMLBody                 string    `gorm:"column:html_body;type:text;not null"`
+	ForwardAttachmentIDsJSON string    `gorm:"column:forward_attachment_ids_json;type:text;not null"`
+	LocalAttachmentNamesJSON string    `gorm:"column:local_attachment_names_json;type:text;not null"`
+	CreatedAt                time.Time `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP"`
+	UpdatedAt                time.Time `gorm:"column:updated_at;not null;default:CURRENT_TIMESTAMP;index:idx_mail_drafts_user_updated,priority:2,sort:desc"`
+}
+
+func (mailDraftModel) TableName() string { return "mail_drafts" }
 
 type mailSyncJobModel struct {
 	ID              int64      `gorm:"primaryKey;autoIncrement;column:id;index:idx_mail_sync_jobs_user_account,priority:4,sort:desc"`

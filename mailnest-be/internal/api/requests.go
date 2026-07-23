@@ -75,6 +75,7 @@ type assignMessageFolderRequest struct {
 }
 
 type sendMessageRequest struct {
+	DraftID              string   `json:"draftId"`
 	AccountID            string   `json:"accountId"`
 	To                   []string `json:"to"`
 	CC                   []string `json:"cc"`
@@ -85,6 +86,20 @@ type sendMessageRequest struct {
 	ComposeMode          string   `json:"composeMode"`
 	SourceMessageID      string   `json:"sourceMessageId"`
 	ForwardAttachmentIDs []string `json:"forwardAttachmentIds"`
+}
+
+type saveDraftRequest struct {
+	AccountID            string   `json:"accountId"`
+	To                   []string `json:"to"`
+	CC                   []string `json:"cc"`
+	BCC                  []string `json:"bcc"`
+	Subject              string   `json:"subject"`
+	TextBody             string   `json:"textBody"`
+	HTMLBody             string   `json:"htmlBody"`
+	ComposeMode          string   `json:"composeMode"`
+	SourceMessageID      string   `json:"sourceMessageId"`
+	ForwardAttachmentIDs []string `json:"forwardAttachmentIds"`
+	LocalAttachmentNames []string `json:"localAttachmentNames"`
 }
 
 type createMailRuleRequest struct {

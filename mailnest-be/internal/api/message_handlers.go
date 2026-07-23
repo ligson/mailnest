@@ -173,7 +173,7 @@ func (a *App) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	req.Subject = strings.TrimSpace(req.Subject)
 	req.TextBody = strings.TrimSpace(req.TextBody)
 	req.HTMLBody = strings.TrimSpace(req.HTMLBody)
-	if req.Subject == "" && req.TextBody == "" && req.HTMLBody == "" {
+	if req.Subject == "" && req.TextBody == "" && req.HTMLBody == "" && len(attachments) == 0 && len(req.ForwardAttachmentIDs) == 0 {
 		response.Error(w, http.StatusBadRequest, "主题和正文不能同时为空")
 		return
 	}
@@ -182,6 +182,10 @@ func (a *App) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sourceMessageID, ok := parseOptionalID(w, req.SourceMessageID, "来源邮件 ID")
+	if !ok {
+		return
+	}
+	draftID, ok := parseOptionalID(w, req.DraftID, "草稿 ID")
 	if !ok {
 		return
 	}
@@ -209,6 +213,12 @@ func (a *App) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.Error(w, http.StatusBadRequest, "发送失败："+err.Error())
 		return
+	}
+	if draftID > 0 {
+		if err := a.store.DeleteMailDraft(userID, draftID); err != nil && !errors.Is(err, storage.ErrNotFound) {
+			response.Error(w, http.StatusInternalServerError, "邮件已发送，但删除草稿失败")
+			return
+		}
 	}
 	response.OK(w, "发送成功", messageListPayload(sent))
 }

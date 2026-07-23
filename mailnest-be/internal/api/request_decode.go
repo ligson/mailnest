@@ -39,6 +39,7 @@ func decodeSendMessageRequest(r *http.Request) (sendMessageRequest, []mail.Outgo
 	}
 	form := r.MultipartForm
 	req := sendMessageRequest{
+		DraftID:              strings.TrimSpace(formValue(form, "draftId")),
 		AccountID:            strings.TrimSpace(formValue(form, "accountId")),
 		To:                   formAddressValues(form, "to"),
 		CC:                   formAddressValues(form, "cc"),
