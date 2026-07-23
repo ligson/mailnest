@@ -40,6 +40,7 @@
 
 ### 部署
 
+- 将前后端版本 `20260723121631-3ca3f40-admin-captcha` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260723120407-admin-captcha.tgz`；首次使用 `20260723120407-f67450e-admin-captcha` 启动时发现 MySQL 既有用户表缺少管理员字段，已补充显式 MySQL 缺列迁移并重新部署；线上健康检查、验证码接口、首页静态资源、管理员接口未登录拦截、容器镜像标签和后端启动日志验证通过。
 - 将生产数据库从 SQLite 迁移到 NAS 上的 MySQL 数据库 `mailnest260722`：迁移前停止后端并备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-sqlite-to-mysql-20260723103600.tgz`，同时备份迁移前 MySQL 到 `backups/mysql-before-sqlite-migration-20260723103000.sql.gz`；迁移后逐表精确校验通过，核心数据包括用户 1、邮箱账号 3、邮件 1777、附件 508、联系人 224、同步任务 3967、同步事件 6303，并备份迁移后 MySQL 到 `backups/mysql-after-sqlite-migration-20260723110000.sql.gz`。
 - 将后端 MySQL 修复版本 `20260723110800-ee2293b-mysqlfix` 部署到生产环境的 Mail Nest Docker Compose 服务；远端 `config.yaml` 已切换到 MySQL driver 和持久化 MySQL DSN，原 SQLite 文件继续保留在 `data/mailnest.db` 作为回滚来源；线上健康检查、后端容器镜像标签、中文启动日志和 MySQL 精确行数验证通过。
 - 将后端最终版本 `20260723102238-523aad2-cnlog` 部署到生产环境的 Mail Nest Docker Compose 服务；本地 Docker 构建 amd64 镜像后通过 `docker save | ssh docker load` 导入远端，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260723102238-523aad2-cnlog.tgz`；线上健康检查、`/mail` 静态资源、后端容器镜像标签和中文启动日志验证通过。
