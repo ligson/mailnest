@@ -9,6 +9,7 @@
 - 后端数据库连接和 schema 迁移替换为 GORM：通过 `gorm.io/driver/sqlite`、`gorm.io/driver/mysql`、`gorm.io/driver/postgres` 统一选择数据库驱动，底层仍暴露 `*sql.DB` 兼容现有复杂查询。
 - 数据库建表、补列和普通索引迁移改为 GORM model + `AutoMigrate`，新增表和字段优先维护 model 标签，不再为 SQLite/MySQL/PostgreSQL 分别手写整套 DDL。
 - 邮件列表表达式排序索引保留少量集中补充 SQL，兼顾跨库维护成本和列表性能。
+- 生产 SQLite 旧库升级路径改为安全迁移：已有表只做缺列补列、缺索引补索引和缺表建表，避免 GORM 对现有表执行 rebuild 导致历史数据触发约束失败。
 
 ### 文档
 
@@ -17,6 +18,7 @@
 ### 测试
 
 - 后端 `rtk go test ./...` 通过，覆盖 GORM AutoMigrate 后的现有 storage、API 和 mail 服务行为。
+- 新增 SQLite 旧库迁移回归测试，覆盖历史表存在但字段约束不完全一致时仍可安全启动。
 
 ## 2026-07-22
 

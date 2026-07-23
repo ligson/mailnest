@@ -25,6 +25,190 @@ func (s *Store) migrateGORM() error {
 	return s.createSupplementalIndexes()
 }
 
+func (s *Store) migrateExistingSQLite() error {
+	models := []struct {
+		table string
+		model any
+	}{
+		{table: "users", model: &userModel{}},
+		{table: "mail_accounts", model: &mailAccountModel{}},
+		{table: "mail_folders", model: &mailFolderModel{}},
+		{table: "mail_messages", model: &mailMessageModel{}},
+		{table: "contacts", model: &contactModel{}},
+		{table: "mail_rules", model: &mailRuleModel{}},
+		{table: "mail_rule_conditions", model: &mailRuleConditionModel{}},
+		{table: "mail_attachments", model: &mailAttachmentModel{}},
+		{table: "mail_sync_jobs", model: &mailSyncJobModel{}},
+		{table: "mail_message_states", model: &mailMessageStateModel{}},
+		{table: "mail_sync_job_events", model: &mailSyncJobEventModel{}},
+	}
+	for _, item := range models {
+		exists, err := s.sqliteTableExists(item.table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if err := s.db.gormDB.AutoMigrate(item.model); err != nil {
+				return fmt.Errorf("gorm automigrate missing sqlite table %s: %w", item.table, err)
+			}
+		}
+	}
+	for _, column := range sqliteExistingColumnStatements() {
+		if err := s.addSQLiteColumnIfMissing(column.table, column.name, column.definition); err != nil {
+			return err
+		}
+	}
+	if err := s.createSQLiteExistingIndexes(); err != nil {
+		return err
+	}
+	return s.createSupplementalIndexes()
+}
+
+func (s *Store) sqliteTableExists(table string) (bool, error) {
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (s *Store) sqliteColumnExists(table, column string) (bool, error) {
+	if !safeSQLiteIdentifier(table) || !safeSQLiteIdentifier(column) {
+		return false, fmt.Errorf("unsafe sqlite identifier %q.%q", table, column)
+	}
+	rows, err := s.db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name string
+		var dataType string
+		var notNull int
+		var defaultValue any
+		var primaryKey int
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if strings.EqualFold(name, column) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func (s *Store) addSQLiteColumnIfMissing(table, column, definition string) error {
+	exists, err := s.sqliteColumnExists(table, column)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s`, table, definition)); err != nil {
+		return fmt.Errorf("add sqlite column %s.%s: %w", table, column, err)
+	}
+	return nil
+}
+
+func (s *Store) createSQLiteExistingIndexes() error {
+	for _, stmt := range sqliteExistingIndexStatements() {
+		if _, err := s.db.Exec(stmt); err != nil {
+			if isSchemaAlreadyExistsError(err) {
+				continue
+			}
+			return fmt.Errorf("create sqlite existing index: %w", err)
+		}
+	}
+	return nil
+}
+
+func safeSQLiteIdentifier(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+type sqliteColumnStatement struct {
+	table      string
+	name       string
+	definition string
+}
+
+func sqliteExistingColumnStatements() []sqliteColumnStatement {
+	return []sqliteColumnStatement{
+		{table: "mail_accounts", name: "provider", definition: `provider TEXT NOT NULL DEFAULT 'custom'`},
+		{table: "mail_accounts", name: "auth_type", definition: `auth_type TEXT NOT NULL DEFAULT 'password'`},
+		{table: "mail_accounts", name: "oauth_access_token_encrypted", definition: `oauth_access_token_encrypted TEXT`},
+		{table: "mail_accounts", name: "oauth_refresh_token_encrypted", definition: `oauth_refresh_token_encrypted TEXT`},
+		{table: "mail_accounts", name: "oauth_expires_at", definition: `oauth_expires_at DATETIME`},
+		{table: "mail_accounts", name: "full_sync_status", definition: `full_sync_status TEXT NOT NULL DEFAULT 'idle'`},
+		{table: "mail_accounts", name: "full_sync_total", definition: `full_sync_total INTEGER NOT NULL DEFAULT 0`},
+		{table: "mail_accounts", name: "full_sync_processed", definition: `full_sync_processed INTEGER NOT NULL DEFAULT 0`},
+		{table: "mail_accounts", name: "full_sync_new_count", definition: `full_sync_new_count INTEGER NOT NULL DEFAULT 0`},
+		{table: "mail_accounts", name: "full_sync_started_at", definition: `full_sync_started_at DATETIME`},
+		{table: "mail_accounts", name: "full_sync_finished_at", definition: `full_sync_finished_at DATETIME`},
+		{table: "mail_accounts", name: "full_sync_error", definition: `full_sync_error TEXT`},
+		{table: "mail_accounts", name: "cleanup_enabled", definition: `cleanup_enabled INTEGER NOT NULL DEFAULT 0`},
+		{table: "mail_accounts", name: "cleanup_retention_days", definition: `cleanup_retention_days INTEGER NOT NULL DEFAULT 90`},
+		{table: "mail_accounts", name: "sent_folder", definition: `sent_folder TEXT NOT NULL DEFAULT 'Sent'`},
+		{table: "mail_accounts", name: "smtp_host", definition: `smtp_host TEXT NOT NULL DEFAULT ''`},
+		{table: "mail_accounts", name: "smtp_port", definition: `smtp_port INTEGER NOT NULL DEFAULT 587`},
+		{table: "mail_accounts", name: "smtp_tls", definition: `smtp_tls INTEGER NOT NULL DEFAULT 0`},
+		{table: "mail_accounts", name: "smtp_starttls", definition: `smtp_starttls INTEGER NOT NULL DEFAULT 1`},
+		{table: "mail_accounts", name: "smtp_username", definition: `smtp_username TEXT NOT NULL DEFAULT ''`},
+		{table: "mail_accounts", name: "smtp_password_encrypted", definition: `smtp_password_encrypted TEXT NOT NULL DEFAULT ''`},
+		{table: "mail_accounts", name: "signature_html", definition: `signature_html TEXT NOT NULL DEFAULT ''`},
+		{table: "mail_attachments", name: "content_id", definition: `content_id TEXT`},
+		{table: "mail_attachments", name: "inline", definition: `inline INTEGER NOT NULL DEFAULT 0`},
+		{table: "mail_messages", name: "search_text", definition: `search_text TEXT`},
+		{table: "mail_messages", name: "local_folder_id", definition: `local_folder_id INTEGER`},
+		{table: "mail_messages", name: "in_reply_to", definition: `in_reply_to TEXT`},
+		{table: "mail_messages", name: "references_header", definition: `references_header TEXT`},
+		{table: "mail_messages", name: "source_message_id", definition: `source_message_id INTEGER`},
+		{table: "mail_messages", name: "compose_mode", definition: `compose_mode TEXT`},
+		{table: "users", name: "nickname", definition: `nickname TEXT`},
+		{table: "users", name: "avatar_path", definition: `avatar_path TEXT`},
+		{table: "users", name: "bio", definition: `bio TEXT`},
+		{table: "users", name: "ui_theme", definition: `ui_theme TEXT NOT NULL DEFAULT 'forest'`},
+		{table: "mail_rules", name: "priority", definition: `priority INTEGER NOT NULL DEFAULT 0`},
+		{table: "mail_rules", name: "stop_on_match", definition: `stop_on_match INTEGER NOT NULL DEFAULT 1`},
+		{table: "mail_rules", name: "action_type", definition: `action_type TEXT NOT NULL DEFAULT 'move_folder'`},
+		{table: "mail_message_states", name: "is_spam", definition: `is_spam INTEGER NOT NULL DEFAULT 0`},
+		{table: "mail_message_states", name: "spam_at", definition: `spam_at DATETIME`},
+	}
+}
+
+func sqliteExistingIndexStatements() []string {
+	return []string{
+		`CREATE INDEX IF NOT EXISTS idx_mail_messages_user_received ON mail_messages(user_id, received_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_messages_account ON mail_messages(account_id, folder, imap_uid)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_messages_user_sort ON mail_messages(user_id, COALESCE(sent_at, received_at, created_at) DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_messages_user_folder_sort ON mail_messages(user_id, folder, COALESCE(sent_at, received_at, created_at) DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_messages_user_account_sort ON mail_messages(user_id, account_id, COALESCE(sent_at, received_at, created_at) DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_messages_user_attachment_sort ON mail_messages(user_id, has_attachments, COALESCE(sent_at, received_at, created_at) DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_messages_user_local_folder_sort ON mail_messages(user_id, local_folder_id, COALESCE(sent_at, received_at, created_at) DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_attachments_user_message ON mail_attachments(user_id, message_id, inline DESC, id ASC)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_attachments_user_filename ON mail_attachments(user_id, filename)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_attachments_user_content_type ON mail_attachments(user_id, content_type)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_attachments_user_created ON mail_attachments(user_id, created_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_attachments_user_inline ON mail_attachments(user_id, inline, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_message_states_user_message ON mail_message_states(user_id, message_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_message_states_user_deleted ON mail_message_states(user_id, deleted_at, message_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_message_states_user_spam ON mail_message_states(user_id, is_spam, message_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_sync_jobs_user_account ON mail_sync_jobs(user_id, account_id, started_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_sync_job_events_job_created ON mail_sync_job_events(job_id, created_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_contacts_user_updated ON contacts(user_id, updated_at DESC, id DESC)`,
+	}
+}
+
 func (s *Store) createSupplementalIndexes() error {
 	for _, stmt := range supplementalIndexStatements(s.db.dialect) {
 		if _, err := s.db.Exec(stmt); err != nil {

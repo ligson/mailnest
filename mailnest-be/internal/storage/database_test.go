@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -91,6 +93,45 @@ func TestSQLiteDatabasePathForDirectoryCreation(t *testing.T) {
 				t.Fatalf("expected %q, got %q", tt.want, got)
 			}
 		})
+	}
+}
+
+func TestOpenExistingSQLiteAvoidsAutoMigrateTableRebuild(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mailnest.db")
+	raw, err := sql.Open("sqlite3", sqliteDSN(path))
+	if err != nil {
+		t.Fatalf("open raw sqlite: %v", err)
+	}
+	if _, err := raw.Exec(`
+CREATE TABLE users (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	username TEXT,
+	email TEXT,
+	password_hash TEXT,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO users (email, password_hash) VALUES ('legacy@example.com', 'hash');
+`); err != nil {
+		_ = raw.Close()
+		t.Fatalf("seed legacy sqlite: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw sqlite: %v", err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("open existing sqlite store: %v", err)
+	}
+	defer store.Close()
+
+	exists, err := store.sqliteColumnExists("users", "ui_theme")
+	if err != nil {
+		t.Fatalf("check migrated column: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected safe sqlite migration to add ui_theme")
 	}
 }
 

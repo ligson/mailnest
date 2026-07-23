@@ -395,6 +395,15 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
+	if s.db.dialect == dialectSQLite {
+		exists, err := s.sqliteTableExists("users")
+		if err != nil {
+			return err
+		}
+		if exists {
+			return s.migrateExistingSQLite()
+		}
+	}
 	return s.migrateGORM()
 }
 
