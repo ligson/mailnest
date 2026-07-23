@@ -133,6 +133,37 @@ INSERT INTO users (email, password_hash) VALUES ('legacy@example.com', 'hash');
 	if !exists {
 		t.Fatal("expected safe sqlite migration to add ui_theme")
 	}
+	for _, column := range []string{"is_admin", "enabled"} {
+		exists, err := store.sqliteColumnExists("users", column)
+		if err != nil {
+			t.Fatalf("check migrated column %s: %v", column, err)
+		}
+		if !exists {
+			t.Fatalf("expected safe sqlite migration to add %s", column)
+		}
+	}
+	var isAdmin, enabled int
+	if err := store.db.QueryRow(`SELECT is_admin, enabled FROM users WHERE email = ?`, "legacy@example.com").Scan(&isAdmin, &enabled); err != nil {
+		t.Fatalf("query migrated user flags: %v", err)
+	}
+	if isAdmin != 1 || enabled != 1 {
+		t.Fatalf("expected first legacy user to be admin and enabled, got is_admin=%d enabled=%d", isAdmin, enabled)
+	}
+}
+
+func TestMySQLExistingColumnStatementsIncludeUserAdminFlags(t *testing.T) {
+	statements := mysqlExistingColumnStatements()
+	found := map[string]bool{}
+	for _, statement := range statements {
+		found[statement.table+"."+statement.name] = strings.Contains(statement.definition, "TINYINT") &&
+			strings.Contains(statement.definition, "NOT NULL") &&
+			strings.Contains(statement.definition, "DEFAULT")
+	}
+	for _, column := range []string{"users.is_admin", "users.enabled"} {
+		if !found[column] {
+			t.Fatalf("expected mysql existing column statement for %s, got %#v", column, statements)
+		}
+	}
 }
 
 func TestRebindPlaceholdersForPostgres(t *testing.T) {

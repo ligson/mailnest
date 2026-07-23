@@ -142,6 +142,46 @@ func safeSQLiteIdentifier(value string) bool {
 	return true
 }
 
+type mysqlColumnStatement struct {
+	table      string
+	name       string
+	definition string
+}
+
+func mysqlExistingColumnStatements() []mysqlColumnStatement {
+	return []mysqlColumnStatement{
+		{table: "users", name: "is_admin", definition: `is_admin TINYINT NOT NULL DEFAULT 0`},
+		{table: "users", name: "enabled", definition: `enabled TINYINT NOT NULL DEFAULT 1`},
+	}
+}
+
+func (s *Store) mysqlColumnExists(table, column string) (bool, error) {
+	if !safeSQLiteIdentifier(table) || !safeSQLiteIdentifier(column) {
+		return false, fmt.Errorf("unsafe mysql identifier %q.%q", table, column)
+	}
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+		table,
+		column,
+	).Scan(&count)
+	return count > 0, err
+}
+
+func (s *Store) addMySQLColumnIfMissing(table, column, definition string) error {
+	exists, err := s.mysqlColumnExists(table, column)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s`, table, definition)); err != nil {
+		return fmt.Errorf("add mysql column %s.%s: %w", table, column, err)
+	}
+	return nil
+}
+
 type sqliteColumnStatement struct {
 	table      string
 	name       string
@@ -238,6 +278,11 @@ func (s *Store) createSupplementalIndexes() error {
 func (s *Store) ensureDialectColumnTypes() error {
 	if s.db.dialect != dialectMySQL {
 		return nil
+	}
+	for _, column := range mysqlExistingColumnStatements() {
+		if err := s.addMySQLColumnIfMissing(column.table, column.name, column.definition); err != nil {
+			return err
+		}
 	}
 	_, err := s.db.Exec(`ALTER TABLE mail_messages MODIFY COLUMN search_text LONGTEXT NULL`)
 	if err != nil {
