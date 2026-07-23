@@ -92,7 +92,10 @@
               <template #icon><send-outlined /></template>
               写邮件
             </a-button>
-            <a-button @click="refreshAll">刷新</a-button>
+            <a-button @click="refreshAll">
+              <template #icon><reload-outlined /></template>
+              刷新
+            </a-button>
           </a-space>
         </div>
 
@@ -212,17 +215,28 @@
                 @click.stop
                 @change="toggleSelectMessage(item.id)"
               />
-              <div class="mail-item-top">
-                <strong>{{ displayAddressName(parseContactAddress(item.from || '')) }}</strong>
-                <span>{{ formatShortTime(item.sentAt || item.receivedAt) }}</span>
+              <div class="mail-item-avatar" aria-hidden="true">
+                {{ senderInitial(item) }}
               </div>
-              <div class="mail-item-subject">
-                <star-filled v-if="item.starred" class="mail-star active" />
-                <star-outlined v-else class="mail-star" />
-                <paper-clip-outlined v-if="item.hasAttachments" />
-                <span>{{ item.subject || '无主题' }}</span>
+              <span v-if="!item.isRead" class="mail-unread-dot" aria-hidden="true"></span>
+              <div class="mail-item-content">
+                <div class="mail-item-top">
+                  <strong>{{ displayAddressName(parseContactAddress(item.from || '')) }}</strong>
+                  <span>{{ formatShortTime(item.sentAt || item.receivedAt) }}</span>
+                </div>
+                <div class="mail-item-subject">
+                  <star-filled v-if="item.starred" class="mail-star active" />
+                  <star-outlined v-else class="mail-star" />
+                  <paper-clip-outlined v-if="item.hasAttachments" />
+                  <span>{{ item.subject || '无主题' }}</span>
+                </div>
+                <div class="mail-item-meta-row">
+                  <span class="mail-item-meta">{{ mailPreview(item) }}</span>
+                  <span v-if="item.isSpam" class="mail-state-chip danger">垃圾</span>
+                  <span v-if="item.deletedAt" class="mail-state-chip muted">已删除</span>
+                  <span v-if="!item.isRead" class="mail-state-chip accent">未读</span>
+                </div>
               </div>
-              <div class="mail-item-meta">{{ addressSummary(item.to) || '无收件人' }}</div>
             </div>
           </div>
         </a-spin>
@@ -712,6 +726,7 @@ import {
   OrderedListOutlined,
   PaperClipOutlined,
   ForwardOutlined,
+  ReloadOutlined,
   SearchOutlined,
   SendOutlined,
   RollbackOutlined,
@@ -1841,6 +1856,19 @@ function formatTime(value: string | null) {
   return new Date(value).toLocaleString();
 }
 
+function senderInitial(messageItem: MailMessage) {
+  const name = displayAddressName(parseContactAddress(messageItem.from || ''));
+  return (name.trim().slice(0, 1) || '?').toUpperCase();
+}
+
+function mailPreview(messageItem: MailMessage) {
+  const recipients = addressSummary(messageItem.to);
+  if (!recipients) {
+    return '无收件人';
+  }
+  return `收件人 ${recipients}`;
+}
+
 function parseContactAddresses(values: string[]) {
   return values.map(parseContactAddress).filter((item) => item.name || item.email);
 }
@@ -2112,7 +2140,7 @@ function looksLikeEmail(value: string) {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background: var(--surface-bg);
+  background: linear-gradient(180deg, var(--surface-bg), var(--surface-muted));
 }
 
 .mail-list-header {
@@ -2368,6 +2396,7 @@ function looksLikeEmail(value: string) {
   min-height: 0;
   overflow: auto;
   border-top: 1px solid var(--border-subtle);
+  background: var(--surface-bg);
 }
 
 .mail-list-empty {
@@ -2393,11 +2422,13 @@ function looksLikeEmail(value: string) {
 }
 
 .mail-list-item {
-  display: block;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  column-gap: 11px;
   position: relative;
   width: 100%;
   min-width: 0;
-  padding: 13px 16px 13px 42px;
+  padding: 13px 16px 13px 46px;
   border: 0;
   border-left: 3px solid transparent;
   border-bottom: 1px solid var(--border-subtle);
@@ -2413,6 +2444,37 @@ function looksLikeEmail(value: string) {
   left: 14px;
 }
 
+.mail-item-avatar {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border-color));
+  border-radius: 8px;
+  background: var(--accent-tint);
+  color: var(--accent-strong);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.mail-unread-dot {
+  position: absolute;
+  top: 25px;
+  left: 34px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface-bg);
+}
+
+.mail-item-content {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
 .mail-list-item:hover {
   background: var(--accent-tint);
 }
@@ -2420,6 +2482,11 @@ function looksLikeEmail(value: string) {
 .mail-list-item.active {
   border-left-color: var(--accent);
   background: var(--accent-soft);
+}
+
+.mail-list-item.unread .mail-item-top strong,
+.mail-list-item.unread .mail-item-subject {
+  color: var(--heading-color);
 }
 
 .mail-item-top {
@@ -2449,7 +2516,6 @@ function looksLikeEmail(value: string) {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  margin-top: 7px;
   font-weight: 700;
   line-height: 1.4;
 }
@@ -2470,11 +2536,44 @@ function looksLikeEmail(value: string) {
   color: #f59e0b;
 }
 
+.mail-item-meta-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
 .mail-item-meta {
-  margin-top: 5px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mail-state-chip {
+  display: inline-flex;
+  height: 20px;
+  align-items: center;
+  padding: 0 7px;
+  border-radius: 999px;
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.mail-state-chip.accent {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.mail-state-chip.danger {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.mail-state-chip.muted {
+  background: var(--border-subtle);
+  color: var(--muted-color);
 }
 
 .mail-pagination {
@@ -2486,7 +2585,7 @@ function looksLikeEmail(value: string) {
 .mail-reader-pane {
   min-width: 0;
   min-height: 0;
-  padding: 22px 26px;
+  padding: 26px 30px;
   overflow: auto;
   background: var(--surface-bg);
 }
@@ -2697,9 +2796,23 @@ function looksLikeEmail(value: string) {
   overflow: hidden;
 }
 
+.compose-modal :deep(.ant-modal-header) {
+  flex: none;
+  padding: 18px 24px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 0;
+  background: var(--surface-bg);
+}
+
+.compose-modal :deep(.ant-modal-title) {
+  color: var(--heading-color);
+  font-size: 18px;
+  font-weight: 800;
+}
+
 .compose-modal :deep(.ant-modal-body) {
   max-height: calc(100vh - 116px);
-  padding-top: 12px;
+  padding: 0;
   overflow-x: hidden;
   overflow-y: auto;
 }
@@ -2712,6 +2825,7 @@ function looksLikeEmail(value: string) {
   display: grid;
   min-width: 0;
   gap: 12px;
+  padding: 16px 24px 0;
 }
 
 .compose-form :deep(.ant-form-item) {
@@ -2742,15 +2856,16 @@ function looksLikeEmail(value: string) {
 
 .compose-footer {
   position: sticky;
-  bottom: -24px;
+  bottom: 0;
   z-index: 2;
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  margin: 12px -24px -24px;
+  margin: 12px -24px 0;
   padding: 14px 24px;
   border-top: 1px solid var(--border-subtle);
-  background: var(--surface-bg);
+  background: color-mix(in srgb, var(--surface-bg) 94%, transparent);
+  backdrop-filter: blur(10px);
 }
 
 .compose-editor {
@@ -2758,6 +2873,7 @@ function looksLikeEmail(value: string) {
   border-radius: 8px;
   background: var(--surface-bg);
   overflow: hidden;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 72%, transparent);
 }
 
 .compose-toolbar {
@@ -2905,6 +3021,7 @@ function looksLikeEmail(value: string) {
   min-height: 360px;
   max-height: 54vh;
   padding: 14px 16px;
+  background: var(--surface-bg);
   color: var(--text-color);
   line-height: 1.7;
   outline: none;
@@ -2928,6 +3045,7 @@ function looksLikeEmail(value: string) {
 
 .compose-attachments {
   display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 8px;
   margin-top: 10px;
 }
@@ -2964,10 +3082,10 @@ function looksLikeEmail(value: string) {
   grid-template-columns: 18px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
-  border: 1px solid var(--border-color);
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: var(--surface-muted);
+  background: var(--surface-bg);
   color: var(--text-color);
   font-size: 13px;
 }

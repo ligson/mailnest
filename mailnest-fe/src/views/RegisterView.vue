@@ -1,50 +1,73 @@
 <template>
   <main class="auth-page">
-    <section class="auth-panel">
-      <div class="auth-header">
-        <h1 class="auth-title">创建信匣账号</h1>
-        <p class="auth-subtitle">账号创建后即可配置多个邮箱收取邮件</p>
-      </div>
-      <a-form class="auth-form" layout="vertical" :model="form" @finish="onSubmit">
-        <a-form-item
-          label="用户名"
-          name="username"
-          :rules="[{ required: true, message: '请输入用户名' }]"
-        >
-          <a-input v-model:value="form.username" autocomplete="username" />
-        </a-form-item>
-        <a-form-item
-          label="邮箱"
-          name="email"
-          :rules="[{ required: true, type: 'email', message: '请输入有效邮箱' }]"
-        >
-          <a-input v-model:value="form.email" autocomplete="email" />
-        </a-form-item>
-        <a-form-item
-          label="密码"
-          name="password"
-          :rules="[{ required: true, min: 8, message: '密码至少 8 位' }]"
-        >
-          <a-input-password v-model:value="form.password" autocomplete="new-password" />
-        </a-form-item>
-        <a-form-item
-          label="图形验证码"
-          name="captchaAnswer"
-          :rules="[{ required: true, message: '请输入图形验证码' }]"
-        >
-          <div class="captcha-row">
-            <a-input v-model:value="form.captchaAnswer" autocomplete="off" placeholder="输入验证码" />
-            <button class="captcha-image-button" type="button" :disabled="captchaLoading" @click="loadCaptcha">
-              <a-spin v-if="captchaLoading" size="small" />
-              <img v-else-if="captcha.imageData" :src="captcha.imageData" alt="验证码" />
-              <span v-else>刷新</span>
-            </button>
+    <section class="auth-shell">
+      <aside class="auth-hero-panel">
+        <img class="auth-brand-mark" src="/mailnest-icon.svg" alt="" />
+        <div>
+          <h1 class="auth-hero-title">Mail Nest 信匣</h1>
+          <p class="auth-hero-copy">为个人和小团队准备的本地邮件收取与管理系统。</p>
+        </div>
+        <div class="auth-signal-grid">
+          <div>
+            <strong>Local</strong>
+            <span>本地存储</span>
           </div>
-        </a-form-item>
-        <a-button type="primary" html-type="submit" block :loading="loading">注册并进入</a-button>
-        <a-divider />
-        <a-button block @click="router.push('/login')">返回登录</a-button>
-      </a-form>
+          <div>
+            <strong>Secure</strong>
+            <span>凭据加密</span>
+          </div>
+          <div>
+            <strong>Admin</strong>
+            <span>用户管理</span>
+          </div>
+        </div>
+      </aside>
+      <section class="auth-panel">
+        <div class="auth-header">
+          <h2 class="auth-title">创建信匣账号</h2>
+          <p class="auth-subtitle">账号创建后即可配置多个邮箱收取邮件</p>
+        </div>
+        <a-form class="auth-form" layout="vertical" :model="form" @finish="onSubmit">
+          <a-form-item
+            label="用户名"
+            name="username"
+            :rules="[{ required: true, message: '请输入用户名' }]"
+          >
+            <a-input v-model:value="form.username" autocomplete="username" />
+          </a-form-item>
+          <a-form-item
+            label="邮箱"
+            name="email"
+            :rules="[{ required: true, type: 'email', message: '请输入有效邮箱' }]"
+          >
+            <a-input v-model:value="form.email" autocomplete="email" />
+          </a-form-item>
+          <a-form-item
+            label="密码"
+            name="password"
+            :rules="[{ required: true, min: 8, message: '密码至少 8 位' }]"
+          >
+            <a-input-password v-model:value="form.password" autocomplete="new-password" />
+          </a-form-item>
+          <a-form-item
+            label="图形验证码"
+            name="captchaAnswer"
+            :rules="[{ required: true, message: '请输入图形验证码' }]"
+          >
+            <div class="captcha-row">
+              <a-input v-model:value="form.captchaAnswer" autocomplete="off" placeholder="输入验证码" />
+              <button class="captcha-image-button" type="button" :disabled="captchaLoading" @click="loadCaptcha">
+                <a-spin v-if="captchaLoading" size="small" />
+                <img v-else-if="captcha.imageData" :src="captcha.imageData" alt="验证码" />
+                <span v-else>刷新</span>
+              </button>
+            </div>
+          </a-form-item>
+          <a-button type="primary" html-type="submit" block :loading="loading">注册并进入</a-button>
+          <a-divider />
+          <a-button block @click="router.push('/login')">返回登录</a-button>
+        </a-form>
+      </section>
     </section>
   </main>
 </template>

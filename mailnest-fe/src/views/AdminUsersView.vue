@@ -6,7 +6,10 @@
           <h2 class="page-title">系统管理</h2>
           <p class="page-subtitle">查看用户规模、账号状态和邮件附件存储占用</p>
         </div>
-        <a-button @click="loadUsers">刷新</a-button>
+        <a-button @click="loadUsers">
+          <template #icon><reload-outlined /></template>
+          刷新
+        </a-button>
       </div>
 
       <div class="admin-metrics">
@@ -19,6 +22,14 @@
           <strong>{{ enabledCount }}</strong>
         </div>
         <div class="admin-metric">
+          <span>停用用户</span>
+          <strong>{{ disabledCount }}</strong>
+        </div>
+        <div class="admin-metric">
+          <span>邮箱账号</span>
+          <strong>{{ totalAccounts }}</strong>
+        </div>
+        <div class="admin-metric">
           <span>邮件总数</span>
           <strong>{{ totalMessages }}</strong>
         </div>
@@ -28,18 +39,31 @@
         </div>
       </div>
 
+      <div class="admin-controls">
+        <a-input-search
+          v-model:value="keyword"
+          allow-clear
+          class="admin-user-search"
+          placeholder="搜索用户名或邮箱"
+        />
+        <a-segmented v-model:value="statusFilter" :options="statusOptions" />
+      </div>
+
       <a-table
         row-key="id"
         :columns="columns"
-        :data-source="users"
+        :data-source="filteredUsers"
         :loading="loading"
-        :pagination="false"
+        :pagination="{ pageSize: 12, showSizeChanger: false }"
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'user'">
             <div class="admin-user-cell">
-              <strong>{{ record.nickname || record.username }}</strong>
-              <span>{{ record.email }}</span>
+              <div class="admin-user-avatar">{{ userInitial(record) }}</div>
+              <div>
+                <strong>{{ record.nickname || record.username }}</strong>
+                <span>{{ record.email }}</span>
+              </div>
             </div>
           </template>
           <template v-else-if="column.key === 'role'">
@@ -84,6 +108,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { Modal, message } from 'ant-design-vue';
 import type { TableColumnsType } from 'ant-design-vue';
+import { ReloadOutlined } from '@ant-design/icons-vue';
 import { adminApi, type AdminUserSummary } from '../api/client';
 import AppLayout from '../components/AppLayout.vue';
 import { useAuthStore } from '../stores/auth';
@@ -91,7 +116,14 @@ import { useAuthStore } from '../stores/auth';
 const auth = useAuthStore();
 const loading = ref(false);
 const togglingId = ref('');
+const keyword = ref('');
+const statusFilter = ref<'all' | 'enabled' | 'disabled'>('all');
 const users = ref<AdminUserSummary[]>([]);
+const statusOptions = [
+  { label: '全部', value: 'all' },
+  { label: '启用', value: 'enabled' },
+  { label: '停用', value: 'disabled' },
+];
 
 const columns: TableColumnsType<AdminUserSummary> = [
   { title: '用户', key: 'user', width: 260 },
@@ -103,8 +135,25 @@ const columns: TableColumnsType<AdminUserSummary> = [
 ];
 
 const enabledCount = computed(() => users.value.filter((item) => item.enabled).length);
+const disabledCount = computed(() => users.value.filter((item) => !item.enabled).length);
+const totalAccounts = computed(() => users.value.reduce((sum, item) => sum + item.mailAccountCount, 0));
 const totalMessages = computed(() => users.value.reduce((sum, item) => sum + item.messageCount, 0));
 const totalAttachmentBytes = computed(() => users.value.reduce((sum, item) => sum + item.attachmentBytes, 0));
+const filteredUsers = computed(() => {
+  const text = keyword.value.trim().toLowerCase();
+  return users.value.filter((item) => {
+    if (statusFilter.value === 'enabled' && !item.enabled) {
+      return false;
+    }
+    if (statusFilter.value === 'disabled' && item.enabled) {
+      return false;
+    }
+    if (!text) {
+      return true;
+    }
+    return [item.username, item.email, item.nickname || ''].some((value) => value.toLowerCase().includes(text));
+  });
+});
 
 onMounted(loadUsers);
 
@@ -138,6 +187,10 @@ function updateEnabled(record: AdminUserSummary, enabled: boolean) {
 
 function onEnabledChange(record: AdminUserSummary, checked: boolean | string | number) {
   updateEnabled(record, Boolean(checked));
+}
+
+function userInitial(record: AdminUserSummary) {
+  return (record.nickname || record.username || record.email || '?').trim().slice(0, 1).toUpperCase();
 }
 
 async function doUpdateEnabled(id: string, enabled: boolean) {
@@ -184,17 +237,19 @@ function formatTime(value: string | null) {
 
 .admin-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 
 .admin-metric {
   display: grid;
   gap: 6px;
-  padding: 14px 16px;
+  min-height: 88px;
+  align-content: center;
+  padding: 16px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  background: var(--surface-muted);
+  background: linear-gradient(180deg, var(--surface-bg), var(--surface-muted));
 }
 
 .admin-metric span,
@@ -206,14 +261,55 @@ function formatTime(value: string | null) {
 
 .admin-metric strong {
   color: var(--heading-color);
-  font-size: 22px;
+  font-size: 24px;
 }
 
-.admin-user-cell,
+.admin-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.admin-user-search {
+  max-width: 320px;
+}
+
+.admin-user-cell {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.admin-user-avatar {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border-color));
+  border-radius: 8px;
+  background: var(--accent-tint);
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
 .admin-usage-cell {
   display: grid;
   gap: 3px;
   min-width: 0;
+}
+
+.admin-user-cell > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
 }
 
 .admin-user-cell strong,
@@ -233,6 +329,15 @@ function formatTime(value: string | null) {
 @media (max-width: 900px) {
   .admin-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-user-search {
+    max-width: none;
   }
 }
 </style>
