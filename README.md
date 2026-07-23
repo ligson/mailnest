@@ -72,6 +72,7 @@ mailnest/
 - [后端包结构说明](doc/backend-package-structure.md)
 - [实施计划](doc/implementation-plan.md)
 - [邮件批量操作、规则增强、同步日志与附件中心设计](doc/mail-batch-rules-sync-attachments-design.md)
+- [邮件线程与规则命中记录设计](doc/mail-thread-rule-log-design.md)
 - [垃圾邮件系统文件夹与规则标记设计](doc/mail-spam-design.md)
 - [邮件回复与转发功能设计](doc/reply-forward-design.md)
 - [更新日志](CHANGELOG.md)
@@ -126,4 +127,4 @@ postgres://mailnest:password@127.0.0.1:5432/mailnest?sslmode=disable
 - 后端已包含配置读取、可配置数据库初始化、统一响应封装、JWT 注册登录基础接口、邮箱账号配置接口、邮箱凭据加密存储、IMAP 连接测试、手动收取、邮件列表/详情、联系人、SMTP 发信、回复和转发接口。
 - 前端已包含 Vue 3/Vite/TypeScript/Ant Design Vue 基础应用、登录注册页面、邮箱账号配置页面、连接测试、手动收取、邮件列表/详情、联系人维护、写邮件抽屉、回复/回复全部/转发入口和 envelope API 客户端。
 
-下一步建议按设计推进草稿箱、会话视图和发信失败重试，并继续完善 Outlook/Gmail 等常见邮箱的配置提示。
+下一步建议按设计推进规则命中记录和邮件会话视图，并继续完善 Outlook/Gmail 等常见邮箱的配置提示。
