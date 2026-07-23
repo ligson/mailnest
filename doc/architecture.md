@@ -57,6 +57,8 @@ mailnest/
 
 建议接口统一以 `/api/v1` 开头。
 
+API 包内按功能拆分 handler、请求结构、响应组装、鉴权中间件和通用辅助函数，避免所有 HTTP 逻辑集中到单个大文件。详细文件职责见 [后端包结构说明](backend-package-structure.md)。
+
 ### 3.2 response 模块
 
 集中封装 JSON 响应格式：
@@ -90,6 +92,8 @@ mailnest/
 ### 3.4 storage 模块
 
 负责数据库连接、数据库迁移、事务和基础查询。后端通过 `config.yaml` 的 `database.driver` 选择数据库类型：默认 `sqlite`，也支持 `mysql` 和 `postgres`。连接驱动选择、建表、补列和普通索引迁移由 GORM 统一处理。
+
+存储层查询按用户、邮箱账号、邮件、附件、文件夹、联系人、规则和同步任务拆分文件；`database.go` 保留方言连接封装，`schema.go` 保留 GORM 迁移模型。
 
 SQLite 连接使用 WAL、busy timeout 和受控连接池，降低后台同步写入与 Web 读取并发时的锁等待。MySQL/PostgreSQL 通过 DSN 连接。新增表和字段应优先补充 GORM model 标签并让 `AutoMigrate` 迁移；只有邮件列表排序这类表达式索引、插入忽略、联系人 upsert、定时同步到期判断和自增主键返回等数据库差异，才保留在 storage 层集中封装，避免业务查询写死某一种数据库。
 

@@ -6,6 +6,8 @@
 
 ### 变更
 
+- 后端按功能拆分 API、storage 和 mail service 大文件：路由装配、handler、请求结构、响应组装、存储查询、同步、写信、落盘等职责分别归档到独立文件；同步拆分 API 大测试文件，按认证、账号、同步、详情、规则等场景归档；本次仅做同包拆分，不改变接口行为、数据库结构或业务逻辑。
+- 后端补充中文注释和中文运行日志：覆盖应用后台任务、邮箱账号操作、连接测试、目录读取、手动收取、自动收取、全量同步、服务器旧邮件清理、SMTP 发信、附件回填和历史邮件解析修复；日志只记录用户 ID、账号 ID、任务 ID、目录、数量、耗时和错误，避免输出密码、token、Cookie 等敏感信息。
 - 后端数据库连接和 schema 迁移替换为 GORM：通过 `gorm.io/driver/sqlite`、`gorm.io/driver/mysql`、`gorm.io/driver/postgres` 统一选择数据库驱动，底层仍暴露 `*sql.DB` 兼容现有复杂查询。
 - 数据库建表、补列和普通索引迁移改为 GORM model + `AutoMigrate`，新增表和字段优先维护 model 标签，不再为 SQLite/MySQL/PostgreSQL 分别手写整套 DDL。
 - 邮件列表表达式排序索引保留少量集中补充 SQL，兼顾跨库维护成本和列表性能。
@@ -13,6 +15,7 @@
 
 ### 文档
 
+- 新增后端包结构说明文档，记录 `internal/api`、`internal/storage`、`internal/mail` 的文件职责和后续新增功能放置规则。
 - 更新 README、架构和实施计划文档，明确数据库迁移由 GORM 处理，默认 SQLite，可配置 MySQL/PostgreSQL。
 
 ### 测试

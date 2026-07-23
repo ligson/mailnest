@@ -69,6 +69,7 @@ mailnest/
 - [产品需求说明](doc/requirements.md)
 - [架构设计](doc/architecture.md)
 - [接口规范](doc/api.md)
+- [后端包结构说明](doc/backend-package-structure.md)
 - [实施计划](doc/implementation-plan.md)
 - [邮件批量操作、规则增强、同步日志与附件中心设计](doc/mail-batch-rules-sync-attachments-design.md)
 - [垃圾邮件系统文件夹与规则标记设计](doc/mail-spam-design.md)
