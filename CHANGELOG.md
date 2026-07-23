@@ -69,6 +69,7 @@
 
 ### 部署
 
+- 将前端版本 `20260723200541-83c8be5-reader-title` 部署到生产环境的 Mail Nest Docker Compose 服务，后端继续使用 `20260723194532-b05b841-sendlogs-spam`；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260723200541-reader-title.tgz`；线上健康检查、`/mail` 静态页面和前后端容器镜像标签验证通过。
 - 将前后端版本 `20260723194532-b05b841-sendlogs-spam` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260723194532-sendlogs-spam.tgz`；线上健康检查、发送记录前端路由、前后端容器镜像标签、`mail_send_logs` 表迁移、发送记录关键字段迁移和新接口未登录统一拦截验证通过。
 - 将前后端版本 `20260723170309-5406782-threads-rules` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260723170309-threads-rules.tgz`；线上健康检查、首页静态资源、前后端容器镜像标签、`mail_threads` 与 `mail_rule_logs` 表迁移、`mail_messages.thread_id` 字段迁移和新接口未登录统一拦截验证通过。
 - 将前后端版本 `20260723155111-62cc4f1-drafts` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260723155111-drafts.tgz`；线上健康检查、首页静态资源、前后端容器镜像标签、`mail_drafts` 表迁移、邮件页草稿箱入口、写信自动保存和测试草稿删除验证通过，控制台无功能级 JavaScript 错误。
