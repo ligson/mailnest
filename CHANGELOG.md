@@ -20,6 +20,11 @@
 - 后端 `rtk go test ./...` 通过，覆盖 GORM AutoMigrate 后的现有 storage、API 和 mail 服务行为。
 - 新增 SQLite 旧库迁移回归测试，覆盖历史表存在但字段约束不完全一致时仍可安全启动。
 
+### 部署
+
+- 将后端热修复版本 `20260723094500-830cfb0-gormfix` 和前端版本 `20260723092000-a331107-gorm` 部署到生产环境；本地 Docker 构建 amd64 镜像后通过 `docker save | ssh docker load` 导入远端，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260723092000-a331107-gorm.tgz` 与 `backups/pre-20260723094500-830cfb0-gormfix.tgz`；线上健康检查、`/mail` 静态资源、容器镜像标签和后端启动日志验证通过。
+- 首次切换 `20260723092000-a331107-gorm` 后，GORM 对既有 SQLite 表执行 rebuild 时触发历史数据约束失败；已立即回滚到上一稳定版本恢复服务，并通过 `830cfb0` 热修复改为生产 SQLite 安全迁移后重新部署成功。
+
 ## 2026-07-22
 
 ### 变更
