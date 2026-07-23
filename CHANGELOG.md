@@ -10,6 +10,7 @@
 - 后端补充中文注释和中文运行日志：覆盖应用后台任务、邮箱账号操作、连接测试、目录读取、手动收取、自动收取、全量同步、服务器旧邮件清理、SMTP 发信、附件回填和历史邮件解析修复；日志只记录用户 ID、账号 ID、任务 ID、目录、数量、耗时和错误，避免输出密码、token、Cookie 等敏感信息。
 - 修复 MySQL 9 下 GORM 建表时 `datetime(3)` 与 `CURRENT_TIMESTAMP` 默认值不兼容的问题，MySQL 方言关闭默认时间精度，避免新库初始化失败。
 - MySQL 方言下将 `mail_messages.search_text` 调整为 `LONGTEXT`，兼容历史邮件中较长正文搜索索引从 SQLite 迁移到 MySQL。
+- MySQL 已有生产表时启动迁移不再执行可能缩列的 GORM `AutoMigrate`，只执行显式维护的类型保护和补充索引，避免升级时因历史长正文数据导致启动失败。
 - 新增 SQLite 到 MySQL 的一次性迁移命令，迁移时按表依赖顺序复制数据、保留原始主键，并逐表校验行数。
 - 后端数据库连接和 schema 迁移替换为 GORM：通过 `gorm.io/driver/sqlite`、`gorm.io/driver/mysql`、`gorm.io/driver/postgres` 统一选择数据库驱动，底层仍暴露 `*sql.DB` 兼容现有复杂查询。
 - 数据库建表、补列和普通索引迁移改为 GORM model + `AutoMigrate`，新增表和字段优先维护 model 标签，不再为 SQLite/MySQL/PostgreSQL 分别手写整套 DDL。

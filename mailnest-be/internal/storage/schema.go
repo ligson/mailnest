@@ -7,6 +7,9 @@ import (
 )
 
 func (s *Store) migrateGORM() error {
+	if s.db.dialect == dialectMySQL && s.db.gormDB.Migrator().HasTable(&userModel{}) {
+		return s.createSupplementalIndexes()
+	}
 	if err := s.db.gormDB.AutoMigrate(
 		&userModel{},
 		&mailAccountModel{},
