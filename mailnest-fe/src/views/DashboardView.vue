@@ -88,6 +88,15 @@
             <p class="mail-count">{{ mailCountText }}</p>
           </div>
           <a-space>
+            <a-radio-group
+              v-if="activeSystemFolder !== 'drafts'"
+              v-model:value="mailViewMode"
+              size="small"
+              @change="onViewModeChanged"
+            >
+              <a-radio-button value="messages">邮件</a-radio-button>
+              <a-radio-button value="threads">会话</a-radio-button>
+            </a-radio-group>
             <a-button type="primary" @click="openCompose">
               <template #icon><send-outlined /></template>
               写邮件
@@ -151,7 +160,7 @@
           </div>
         </div>
 
-        <div class="batch-toolbar" :class="{ active: selectedMessageIds.length > 0 }">
+        <div v-if="mailViewMode === 'messages'" class="batch-toolbar" :class="{ active: selectedMessageIds.length > 0 }">
           <a-checkbox
             :checked="pageAllSelected"
             :indeterminate="pageSomeSelected"
@@ -197,15 +206,50 @@
               <a-skeleton active :title="{ width: '72%' }" :paragraph="{ rows: 2, width: ['96%', '54%'] }" />
             </div>
           </div>
-          <div v-else-if="messages.length === 0" class="mail-list-empty">
+          <div v-else-if="currentListEmpty" class="mail-list-empty">
             <a-empty :description="mailEmptyTitle">
               <template #image>
                 <mail-outlined class="mail-empty-icon" />
               </template>
               <p class="mail-empty-copy">{{ mailEmptyDescription }}</p>
               <a-button v-if="!accounts.length" type="primary" @click="router.push('/accounts')">配置邮箱账号</a-button>
+              <a-button v-else-if="mailViewMode === 'threads' && activeSystemFolder !== 'drafts'" type="primary" @click="rebuildThreads('empty')">补齐会话</a-button>
               <a-button v-else @click="refreshAll">刷新邮件</a-button>
             </a-empty>
+          </div>
+          <div v-else-if="mailViewMode === 'threads'" class="mail-list">
+            <div
+              v-for="thread in threads"
+              :key="thread.id"
+              class="mail-list-item thread-list-item"
+              :class="{ active: selectedThreadId === thread.id, unread: thread.unreadCount > 0 }"
+              role="button"
+              tabindex="0"
+              @click="openThread(thread.id)"
+              @keydown.enter="openThread(thread.id)"
+              @keydown.space.prevent="openThread(thread.id)"
+            >
+              <div class="mail-item-avatar" aria-hidden="true">
+                {{ threadInitial(thread) }}
+              </div>
+              <span v-if="thread.unreadCount > 0" class="mail-unread-dot" aria-hidden="true"></span>
+              <div class="mail-item-content">
+                <div class="mail-item-top">
+                  <strong>{{ thread.subject || '无主题' }}</strong>
+                  <span>{{ formatShortTime(thread.lastMessageAt) }}</span>
+                </div>
+                <div class="mail-item-subject">
+                  <branches-outlined />
+                  <paper-clip-outlined v-if="thread.hasAttachments" />
+                  <span>{{ threadPreview(thread) }}</span>
+                </div>
+                <div class="mail-item-meta-row">
+                  <span class="mail-item-meta">{{ threadParticipantsText(thread) }}</span>
+                  <span class="mail-state-chip neutral">{{ thread.messageCount }} 封</span>
+                  <span v-if="thread.unreadCount > 0" class="mail-state-chip accent">{{ thread.unreadCount }} 未读</span>
+                </div>
+              </div>
+            </div>
           </div>
           <div v-else class="mail-list">
             <div
@@ -296,6 +340,10 @@
                   <template #icon><forward-outlined /></template>
                   转发
                 </a-button>
+                <a-button size="small" @click="openMessageRuleLogs(detail.id)">
+                  <template #icon><audit-outlined /></template>
+                  规则记录
+                </a-button>
               </a-space>
               <a-dropdown class="reader-actions-mobile" :trigger="['click']">
                 <a-button size="small" aria-label="更多邮件操作">
@@ -314,6 +362,10 @@
                     <a-menu-item key="forward">
                       <forward-outlined />
                       <span>转发</span>
+                    </a-menu-item>
+                    <a-menu-item key="ruleLogs">
+                      <audit-outlined />
+                      <span>规则记录</span>
                     </a-menu-item>
                   </a-menu>
                 </template>
@@ -380,6 +432,54 @@
               </div>
             </div>
           </section>
+        </div>
+        <div v-else-if="threadDetail" class="mail-reader thread-reader">
+          <div class="reader-header">
+            <div class="reader-title-row">
+              <div class="reader-title-main">
+                <div class="reader-status-row">
+                  <span class="reader-status-chip neutral">
+                    <branches-outlined />
+                    {{ threadDetail.messageCount }} 封邮件
+                  </span>
+                  <span v-if="threadDetail.unreadCount" class="reader-status-chip accent">{{ threadDetail.unreadCount }} 封未读</span>
+                  <span v-if="threadDetail.hasAttachments" class="reader-status-chip neutral">
+                    <paper-clip-outlined />
+                    有附件
+                  </span>
+                </div>
+                <h3 class="mail-subject">{{ threadDetail.subject || '无主题' }}</h3>
+                <div class="reader-time">{{ formatTime(threadDetail.lastMessageAt) }}</div>
+              </div>
+              <a-button size="small" @click="rebuildThreads('empty')">
+                <template #icon><reload-outlined /></template>
+                补齐会话
+              </a-button>
+            </div>
+          </div>
+          <div class="thread-timeline">
+            <button
+              v-for="item in threadDetail.messages"
+              :key="item.id"
+              type="button"
+              class="thread-message-card"
+              @click="openDetail(item.id)"
+            >
+              <div class="thread-message-avatar">{{ senderInitial(item) }}</div>
+              <div class="thread-message-main">
+                <div class="thread-message-top">
+                  <strong>{{ displayAddressName(parseContactAddress(item.from || '')) }}</strong>
+                  <span>{{ formatTime(item.sentAt || item.receivedAt) }}</span>
+                </div>
+                <div class="thread-message-subject">{{ item.subject || '无主题' }}</div>
+                <div class="mail-item-meta-row">
+                  <span class="mail-item-meta">{{ mailPreview(item) }}</span>
+                  <span v-if="item.hasAttachments" class="mail-state-chip neutral">附件</span>
+                  <span v-if="!item.isRead" class="mail-state-chip accent">未读</span>
+                </div>
+              </div>
+            </button>
+          </div>
         </div>
         <div v-else class="reader-empty">
           <mail-outlined />
@@ -708,6 +808,24 @@
           </a-form>
         </a-spin>
       </a-modal>
+      <a-drawer v-model:open="ruleLogOpen" width="620" title="规则记录">
+        <a-spin :spinning="ruleLogLoading">
+          <a-empty v-if="ruleLogs.length === 0" description="暂无规则命中记录" />
+          <a-timeline v-else>
+            <a-timeline-item v-for="item in ruleLogs" :key="item.id" :color="ruleLogColor(item.resultStatus)">
+              <div class="rule-log-item">
+                <div class="rule-log-title">
+                  <strong>{{ item.ruleName || '已删除规则' }}</strong>
+                  <a-tag>{{ ruleActionLabel(item.actionType) }}</a-tag>
+                  <a-tag :color="ruleLogColor(item.resultStatus)">{{ ruleLogStatusLabel(item.resultStatus) }}</a-tag>
+                </div>
+                <p>{{ item.resultMessage || '-' }}</p>
+                <small>{{ formatTime(item.createdAt) }} · {{ item.triggerType === 'sync' ? '自动收取' : '手动应用' }}</small>
+              </div>
+            </a-timeline-item>
+          </a-timeline>
+        </a-spin>
+      </a-drawer>
     </section>
   </AppLayout>
 </template>
@@ -720,6 +838,8 @@ import {
   AlignRightOutlined,
   BgColorsOutlined,
   BoldOutlined,
+  AuditOutlined,
+  BranchesOutlined,
   CheckOutlined,
   ClearOutlined,
   DeleteOutlined,
@@ -759,6 +879,7 @@ import {
   isCanceledRequest,
   mailFolderApi,
   messageApi,
+  threadApi,
   type Contact,
   type ComposeMode,
   type ComposeForwardAttachment,
@@ -769,12 +890,16 @@ import {
   type MailFolder,
   type MailMessage,
   type MailMessageDetail,
+  type MailRuleLog,
+  type MailThread,
+  type MailThreadDetail,
 } from '../api/client';
 import AppLayout from '../components/AppLayout.vue';
 
 type SystemFolderKey = 'inbox' | 'sent' | 'drafts' | 'all' | 'starred' | 'spam' | 'trash' | 'attachments';
 type ResizePane = 'folders' | 'list';
 type SearchField = 'all' | 'from' | 'subject' | 'body';
+type MailViewMode = 'messages' | 'threads';
 type MailListItem = MailMessage & {
   isDraft?: boolean;
   draft?: MailDraft;
@@ -805,9 +930,13 @@ let detailRequestController: AbortController | null = null;
 const accounts = ref<MailAccount[]>([]);
 const folders = ref<MailFolder[]>([]);
 const messages = ref<MailListItem[]>([]);
+const threads = ref<MailThread[]>([]);
 const contacts = ref<Contact[]>([]);
 const detail = ref<MailMessageDetail | null>(null);
+const threadDetail = ref<MailThreadDetail | null>(null);
 const selectedMessageId = ref<string | null>(null);
+const selectedThreadId = ref<string | null>(null);
+const mailViewMode = ref<MailViewMode>('messages');
 const activeSystemFolder = ref<SystemFolderKey>('inbox');
 const activeLocalFolderId = ref<string | null>(null);
 const page = ref(1);
@@ -817,6 +946,9 @@ const hasLoadedMessages = ref(false);
 const dateRange = ref<[Dayjs, Dayjs] | null>(null);
 const advancedFiltersOpen = ref(false);
 const folderModalOpen = ref(false);
+const ruleLogOpen = ref(false);
+const ruleLogLoading = ref(false);
+const ruleLogs = ref<MailRuleLog[]>([]);
 const editingFolderId = ref<string | null>(null);
 const composeOpen = ref(false);
 const composeMode = ref<ComposeMode>('new');
@@ -997,6 +1129,9 @@ const mailCountText = computed(() => {
   if (!hasLoadedMessages.value) {
     return '加载中...';
   }
+  if (mailViewMode.value === 'threads') {
+    return `${total.value} 个会话`;
+  }
   return activeSystemFolder.value === 'drafts' && !activeLocalFolderId.value ? `${total.value} 封草稿` : `${total.value} 封邮件`;
 });
 const composeSaveStatusText = computed(() => {
@@ -1027,6 +1162,9 @@ const mailEmptyTitle = computed(() => {
   if (activeSystemFolder.value === 'drafts') {
     return '草稿箱为空';
   }
+  if (mailViewMode.value === 'threads') {
+    return '没有匹配的会话';
+  }
   return '这个邮箱夹暂时没有邮件';
 });
 const mailEmptyDescription = computed(() => {
@@ -1042,8 +1180,16 @@ const mailEmptyDescription = computed(() => {
   if (activeSystemFolder.value === 'drafts') {
     return '开始写邮件后，未发送的内容会自动保存到这里。';
   }
+  if (mailViewMode.value === 'threads') {
+    return '可以先补齐会话，或切换筛选条件后再查看。';
+  }
   return '可以点击刷新重新检查，或切换到其他账号和文件夹。';
 });
+const currentListEmpty = computed(() => (
+  mailViewMode.value === 'threads'
+    ? threads.value.length === 0
+    : messages.value.length === 0
+));
 const folderModalTitle = computed(() => (editingFolderId.value ? '编辑文件夹' : '新增文件夹'));
 const folderModalOkText = computed(() => (editingFolderId.value ? '保存' : '创建'));
 const selectedMessageIds = computed(() => Array.from(selectedMessageSet.value));
@@ -1159,6 +1305,7 @@ async function loadMessages() {
   loading.value = true;
   try {
     if (!activeLocalFolderId.value && activeSystemFolder.value === 'drafts') {
+      mailViewMode.value = 'messages';
       const data = await draftApi.list({
         page: page.value,
         pageSize: pageSize.value,
@@ -1167,8 +1314,43 @@ async function loadMessages() {
       total.value = data.total;
       hasLoadedMessages.value = true;
       detail.value = null;
+      threadDetail.value = null;
+      selectedThreadId.value = null;
       selectedMessageId.value = null;
       selectedMessageSet.value = new Set();
+      return;
+    }
+    if (mailViewMode.value === 'threads') {
+      const data = await threadApi.list({
+        page: page.value,
+        pageSize: pageSize.value,
+        accountId: filters.accountId,
+        folderId: activeLocalFolderId.value || undefined,
+        systemFolder: activeLocalFolderId.value ? undefined : activeSystemFolder.value,
+        keyword: keywordQuery(),
+        from: fieldQuery('from'),
+        subject: fieldQuery('subject'),
+        body: fieldQuery('body'),
+        dateFrom: dateRange.value?.[0]?.format('YYYY-MM-DD'),
+        dateTo: dateRange.value?.[1]?.format('YYYY-MM-DD'),
+        hasAttachments: filters.hasAttachments || undefined,
+        isRead: filters.readState === 'all' ? undefined : filters.readState === 'read',
+        starred: filters.starred || undefined,
+      });
+      threads.value = data.items;
+      messages.value = [];
+      total.value = data.total;
+      hasLoadedMessages.value = true;
+      selectedMessageSet.value = new Set();
+      if (!threads.value.some((item) => item.id === selectedThreadId.value)) {
+        selectedThreadId.value = null;
+        threadDetail.value = null;
+        detail.value = null;
+        selectedMessageId.value = null;
+      }
+      if (!selectedThreadId.value && threads.value.length > 0) {
+        void openThread(threads.value[0].id);
+      }
       return;
     }
     const data = await messageApi.list({
@@ -1188,8 +1370,11 @@ async function loadMessages() {
       starred: filters.starred || undefined,
     });
     messages.value = data.items;
+    threads.value = [];
     total.value = data.total;
     hasLoadedMessages.value = true;
+    threadDetail.value = null;
+    selectedThreadId.value = null;
     pruneSelectedMessages();
     if (!messages.value.some((item) => item.id === selectedMessageId.value)) {
       selectedMessageId.value = null;
@@ -1209,6 +1394,8 @@ async function openDetail(id: string) {
   if (id.startsWith('draft:')) {
     selectedMessageId.value = id;
     detail.value = null;
+    threadDetail.value = null;
+    selectedThreadId.value = null;
     await openDraft(id.replace(/^draft:/, ''));
     return;
   }
@@ -1218,12 +1405,14 @@ async function openDetail(id: string) {
   selectedMessageId.value = id;
   detailLoading.value = true;
   detail.value = null;
+  threadDetail.value = null;
   try {
     const nextDetail = await messageApi.detail(id, { signal: controller.signal });
     if (detailRequestController !== controller || selectedMessageId.value !== id) {
       return;
     }
     detail.value = nextDetail;
+    selectedThreadId.value = nextDetail.threadId;
     messages.value = messages.value.map((item) => (
       item.id === id ? { ...item, isRead: true } : item
     ));
@@ -1237,6 +1426,20 @@ async function openDetail(id: string) {
       detailRequestController = null;
       detailLoading.value = false;
     }
+  }
+}
+
+async function openThread(id: string) {
+  selectedThreadId.value = id;
+  selectedMessageId.value = null;
+  detail.value = null;
+  detailLoading.value = true;
+  try {
+    threadDetail.value = await threadApi.detail(id);
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '获取会话详情失败');
+  } finally {
+    detailLoading.value = false;
   }
 }
 
@@ -1260,6 +1463,8 @@ function selectSystemFolder(key: SystemFolderKey) {
   activeSystemFolder.value = key;
   activeLocalFolderId.value = null;
   page.value = 1;
+  selectedThreadId.value = null;
+  threadDetail.value = null;
   void loadMessages();
 }
 
@@ -1297,6 +1502,8 @@ function handleBatchMenuClick(info: { key: string }) {
 function handleReaderActionMenu(info: { key: string }) {
   if (info.key === 'reply' || info.key === 'replyAll' || info.key === 'forward') {
     void openReply(info.key);
+  } else if (info.key === 'ruleLogs' && detail.value) {
+    void openMessageRuleLogs(detail.value.id);
   }
 }
 
@@ -1337,6 +1544,8 @@ async function runBatchAction(action: string) {
 function selectLocalFolder(id: string) {
   activeLocalFolderId.value = id;
   page.value = 1;
+  selectedThreadId.value = null;
+  threadDetail.value = null;
   void loadMessages();
 }
 
@@ -1348,7 +1557,41 @@ function selectAccount(accountId?: string) {
   }
   filters.accountId = accountId;
   page.value = 1;
+  selectedThreadId.value = null;
+  threadDetail.value = null;
   void loadMessages();
+}
+
+function onViewModeChanged() {
+  page.value = 1;
+  selectedMessageId.value = null;
+  selectedThreadId.value = null;
+  detail.value = null;
+  threadDetail.value = null;
+  selectedMessageSet.value = new Set();
+  void loadMessages();
+}
+
+async function rebuildThreads(scope: 'empty' | 'all') {
+  try {
+    const result = await threadApi.rebuild({ scope, accountId: filters.accountId });
+    message.success(`已处理 ${result.processedCount} 封邮件，共 ${result.threadCount} 个会话`);
+    await loadMessages();
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '重建会话失败');
+  }
+}
+
+async function openMessageRuleLogs(messageId: string) {
+  ruleLogOpen.value = true;
+  ruleLogLoading.value = true;
+  try {
+    ruleLogs.value = (await messageApi.ruleLogs(messageId)).items;
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '获取规则记录失败');
+  } finally {
+    ruleLogLoading.value = false;
+  }
 }
 
 function openFolderCreate() {
@@ -1427,10 +1670,11 @@ function applyComposeContext(context: Partial<ComposeContext> | undefined) {
 }
 
 function draftToListItem(draft: MailDraft): MailListItem {
-  return {
-    id: `draft:${draft.id}`,
-    accountId: draft.accountId,
-    localFolderId: null,
+	return {
+		id: `draft:${draft.id}`,
+		accountId: draft.accountId,
+		threadId: null,
+		localFolderId: null,
     subject: draft.subject || '无主题草稿',
     from: '草稿',
     to: draft.to,
@@ -2298,6 +2542,58 @@ function mailPreview(messageItem: MailMessage) {
   return `收件人 ${recipients}`;
 }
 
+function threadInitial(thread: MailThread) {
+  const first = thread.participants[0] || thread.latestMessage.from || thread.subject || '?';
+  return displayAddressName(parseContactAddress(first)).trim().slice(0, 1).toUpperCase() || '?';
+}
+
+function threadPreview(thread: MailThread) {
+  const from = displayAddressName(parseContactAddress(thread.latestMessage.from || ''));
+  return `${from} · ${thread.latestMessage.subject || '无主题'}`;
+}
+
+function threadParticipantsText(thread: MailThread) {
+  const names = thread.participants
+    .map((item) => displayAddressName(parseContactAddress(item)))
+    .filter(Boolean);
+  return names.slice(0, 4).join(', ') || '暂无参与人';
+}
+
+function ruleLogColor(status: string) {
+  switch (status) {
+    case 'failed':
+      return 'red';
+    case 'skipped':
+      return 'orange';
+    default:
+      return 'green';
+  }
+}
+
+function ruleLogStatusLabel(status: string) {
+  switch (status) {
+    case 'failed':
+      return '失败';
+    case 'skipped':
+      return '跳过';
+    default:
+      return '已执行';
+  }
+}
+
+function ruleActionLabel(action: string) {
+  switch (action) {
+    case 'mark_read':
+      return '标记已读';
+    case 'star':
+      return '加星标';
+    case 'mark_spam':
+      return '标记垃圾邮件';
+    default:
+      return '移动文件夹';
+  }
+}
+
 function parseContactAddresses(values: string[]) {
   return values.map(parseContactAddress).filter((item) => item.name || item.email);
 }
@@ -3037,6 +3333,16 @@ function looksLikeEmail(value: string) {
   color: var(--muted-color);
 }
 
+.mail-state-chip.neutral {
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-muted);
+  color: var(--muted-color);
+}
+
+.thread-list-item {
+  padding-left: 16px;
+}
+
 .mail-pagination {
   flex: none;
   margin: 12px 16px 16px;
@@ -3133,6 +3439,11 @@ function looksLikeEmail(value: string) {
   border: 1px solid var(--border-subtle);
 }
 
+.reader-status-chip.accent {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
 .mail-subject {
   min-width: 0;
   margin: 0 0 10px;
@@ -3141,6 +3452,100 @@ function looksLikeEmail(value: string) {
   font-weight: 700;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.thread-reader {
+  display: grid;
+  gap: 16px;
+}
+
+.thread-timeline {
+  display: grid;
+  gap: 10px;
+}
+
+.thread-message-card {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-bg);
+  color: var(--text-color);
+  cursor: pointer;
+  text-align: left;
+}
+
+.thread-message-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-subtle));
+  background: var(--accent-tint);
+}
+
+.thread-message-avatar {
+  display: inline-flex;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--accent-tint);
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
+.thread-message-main {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.thread-message-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.thread-message-top strong,
+.thread-message-subject {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-message-top span {
+  flex: none;
+  color: var(--muted-color);
+  font-size: 12px;
+}
+
+.thread-message-subject {
+  color: var(--heading-color);
+  font-weight: 700;
+}
+
+.rule-log-item {
+  display: grid;
+  gap: 5px;
+}
+
+.rule-log-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rule-log-item p {
+  margin: 0;
+  color: var(--text-color);
+}
+
+.rule-log-item small {
+  color: var(--muted-color);
 }
 
 .reader-time {

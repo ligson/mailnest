@@ -148,6 +148,7 @@ func messageListPayload(message storage.MailMessage) map[string]any {
 	return map[string]any{
 		"id":             strconv.FormatInt(message.ID, 10),
 		"accountId":      strconv.FormatInt(message.AccountID, 10),
+		"threadId":       nullableInt64(message.ThreadID),
 		"localFolderId":  nullableInt64(message.LocalFolderID),
 		"subject":        nullableString(message.Subject),
 		"from":           nullableString(message.FromAddr),
@@ -220,6 +221,64 @@ func mailRulePayload(rule storage.MailRule) map[string]any {
 		"targetFolderId": nullableRuleTargetFolderID(rule.TargetFolderID),
 		"sortOrder":      rule.SortOrder,
 		"conditions":     conditions,
+		"hitCount":       rule.HitCount,
+		"lastHitAt":      nullableTime(rule.LastHitAt),
+		"lastResult":     nullableString(rule.LastResult),
+	}
+}
+
+func mailThreadPayload(item storage.MailThreadListItem) map[string]any {
+	return map[string]any{
+		"id":             strconv.FormatInt(item.Thread.ID, 10),
+		"accountId":      strconv.FormatInt(item.Thread.AccountID, 10),
+		"rootMessageId":  nullableInt64(item.Thread.RootMessageID),
+		"subject":        item.Thread.Subject,
+		"messageCount":   item.Thread.MessageCount,
+		"unreadCount":    item.Thread.UnreadCount,
+		"hasAttachments": item.Thread.HasAttachments,
+		"lastMessageAt":  nullableTime(item.Thread.LastMessageAt),
+		"participants":   item.Participants,
+		"latestMessage":  messageListPayload(item.LatestMessage),
+	}
+}
+
+func mailThreadDetailPayload(thread storage.MailThread, messages []storage.MailMessage) map[string]any {
+	items := make([]map[string]any, 0, len(messages))
+	for _, message := range messages {
+		items = append(items, messageListPayload(message))
+	}
+	return map[string]any{
+		"id":             strconv.FormatInt(thread.ID, 10),
+		"accountId":      strconv.FormatInt(thread.AccountID, 10),
+		"rootMessageId":  nullableInt64(thread.RootMessageID),
+		"subject":        thread.Subject,
+		"messageCount":   thread.MessageCount,
+		"unreadCount":    thread.UnreadCount,
+		"hasAttachments": thread.HasAttachments,
+		"lastMessageAt":  nullableTime(thread.LastMessageAt),
+		"messages":       items,
+	}
+}
+
+func mailRuleLogPayload(item storage.MailRuleLog) map[string]any {
+	var conditionSnapshot any = []any{}
+	if strings.TrimSpace(item.ConditionSnapshotJSON) != "" {
+		_ = json.Unmarshal([]byte(item.ConditionSnapshotJSON), &conditionSnapshot)
+	}
+	return map[string]any{
+		"id":                strconv.FormatInt(item.ID, 10),
+		"ruleId":            nullableInt64(item.RuleID),
+		"ruleName":          item.RuleName,
+		"messageId":         strconv.FormatInt(item.MessageID, 10),
+		"messageSubject":    nullableString(item.MessageSubject),
+		"matched":           item.Matched,
+		"actionType":        item.ActionType,
+		"targetFolderId":    nullableInt64(item.TargetFolderID),
+		"triggerType":       item.TriggerType,
+		"conditionSnapshot": conditionSnapshot,
+		"resultStatus":      item.ResultStatus,
+		"resultMessage":     item.ResultMessage,
+		"createdAt":         item.CreatedAt,
 	}
 }
 

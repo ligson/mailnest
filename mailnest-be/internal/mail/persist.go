@@ -112,7 +112,12 @@ func (s *Service) saveMessage(userID, accountID int64, folder string, fetched Fe
 			return false, err
 		}
 	}
-	if _, err := s.ApplyRulesToMessage(userID, message, false); err != nil {
+	thread, err := s.ResolveThreadForMessage(userID, message)
+	if err != nil {
+		return false, err
+	}
+	message.ThreadID = sql.NullInt64{Int64: thread.ID, Valid: true}
+	if _, err := s.ApplyRulesToMessageWithTrigger(userID, message, false, "sync"); err != nil {
 		return false, err
 	}
 	return inserted, nil

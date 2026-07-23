@@ -32,8 +32,15 @@
               </a-tag>
             </div>
           </template>
+          <template v-if="column.key === 'hits'">
+            <div class="rule-hit-cell">
+              <strong>{{ record.hitCount || 0 }}</strong>
+              <span>{{ record.lastHitAt ? formatShortTime(record.lastHitAt) : '暂无命中' }}</span>
+            </div>
+          </template>
           <template v-if="column.key === 'actions'">
             <a-space>
+              <a-button type="link" size="small" @click="openRuleLogs(record)">记录</a-button>
               <a-button type="link" size="small" @click="openEdit(record)">编辑</a-button>
               <a-button type="link" danger size="small" @click="deleteRule(record)">删除</a-button>
             </a-space>
@@ -132,6 +139,28 @@
           </template>
         </a-list>
       </a-drawer>
+
+      <a-drawer v-model:open="logOpen" width="720" title="规则命中记录">
+        <a-spin :spinning="logLoading">
+          <a-empty v-if="ruleLogs.length === 0" description="暂无规则命中记录" />
+          <a-list v-else class="rule-log-list" :data-source="ruleLogs" size="small">
+            <template #renderItem="{ item }">
+              <a-list-item>
+                <div class="rule-log-row">
+                  <div>
+                    <strong>{{ item.messageSubject || '无主题' }}</strong>
+                    <p>{{ item.resultMessage || '-' }}</p>
+                  </div>
+                  <div class="rule-log-side">
+                    <a-tag :color="ruleLogColor(item.resultStatus)">{{ ruleLogStatusLabel(item.resultStatus) }}</a-tag>
+                    <span>{{ formatShortTime(item.createdAt) }}</span>
+                  </div>
+                </div>
+              </a-list-item>
+            </template>
+          </a-list>
+        </a-spin>
+      </a-drawer>
     </section>
   </AppLayout>
 </template>
@@ -142,9 +171,11 @@ import { Modal, message, type TableColumnsType } from 'ant-design-vue';
 import {
   mailFolderApi,
   mailRuleApi,
+  ruleLogApi,
   type MailFolder,
   type MailRule,
   type MailRuleCondition,
+  type MailRuleLog,
 } from '../api/client';
 import AppLayout from '../components/AppLayout.vue';
 
@@ -155,6 +186,9 @@ const editingId = ref('');
 const previewOpen = ref(false);
 const folders = ref<MailFolder[]>([]);
 const rules = ref<MailRule[]>([]);
+const ruleLogs = ref<MailRuleLog[]>([]);
+const logOpen = ref(false);
+const logLoading = ref(false);
 const applyScope = ref<'unfiled' | 'filtered' | 'all'>('unfiled');
 const preview = reactive<{ matchedCount: number; samples: Array<{ id: string; subject: string | null; from: string | null }> }>({
   matchedCount: 0,
@@ -177,8 +211,9 @@ const columns: TableColumnsType<MailRule> = [
   { title: '状态', key: 'enabled', width: 90 },
   { title: '动作', key: 'targetFolderId', width: 160 },
   { title: '条件', key: 'conditions' },
+  { title: '命中', key: 'hits', width: 120 },
   { title: '排序', dataIndex: 'sortOrder', key: 'sortOrder', width: 80 },
-  { title: '操作', key: 'actions', width: 120 },
+  { title: '操作', key: 'actions', width: 160 },
 ];
 
 onMounted(refresh);
@@ -278,8 +313,21 @@ async function applyRules() {
   try {
     const result = await mailRuleApi.apply({ scope: applyScope.value });
     message.success(`已归档 ${result.appliedCount} 封邮件`);
+    await refresh();
   } catch (error) {
     message.error(error instanceof Error ? error.message : '应用规则失败');
+  }
+}
+
+async function openRuleLogs(rule: MailRule) {
+  logOpen.value = true;
+  logLoading.value = true;
+  try {
+    ruleLogs.value = (await ruleLogApi.list({ ruleId: rule.id, pageSize: 50 })).items;
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '获取规则记录失败');
+  } finally {
+    logLoading.value = false;
   }
 }
 
@@ -341,6 +389,35 @@ function actionLabel(rule: MailRule) {
   }
 }
 
+function formatShortTime(value: string | null) {
+  if (!value) {
+    return '-';
+  }
+  return new Date(value).toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function ruleLogColor(status: string) {
+  switch (status) {
+    case 'failed':
+      return 'red';
+    case 'skipped':
+      return 'orange';
+    default:
+      return 'green';
+  }
+}
+
+function ruleLogStatusLabel(status: string) {
+  switch (status) {
+    case 'failed':
+      return '失败';
+    case 'skipped':
+      return '跳过';
+    default:
+      return '已执行';
+  }
+}
+
 function conditionLabel(condition: MailRuleCondition) {
   const fieldMap: Record<string, string> = {
     from: '发件人',
@@ -379,6 +456,48 @@ function conditionLabel(condition: MailRuleCondition) {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+
+.rule-hit-cell {
+  display: grid;
+  gap: 2px;
+}
+
+.rule-hit-cell span {
+  color: var(--muted-color);
+  font-size: 12px;
+}
+
+.rule-log-list :deep(.ant-list-item) {
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.rule-log-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  width: 100%;
+}
+
+.rule-log-row strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rule-log-row p {
+  margin: 4px 0 0;
+  color: var(--muted-color);
+}
+
+.rule-log-side {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  color: var(--muted-color);
+  font-size: 12px;
 }
 
 .rule-condition-header {

@@ -13,7 +13,7 @@ func (s *Store) InsertMailMessageIfNew(params CreateMailMessageParams) (MailMess
 		s.db.insertIgnoreSQL(
 			"mail_messages",
 			[]string{
-				"user_id", "account_id", "folder", "imap_uid", "message_id", "subject", "from_addr", "to_addrs", "cc_addrs",
+				"user_id", "account_id", "thread_id", "folder", "imap_uid", "message_id", "subject", "from_addr", "to_addrs", "cc_addrs",
 				"sent_at", "received_at", "has_attachments", "text_body_path", "html_body_path", "raw_path", "search_text",
 				"in_reply_to", "references_header", "source_message_id", "compose_mode",
 			},
@@ -21,6 +21,7 @@ func (s *Store) InsertMailMessageIfNew(params CreateMailMessageParams) (MailMess
 		),
 		params.UserID,
 		params.AccountID,
+		nullInt64Value(params.ThreadID),
 		params.Folder,
 		params.IMAPUID,
 		nullIfEmpty(params.MessageID),
@@ -59,7 +60,7 @@ func (s *Store) InsertMailMessageIfNew(params CreateMailMessageParams) (MailMess
 
 func (s *Store) FindMailMessageByUID(userID, accountID int64, folder, uid string) (MailMessage, error) {
 	row := s.db.QueryRow(
-		`SELECT m.id, m.user_id, m.account_id, m.local_folder_id, m.folder, m.imap_uid, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs,
+		`SELECT m.id, m.user_id, m.account_id, m.thread_id, m.local_folder_id, m.folder, m.imap_uid, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs,
 			m.sent_at, m.received_at, m.has_attachments, m.text_body_path, m.html_body_path, m.raw_path, m.search_text,
 			m.in_reply_to, m.references_header, m.source_message_id, m.compose_mode,
 			COALESCE(ms.is_read, 0), COALESCE(ms.starred, 0), COALESCE(ms.is_spam, 0), ms.spam_at, ms.deleted_at, m.created_at, m.updated_at
@@ -185,7 +186,7 @@ func (s *Store) ListMailMessagesByQuery(query ListMailMessagesQuery) ([]MailMess
 	}
 	args = append(args, query.Limit, query.Offset)
 
-	selectSQL := `SELECT m.id, m.user_id, m.account_id, m.local_folder_id, m.folder, m.imap_uid, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs,
+	selectSQL := `SELECT m.id, m.user_id, m.account_id, m.thread_id, m.local_folder_id, m.folder, m.imap_uid, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs,
 			m.sent_at, m.received_at, m.has_attachments, m.text_body_path, m.html_body_path, m.raw_path, m.search_text,
 			m.in_reply_to, m.references_header, m.source_message_id, m.compose_mode,
 			COALESCE(ms.is_read, 0), COALESCE(ms.starred, 0), COALESCE(ms.is_spam, 0), ms.spam_at, ms.deleted_at, m.created_at, m.updated_at
@@ -195,7 +196,7 @@ func (s *Store) ListMailMessagesByQuery(query ListMailMessagesQuery) ([]MailMess
 		LIMIT ? OFFSET ?`
 	if query.SummaryOnly {
 		// 邮件列表默认只读摘要字段，详情页再读取正文文件，避免首屏被大正文拖慢。
-		selectSQL = `SELECT m.id, m.user_id, m.account_id, m.local_folder_id, m.folder, m.imap_uid, m.subject, m.from_addr, m.to_addrs,
+		selectSQL = `SELECT m.id, m.user_id, m.account_id, m.thread_id, m.local_folder_id, m.folder, m.imap_uid, m.subject, m.from_addr, m.to_addrs,
 			m.sent_at, m.received_at, m.has_attachments, COALESCE(ms.is_read, 0), COALESCE(ms.starred, 0), COALESCE(ms.is_spam, 0), ms.spam_at, ms.deleted_at, m.created_at, m.updated_at
 		FROM mail_messages m
 		LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id ` + where + `
@@ -230,7 +231,7 @@ func (s *Store) ListMailMessagesByQuery(query ListMailMessagesQuery) ([]MailMess
 
 func (s *Store) FindMailMessageByID(userID, id int64) (MailMessage, error) {
 	row := s.db.QueryRow(
-		`SELECT m.id, m.user_id, m.account_id, m.local_folder_id, m.folder, m.imap_uid, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs,
+		`SELECT m.id, m.user_id, m.account_id, m.thread_id, m.local_folder_id, m.folder, m.imap_uid, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs,
 			m.sent_at, m.received_at, m.has_attachments, m.text_body_path, m.html_body_path, m.raw_path, m.search_text,
 			m.in_reply_to, m.references_header, m.source_message_id, m.compose_mode,
 			COALESCE(ms.is_read, 0), COALESCE(ms.starred, 0), COALESCE(ms.is_spam, 0), ms.spam_at, ms.deleted_at, m.created_at, m.updated_at
@@ -248,7 +249,7 @@ func (s *Store) ListMailMessagesWithRawContent(limit int) ([]MailMessage, error)
 		limit = 1000
 	}
 	rows, err := s.db.Query(
-		`SELECT m.id, m.user_id, m.account_id, m.local_folder_id, m.folder, m.imap_uid, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs,
+		`SELECT m.id, m.user_id, m.account_id, m.thread_id, m.local_folder_id, m.folder, m.imap_uid, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs,
 			m.sent_at, m.received_at, m.has_attachments, m.text_body_path, m.html_body_path, m.raw_path, m.search_text,
 			m.in_reply_to, m.references_header, m.source_message_id, m.compose_mode,
 			COALESCE(ms.is_read, 0), COALESCE(ms.starred, 0), COALESCE(ms.is_spam, 0), ms.spam_at, ms.deleted_at, m.created_at, m.updated_at
@@ -625,6 +626,7 @@ func scanMailMessage(scanner interface {
 		&message.ID,
 		&message.UserID,
 		&message.AccountID,
+		&message.ThreadID,
 		&message.LocalFolderID,
 		&message.Folder,
 		&message.IMAPUID,
@@ -677,6 +679,7 @@ func scanMailMessageSummary(scanner interface {
 		&message.ID,
 		&message.UserID,
 		&message.AccountID,
+		&message.ThreadID,
 		&message.LocalFolderID,
 		&message.Folder,
 		&message.IMAPUID,

@@ -2,6 +2,9 @@ package mail
 
 import (
 	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log"
 	"strconv"
 	"strings"
 
@@ -17,6 +20,10 @@ const (
 )
 
 func (s *Service) ApplyRulesToMessage(userID int64, message storage.MailMessage, overwrite bool) (bool, error) {
+	return s.ApplyRulesToMessageWithTrigger(userID, message, overwrite, "manual")
+}
+
+func (s *Service) ApplyRulesToMessageWithTrigger(userID int64, message storage.MailMessage, overwrite bool, triggerType string) (bool, error) {
 	rules, err := s.store.ListMailRules(userID, true)
 	if err != nil {
 		return false, err
@@ -29,8 +36,15 @@ func (s *Service) ApplyRulesToMessage(userID int64, message storage.MailMessage,
 		}
 		changed, err := s.applyRuleAction(userID, message, rule, overwrite)
 		if err != nil {
+			s.logRuleResult(userID, message, rule, triggerType, "failed", sanitizeRuleError(err))
 			return applied, err
 		}
+		status := "applied"
+		resultMessage := ruleActionResultMessage(rule, changed)
+		if !changed {
+			status = "skipped"
+		}
+		s.logRuleResult(userID, message, rule, triggerType, status, resultMessage)
 		applied = applied || changed
 		if rule.StopOnMatch {
 			break
@@ -43,13 +57,24 @@ func (s *Service) applyRuleAction(userID int64, message storage.MailMessage, rul
 	switch strings.ToLower(strings.TrimSpace(rule.ActionType)) {
 	case "mark_read":
 		value := true
-		return true, s.store.UpsertMailMessageState(userID, message.ID, &value, nil, nil, nil)
+		if err := s.store.UpsertMailMessageState(userID, message.ID, &value, nil, nil, nil); err != nil {
+			return false, err
+		}
+		s.refreshMessageThreadStats(userID, message)
+		return true, nil
 	case "star":
 		value := true
-		return true, s.store.UpsertMailMessageState(userID, message.ID, nil, &value, nil, nil)
+		if err := s.store.UpsertMailMessageState(userID, message.ID, nil, &value, nil, nil); err != nil {
+			return false, err
+		}
+		return true, nil
 	case "mark_spam":
 		value := true
-		return true, s.store.UpsertMailMessageState(userID, message.ID, nil, nil, &value, nil)
+		if err := s.store.UpsertMailMessageState(userID, message.ID, nil, nil, &value, nil); err != nil {
+			return false, err
+		}
+		s.refreshMessageThreadStats(userID, message)
+		return true, nil
 	default:
 		if message.LocalFolderID.Valid && !overwrite {
 			return false, nil
@@ -71,7 +96,7 @@ func (s *Service) ApplyRules(userID int64, scope RuleApplyScope) (int, error) {
 	overwrite := scope == RuleApplyScopeAll
 	count := 0
 	for _, message := range messages {
-		applied, err := s.ApplyRulesToMessage(userID, message, overwrite)
+		applied, err := s.ApplyRulesToMessageWithTrigger(userID, message, overwrite, "manual")
 		if err != nil {
 			return count, err
 		}
@@ -80,6 +105,64 @@ func (s *Service) ApplyRules(userID int64, scope RuleApplyScope) (int, error) {
 		}
 	}
 	return count, nil
+}
+
+func (s *Service) logRuleResult(userID int64, message storage.MailMessage, rule storage.MailRule, triggerType, status, resultMessage string) {
+	snapshot, err := json.Marshal(rule.Conditions)
+	if err != nil {
+		snapshot = []byte("[]")
+	}
+	if _, err := s.store.CreateMailRuleLog(storage.CreateMailRuleLogParams{
+		UserID:                userID,
+		RuleID:                rule.ID,
+		RuleName:              rule.Name,
+		MessageID:             message.ID,
+		Matched:               true,
+		ActionType:            rule.ActionType,
+		TargetFolderID:        rule.TargetFolderID,
+		TriggerType:           triggerType,
+		ConditionSnapshotJSON: string(snapshot),
+		ResultStatus:          status,
+		ResultMessage:         resultMessage,
+	}); err != nil {
+		log.Printf("记录规则命中失败 userID=%d messageID=%d ruleID=%d err=%v", userID, message.ID, rule.ID, err)
+	}
+}
+
+func (s *Service) refreshMessageThreadStats(userID int64, message storage.MailMessage) {
+	if !message.ThreadID.Valid {
+		return
+	}
+	if err := s.store.RefreshMailThreadStats(userID, message.ThreadID.Int64); err != nil {
+		log.Printf("刷新邮件线程统计失败 userID=%d threadID=%d err=%v", userID, message.ThreadID.Int64, err)
+	}
+}
+
+func ruleActionResultMessage(rule storage.MailRule, changed bool) string {
+	if !changed {
+		return "规则命中，但邮件已有本地文件夹，已跳过移动"
+	}
+	switch strings.ToLower(strings.TrimSpace(rule.ActionType)) {
+	case "mark_read":
+		return "已标记为已读"
+	case "star":
+		return "已加星标"
+	case "mark_spam":
+		return "已标记为垃圾邮件"
+	default:
+		return "已移动到目标文件夹"
+	}
+}
+
+func sanitizeRuleError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.TrimSpace(err.Error())
+	if len([]rune(message)) > 200 {
+		return string([]rune(message)[:200])
+	}
+	return fmt.Sprintf("执行失败：%s", message)
 }
 
 func (s *Service) PreviewRule(userID int64, rule storage.MailRule, limit int) (int, []storage.MailMessage, error) {

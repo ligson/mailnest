@@ -318,6 +318,7 @@ database:
 - `id`
 - `user_id`
 - `account_id`
+- `thread_id`
 - `local_folder_id`
 - `folder`
 - `imap_uid`
@@ -341,6 +342,7 @@ database:
 - `updated_at`
 
 建议为 `account_id + folder + imap_uid` 建唯一约束，同时尽量保存 `message_id` 作为辅助去重依据。回复与转发阶段新增的线程字段必须使用兼容默认值迁移，避免影响已有邮件数据。
+`thread_id` 指向邮件会话，历史邮件可通过重建接口补齐；字段允许为空，保证旧数据升级时不阻塞服务启动。
 
 ### 5.4 mail_attachments
 
@@ -407,7 +409,42 @@ database:
 - `operator`
 - `value`
 
-### 5.9 mail_sync_jobs
+### 5.9 mail_threads
+
+- `id`
+- `user_id`
+- `account_id`
+- `root_message_id`
+- `subject`
+- `normalized_subject`
+- `message_count`
+- `unread_count`
+- `has_attachments`
+- `last_message_at`
+- `created_at`
+- `updated_at`
+
+`mail_threads` 以 `user_id` 做硬隔离；标准邮件头优先归并，同主题弱聚合限制在同一邮箱账号内，避免不同账号的相同主题被误合并。建议索引 `user_id + last_message_at`、`user_id + account_id + normalized_subject`。
+
+### 5.10 mail_rule_logs
+
+- `id`
+- `user_id`
+- `rule_id`
+- `rule_name`
+- `message_id`
+- `matched`
+- `action_type`
+- `target_folder_id`
+- `trigger_type`
+- `condition_snapshot_json`
+- `result_status`
+- `result_message`
+- `created_at`
+
+规则日志记录同步或手动应用规则时的命中、跳过和失败结果。`rule_name` 和 `condition_snapshot_json` 保存当时快照，即使后续删除或修改规则，历史记录仍可用于排障。建议索引 `user_id + created_at`、`user_id + message_id + created_at`、`user_id + rule_id + created_at`。
+
+### 5.11 mail_sync_jobs
 
 - `id`
 - `user_id`
@@ -419,7 +456,7 @@ database:
 - `new_message_count`
 - `error_message`
 
-### 5.10 mail_message_states
+### 5.12 mail_message_states
 
 - `id`
 - `user_id`
@@ -436,7 +473,7 @@ database:
 
 `mail_message_states` 保存 Mail Nest 本地阅读和整理状态，不回写远端 IMAP。建议对 `user_id + message_id` 建唯一约束，批量操作时使用 upsert 保证幂等。
 
-### 5.11 mail_sync_job_events
+### 5.13 mail_sync_job_events
 
 - `id`
 - `job_id`
@@ -448,7 +485,7 @@ database:
 
 同步事件日志用于排障，`phase` 建议覆盖连接、目录列表、拉取、解析、入库、规则执行和服务器清理等阶段。日志内容必须脱敏。
 
-### 5.12 附件中心索引
+### 5.14 附件中心索引
 
 附件中心复用 `mail_attachments` 表，不单独复制附件文件。建议增加以下索引：
 

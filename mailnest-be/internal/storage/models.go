@@ -78,6 +78,7 @@ type MailMessage struct {
 	ID              int64
 	UserID          int64
 	AccountID       int64
+	ThreadID        sql.NullInt64
 	LocalFolderID   sql.NullInt64
 	Folder          string
 	IMAPUID         string
@@ -104,6 +105,27 @@ type MailMessage struct {
 	DeletedAt       sql.NullTime
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+}
+
+type MailThread struct {
+	ID                int64
+	UserID            int64
+	AccountID         int64
+	RootMessageID     sql.NullInt64
+	Subject           string
+	NormalizedSubject string
+	MessageCount      int
+	UnreadCount       int
+	HasAttachments    bool
+	LastMessageAt     sql.NullTime
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type MailThreadListItem struct {
+	Thread        MailThread
+	LatestMessage MailMessage
+	Participants  []string
 }
 
 type MailDraft struct {
@@ -179,6 +201,9 @@ type MailRule struct {
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	Conditions     []MailRuleCondition
+	HitCount       int
+	LastHitAt      sql.NullTime
+	LastResult     sql.NullString
 }
 
 type MailRuleCondition struct {
@@ -189,9 +214,27 @@ type MailRuleCondition struct {
 	Value    string
 }
 
+type MailRuleLog struct {
+	ID                    int64
+	UserID                int64
+	RuleID                sql.NullInt64
+	RuleName              string
+	MessageID             int64
+	MessageSubject        sql.NullString
+	Matched               bool
+	ActionType            string
+	TargetFolderID        sql.NullInt64
+	TriggerType           string
+	ConditionSnapshotJSON string
+	ResultStatus          string
+	ResultMessage         string
+	CreatedAt             time.Time
+}
+
 type CreateMailMessageParams struct {
 	UserID          int64
 	AccountID       int64
+	ThreadID        sql.NullInt64
 	Folder          string
 	IMAPUID         string
 	MessageID       string
@@ -210,6 +253,16 @@ type CreateMailMessageParams struct {
 	References      string
 	SourceMessageID sql.NullInt64
 	ComposeMode     string
+}
+
+type CreateMailThreadParams struct {
+	UserID            int64
+	AccountID         int64
+	RootMessageID     sql.NullInt64
+	Subject           string
+	NormalizedSubject string
+	LastMessageAt     sql.NullTime
+	HasAttachments    bool
 }
 
 type UpdateMailMessageContentParams struct {
@@ -271,6 +324,38 @@ type ListMailMessagesQuery struct {
 	SummaryOnly    bool
 }
 
+type ListMailThreadsQuery struct {
+	UserID         int64
+	AccountID      int64
+	FolderID       int64
+	SystemFolder   string
+	Keyword        string
+	From           string
+	Subject        string
+	Body           string
+	DateFrom       sql.NullTime
+	DateTo         sql.NullTime
+	HasAttachments sql.NullBool
+	IncludeDeleted bool
+	OnlyDeleted    bool
+	IsRead         sql.NullBool
+	Starred        sql.NullBool
+	IsSpam         sql.NullBool
+	Limit          int
+	Offset         int
+}
+
+type RebuildThreadsParams struct {
+	UserID    int64
+	AccountID int64
+	Scope     string
+}
+
+type RebuildThreadsResult struct {
+	ProcessedCount int
+	ThreadCount    int
+}
+
 type CreateMailAttachmentParams struct {
 	UserID      int64
 	MessageID   int64
@@ -325,6 +410,30 @@ type CreateMailRuleConditionParams struct {
 	Field    string
 	Operator string
 	Value    string
+}
+
+type CreateMailRuleLogParams struct {
+	UserID                int64
+	RuleID                int64
+	RuleName              string
+	MessageID             int64
+	Matched               bool
+	ActionType            string
+	TargetFolderID        int64
+	TriggerType           string
+	ConditionSnapshotJSON string
+	ResultStatus          string
+	ResultMessage         string
+}
+
+type ListMailRuleLogsQuery struct {
+	UserID       int64
+	MessageID    int64
+	RuleID       int64
+	ResultStatus string
+	TriggerType  string
+	Limit        int
+	Offset       int
 }
 
 type MessageBatchActionParams struct {

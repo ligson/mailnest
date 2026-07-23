@@ -22,11 +22,10 @@
 
 线程归并优先级从高到低：
 
-1. `References` 中的任意 Message-ID 已存在本用户邮件中，则加入最靠近根部的已知线程。
-2. `In-Reply-To` 指向的 Message-ID 已存在本用户邮件中，则加入该邮件线程。
-3. 当前邮件的 `Message-ID` 已被其他邮件引用，则复用已有线程。
-4. Mail Nest 内发起的回复或转发优先使用 `source_message_id` 对应邮件的线程。
-5. 标准线程头缺失时，使用规范化主题作为弱聚合条件；弱聚合默认限制在同一用户、同一邮箱账号内，避免把不同账号或无关邮件误合并。
+1. Mail Nest 内发起的回复或转发优先使用 `source_message_id` 对应邮件的线程。
+2. `References` 或 `In-Reply-To` 中的 Message-ID 已存在本用户邮件中，则加入已知线程。
+3. 当前邮件的 `Message-ID` 作为候选参与匹配，避免重建时遗漏已有引用关系。
+4. 标准线程头缺失时，使用规范化主题作为弱聚合条件；弱聚合默认限制在同一用户、同一邮箱账号内，避免把不同账号或无关邮件误合并。
 
 主题规范化规则：
 
@@ -268,7 +267,19 @@
 
 - `hitCount`
 - `lastHitAt`
-- `lastResultStatus`
+- `lastResult`
+
+### 2.4.1 已实现接口字段
+
+当前后端已实现：
+
+- `GET /api/v1/threads`
+- `GET /api/v1/threads/{id}`
+- `POST /api/v1/threads/rebuild`
+- `GET /api/v1/rule-logs`
+- `GET /api/v1/messages/{id}/rule-logs`
+
+邮件列表和详情新增 `threadId`；规则列表新增 `hitCount`、`lastHitAt` 和 `lastResult`。
 
 ### 2.5 前端交互
 
@@ -344,7 +355,7 @@
 
 - `rtk npm run build` 类型检查。
 - 邮件/会话视图切换不破坏现有邮件列表。
-- 规则页日志弹窗和邮件详情规则记录入口可用。
+- 规则页日志抽屉和邮件详情规则记录入口可用。
 
 生产验证：
 

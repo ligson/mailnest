@@ -761,6 +761,7 @@ JSON 请求：
       {
         "id": "message-id",
         "accountId": "account-id",
+        "threadId": "thread-id",
         "subject": "欢迎使用 Mail Nest",
         "from": "sender@example.com",
         "to": ["demo@example.com"],
@@ -789,6 +790,7 @@ JSON 请求：
   "data": {
     "id": "message-id",
     "accountId": "account-id",
+    "threadId": "thread-id",
     "subject": "欢迎使用 Mail Nest",
     "from": "sender@example.com",
     "to": ["demo@example.com"],
@@ -994,6 +996,7 @@ JSON 请求：
 - `accountId`：按邮箱账号过滤。
 - `folderId`：按本地文件夹过滤。
 - `systemFolder`：系统文件夹，支持 `inbox`、`sent`、`all`、`starred`、`spam`、`trash`、`attachments`。
+- 列表和详情中的 `threadId` 表示邮件所属会话，可能为空；新同步邮件和已重建历史邮件会自动写入。
 
 ### 7.7 邮件放入本地文件夹
 
@@ -1079,7 +1082,140 @@ JSON 请求：
 }
 ```
 
-### 7.10 附件中心列表
+### 7.10 邮件会话
+
+#### 7.10.1 会话列表
+
+`GET /api/v1/threads`
+
+查询参数与邮件列表保持一致，支持 `accountId`、`folderId`、`systemFolder`、`keyword`、`from`、`subject`、`body`、`dateFrom`、`dateTo`、`hasAttachments`、`isRead`、`starred`、`page`、`pageSize`。
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "获取成功",
+  "httpCode": 200,
+  "data": {
+    "items": [
+      {
+        "id": "thread-id",
+        "accountId": "account-id",
+        "rootMessageId": "message-id",
+        "subject": "项目通知",
+        "messageCount": 4,
+        "unreadCount": 1,
+        "hasAttachments": true,
+        "lastMessageAt": "2026-07-23T16:20:00+08:00",
+        "participants": ["张三 <zhangsan@example.com>"],
+        "latestMessage": {
+          "id": "message-id",
+          "threadId": "thread-id",
+          "subject": "Re: 项目通知",
+          "from": "张三 <zhangsan@example.com>"
+        }
+      }
+    ],
+    "page": 1,
+    "pageSize": 20,
+    "total": 1
+  }
+}
+```
+
+#### 7.10.2 会话详情
+
+`GET /api/v1/threads/{id}`
+
+返回会话基础信息和按时间升序排列的邮件摘要；邮件正文、附件详情仍通过 `GET /api/v1/messages/{id}` 按需加载。
+
+#### 7.10.3 重建会话
+
+`POST /api/v1/threads/rebuild`
+
+请求：
+
+```json
+{
+  "scope": "empty",
+  "accountId": "account-id"
+}
+```
+
+`scope` 支持：
+
+- `empty`：只补齐 `threadId` 为空的邮件。
+- `all`：清空当前用户指定账号或全部账号的会话关系后重建。
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "重建完成",
+  "httpCode": 200,
+  "data": {
+    "processedCount": 120,
+    "threadCount": 80
+  }
+}
+```
+
+### 7.11 规则命中记录
+
+#### 7.11.1 全局规则日志
+
+`GET /api/v1/rule-logs`
+
+查询参数：
+
+- `messageId`
+- `ruleId`
+- `resultStatus`：`applied`、`skipped`、`failed`
+- `triggerType`：`sync`、`manual`、`preview`
+- `page`
+- `pageSize`
+
+#### 7.11.2 单封邮件规则日志
+
+`GET /api/v1/messages/{id}/rule-logs`
+
+用于邮件详情页查看这封邮件被哪些规则处理过。
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "获取成功",
+  "httpCode": 200,
+  "data": {
+    "items": [
+      {
+        "id": "log-id",
+        "ruleId": "rule-id",
+        "ruleName": "广告邮件标记垃圾",
+        "messageId": "message-id",
+        "messageSubject": "限时优惠提醒",
+        "matched": true,
+        "actionType": "mark_spam",
+        "targetFolderId": null,
+        "triggerType": "sync",
+        "conditionSnapshot": [],
+        "resultStatus": "applied",
+        "resultMessage": "已标记为垃圾邮件",
+        "createdAt": "2026-07-23T16:20:00+08:00"
+      }
+    ],
+    "page": 1,
+    "pageSize": 50,
+    "total": 1
+  }
+}
+```
+
+### 7.12 附件中心列表
 
 `GET /api/v1/attachments`
 

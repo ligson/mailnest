@@ -46,14 +46,17 @@ func (s *Store) CreateMailRule(params CreateMailRuleParams) (MailRule, error) {
 }
 
 func (s *Store) ListMailRules(userID int64, enabledOnly bool) ([]MailRule, error) {
-	where := "WHERE user_id = ?"
+	where := "WHERE r.user_id = ?"
 	args := []any{userID}
 	if enabledOnly {
-		where += " AND enabled = 1"
+		where += " AND r.enabled = 1"
 	}
 	rows, err := s.db.Query(
-		`SELECT id, user_id, name, enabled, match_mode, priority, stop_on_match, action_type, target_folder_id, sort_order, created_at, updated_at
-		FROM mail_rules `+where+`
+		`SELECT r.id, r.user_id, r.name, r.enabled, r.match_mode, r.priority, r.stop_on_match, r.action_type, r.target_folder_id, r.sort_order, r.created_at, r.updated_at,
+			(SELECT COUNT(*) FROM mail_rule_logs l WHERE l.user_id = r.user_id AND l.rule_id = r.id AND l.matched = 1) AS hit_count,
+			(SELECT MAX(l.created_at) FROM mail_rule_logs l WHERE l.user_id = r.user_id AND l.rule_id = r.id AND l.matched = 1) AS last_hit_at,
+			(SELECT l.result_status FROM mail_rule_logs l WHERE l.user_id = r.user_id AND l.rule_id = r.id ORDER BY l.created_at DESC, l.id DESC LIMIT 1) AS last_result
+		FROM mail_rules r `+where+`
 		ORDER BY priority ASC, sort_order ASC, id ASC`,
 		args...,
 	)
@@ -83,9 +86,12 @@ func (s *Store) ListMailRules(userID int64, enabledOnly bool) ([]MailRule, error
 
 func (s *Store) FindMailRuleByID(userID, id int64) (MailRule, error) {
 	row := s.db.QueryRow(
-		`SELECT id, user_id, name, enabled, match_mode, priority, stop_on_match, action_type, target_folder_id, sort_order, created_at, updated_at
-		FROM mail_rules
-		WHERE user_id = ? AND id = ?`,
+		`SELECT r.id, r.user_id, r.name, r.enabled, r.match_mode, r.priority, r.stop_on_match, r.action_type, r.target_folder_id, r.sort_order, r.created_at, r.updated_at,
+			(SELECT COUNT(*) FROM mail_rule_logs l WHERE l.user_id = r.user_id AND l.rule_id = r.id AND l.matched = 1) AS hit_count,
+			(SELECT MAX(l.created_at) FROM mail_rule_logs l WHERE l.user_id = r.user_id AND l.rule_id = r.id AND l.matched = 1) AS last_hit_at,
+			(SELECT l.result_status FROM mail_rule_logs l WHERE l.user_id = r.user_id AND l.rule_id = r.id ORDER BY l.created_at DESC, l.id DESC LIMIT 1) AS last_result
+		FROM mail_rules r
+		WHERE r.user_id = ? AND r.id = ?`,
 		userID,
 		id,
 	)
@@ -213,6 +219,7 @@ func scanMailRule(scanner interface {
 	var rule MailRule
 	var enabled int
 	var stopOnMatch int
+	var lastHitAt any
 	err := scanner.Scan(
 		&rule.ID,
 		&rule.UserID,
@@ -226,6 +233,9 @@ func scanMailRule(scanner interface {
 		&rule.SortOrder,
 		&rule.CreatedAt,
 		&rule.UpdatedAt,
+		&rule.HitCount,
+		&lastHitAt,
+		&rule.LastResult,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return MailRule{}, ErrNotFound
@@ -236,6 +246,7 @@ func scanMailRule(scanner interface {
 	rule.Enabled = enabled == 1
 	rule.StopOnMatch = stopOnMatch == 1
 	rule.ActionType = normalizeRuleActionType(rule.ActionType)
+	rule.LastHitAt = dbValueToNullTime(lastHitAt)
 	return rule, nil
 }
 

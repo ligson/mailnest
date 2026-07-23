@@ -147,6 +147,11 @@ type messageBatchPreviewRequest struct {
 	MessageIDs []string `json:"messageIds"`
 }
 
+type rebuildThreadsRequest struct {
+	Scope     string `json:"scope"`
+	AccountID string `json:"accountId"`
+}
+
 type updateUserEnabledRequest struct {
 	Enabled bool `json:"enabled"`
 }

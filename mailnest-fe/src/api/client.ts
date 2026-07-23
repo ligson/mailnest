@@ -141,6 +141,7 @@ export interface FullSyncStatusData {
 export interface MailMessage {
   id: string;
   accountId: string;
+  threadId: string | null;
   localFolderId: string | null;
   subject: string | null;
   from: string | null;
@@ -153,6 +154,30 @@ export interface MailMessage {
   isSpam: boolean;
   spamAt: string | null;
   deletedAt: string | null;
+}
+
+export interface MailThread {
+  id: string;
+  accountId: string;
+  rootMessageId: string | null;
+  subject: string;
+  messageCount: number;
+  unreadCount: number;
+  hasAttachments: boolean;
+  lastMessageAt: string | null;
+  participants: string[];
+  latestMessage: MailMessage;
+}
+
+export interface MailThreadDetail extends Omit<MailThread, 'participants' | 'latestMessage'> {
+  messages: MailMessage[];
+}
+
+export interface MailThreadListData {
+  items: MailThread[];
+  page: number;
+  pageSize: number;
+  total: number;
 }
 
 export interface MailAttachment {
@@ -291,10 +316,36 @@ export interface MailRule {
   targetFolderId: string | null;
   sortOrder: number;
   conditions: MailRuleCondition[];
+  hitCount: number;
+  lastHitAt: string | null;
+  lastResult: string | null;
 }
 
 export interface MailRuleListData {
   items: MailRule[];
+}
+
+export interface MailRuleLog {
+  id: string;
+  ruleId: string | null;
+  ruleName: string;
+  messageId: string;
+  messageSubject: string | null;
+  matched: boolean;
+  actionType: string;
+  targetFolderId: string | null;
+  triggerType: string;
+  conditionSnapshot: MailRuleCondition[];
+  resultStatus: 'applied' | 'skipped' | 'failed' | string;
+  resultMessage: string;
+  createdAt: string;
+}
+
+export interface MailRuleLogListData {
+  items: MailRuleLog[];
+  page: number;
+  pageSize: number;
+  total: number;
 }
 
 export interface MicrosoftOAuthStartData {
@@ -603,6 +654,9 @@ export const messageApi = {
   composeContext(id: string, mode: Exclude<ComposeMode, 'new'>) {
     return requestEnvelope<ComposeContext>(apiClient.get(`/messages/${id}/compose-context`, { params: { mode } }));
   },
+  ruleLogs(id: string) {
+    return requestEnvelope<MailRuleLogListData>(apiClient.get(`/messages/${id}/rule-logs`));
+  },
   batchAction(payload: { messageIds: string[]; action: string; folderId?: string }) {
     return requestEnvelope<MessageBatchActionResult>(apiClient.post('/messages/batch-actions', payload));
   },
@@ -640,6 +694,33 @@ export const messageApi = {
       responseType: 'blob',
     });
     return response.data;
+  },
+};
+
+export const threadApi = {
+  list(params?: {
+    accountId?: string;
+    folderId?: string;
+    systemFolder?: string;
+    keyword?: string;
+    from?: string;
+    subject?: string;
+    body?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    hasAttachments?: boolean;
+    isRead?: boolean;
+    starred?: boolean;
+    page?: number;
+    pageSize?: number;
+  }) {
+    return requestEnvelope<MailThreadListData>(apiClient.get('/threads', { params }));
+  },
+  detail(id: string) {
+    return requestEnvelope<MailThreadDetail>(apiClient.get(`/threads/${id}`));
+  },
+  rebuild(payload: { scope: 'empty' | 'all'; accountId?: string }) {
+    return requestEnvelope<{ processedCount: number; threadCount: number }>(apiClient.post('/threads/rebuild', payload));
   },
 };
 
@@ -740,5 +821,11 @@ export const mailRuleApi = {
   },
   preview(payload: MailRulePayload & { limit?: number }) {
     return requestEnvelope<RulePreviewData>(apiClient.post('/mail-rules/preview', payload));
+  },
+};
+
+export const ruleLogApi = {
+  list(params?: { messageId?: string; ruleId?: string; resultStatus?: string; triggerType?: string; page?: number; pageSize?: number }) {
+    return requestEnvelope<MailRuleLogListData>(apiClient.get('/rule-logs', { params }));
   },
 };
