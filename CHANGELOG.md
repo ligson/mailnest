@@ -55,6 +55,7 @@
 
 ### 部署
 
+- 将前后端版本 `20260723155111-62cc4f1-drafts` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260723155111-drafts.tgz`；线上健康检查、首页静态资源、前后端容器镜像标签、`mail_drafts` 表迁移、邮件页草稿箱入口、写信自动保存和测试草稿删除验证通过，控制台无功能级 JavaScript 错误。
 - 将前端版本 `20260723150016-26511b3-mail-reader` 部署到生产环境的 Mail Nest Docker Compose 服务，后端继续使用 `20260723121631-3ca3f40-admin-captcha`；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260723150016-mail-reader.tgz`；线上健康检查、首页静态资源、前后端容器镜像标签、邮件页实页、写信/回复弹窗、桌面与窄屏溢出检查通过，控制台无 JavaScript 错误。
 - 将前端版本 `20260723143210-5796d5e-ui-refresh` 部署到生产环境的 Mail Nest Docker Compose 服务，后端继续使用 `20260723121631-3ca3f40-admin-captcha`；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260723143210-ui-refresh.tgz`；线上健康检查、首页静态资源、前端容器镜像标签和登录页验证码视觉检查通过。
 - 将前后端版本 `20260723121631-3ca3f40-admin-captcha` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260723120407-admin-captcha.tgz`；首次使用 `20260723120407-f67450e-admin-captcha` 启动时发现 MySQL 既有用户表缺少管理员字段，已补充显式 MySQL 缺列迁移并重新部署；线上健康检查、验证码接口、首页静态资源、管理员接口未登录拦截、容器镜像标签和后端启动日志验证通过。
