@@ -348,6 +348,42 @@ export interface MailRuleLogListData {
   total: number;
 }
 
+export interface MailSendRecipients {
+  to: string[];
+  cc: string[];
+  bcc: string[];
+}
+
+export interface MailSendLog {
+  id: string;
+  accountId: string;
+  accountEmail: string | null;
+  messageId: string | null;
+  messageSubject: string | null;
+  draftId: string | null;
+  sourceMessageId: string | null;
+  composeMode: ComposeMode | string;
+  smtpMessageId: string | null;
+  recipients: MailSendRecipients;
+  subject: string;
+  attachmentCount: number;
+  status: 'sending' | 'success' | 'failed' | 'local_save_failed' | string;
+  retryStatus: 'none' | 'retryable' | 'retrying' | 'exhausted' | string;
+  retryCount: number;
+  errorMessage: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MailSendLogListData {
+  items: MailSendLog[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
 export interface MicrosoftOAuthStartData {
   state: string;
   authUrl: string;
@@ -391,6 +427,10 @@ export interface SendMessagePayload {
   sourceMessageId?: string;
   forwardAttachmentIds?: string[];
   attachments?: File[];
+}
+
+export interface SendMessageResult extends MailMessage {
+  sendLog?: MailSendLog;
 }
 
 export interface SaveDraftPayload {
@@ -685,7 +725,7 @@ export const messageApi = {
     for (const file of payload.attachments || []) {
       form.append('attachments', file, file.name);
     }
-    return requestEnvelope<MailMessage>(apiClient.post('/messages/send', form, {
+    return requestEnvelope<SendMessageResult>(apiClient.post('/messages/send', form, {
       timeout: 60000,
     }));
   },
@@ -741,7 +781,7 @@ export const draftApi = {
     return requestEnvelope<Record<string, never>>(apiClient.delete(`/drafts/${id}`));
   },
   send(id: string) {
-    return requestEnvelope<MailMessage>(apiClient.post(`/drafts/${id}/send`));
+    return requestEnvelope<SendMessageResult>(apiClient.post(`/drafts/${id}/send`));
   },
 };
 
@@ -827,5 +867,25 @@ export const mailRuleApi = {
 export const ruleLogApi = {
   list(params?: { messageId?: string; ruleId?: string; resultStatus?: string; triggerType?: string; page?: number; pageSize?: number }) {
     return requestEnvelope<MailRuleLogListData>(apiClient.get('/rule-logs', { params }));
+  },
+};
+
+export const sendLogApi = {
+  list(params?: {
+    accountId?: string;
+    messageId?: string;
+    status?: string;
+    retryStatus?: string;
+    composeMode?: string;
+    keyword?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    page?: number;
+    pageSize?: number;
+  }) {
+    return requestEnvelope<MailSendLogListData>(apiClient.get('/send-logs', { params }));
+  },
+  detail(id: string) {
+    return requestEnvelope<MailSendLog>(apiClient.get(`/send-logs/${id}`));
   },
 };

@@ -34,6 +34,10 @@
           <branches-outlined />
           <span>规则</span>
         </a-menu-item>
+        <a-menu-item key="/send-logs">
+          <send-outlined />
+          <span>发送记录</span>
+        </a-menu-item>
         <a-menu-item key="/settings/profile">
           <user-outlined />
           <span>设置</span>
@@ -125,6 +129,7 @@ import {
   LogoutOutlined,
   MailOutlined,
   PaperClipOutlined,
+  SendOutlined,
   SettingOutlined,
   TeamOutlined,
   UnlockOutlined,

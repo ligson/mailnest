@@ -136,6 +136,8 @@ database:
 
 用户从 Web 界面发送邮件时，后端先按当前用户校验邮箱账号归属，再使用账号的 SMTP 主机、端口、加密方式、用户名和加密凭据发信。SMTP 发送成功后，后端将生成的 RFC822 原文、纯文本正文、HTML 正文、附件文件和元数据写入本地数据目录，并在 `mail_messages` 中保存到账号配置的 `sent_folder`。当前发信支持普通附件和账号签名模板，暂不向 IMAP 服务器执行 append；后续可在同一发送服务上扩展服务器已发送追加和草稿链路。
 
+每次发信都会写入 `mail_send_logs`：请求开始时记录发件账号、收件人快照、主题、附件数量和写信模式；SMTP 投递成功后记录 `smtp_message_id` 并关联本地已发送邮件；SMTP 失败记录失败原因和 `retryable` 重试状态；如果 SMTP 已成功但本地保存失败，状态标记为 `local_save_failed`，便于区分“没发出去”和“已发出但本地入库失败”。
+
 邮件回复与转发复用同一套发信服务，但发送前应由后端基于来源邮件生成写信上下文。回复填写原发件人并生成 `In-Reply-To`、`References`；回复全部需要合并原发件人、收件人和抄送人，并排除当前用户自己的所有邮箱地址；转发默认不填收件人，正文中追加原邮件信息和引用内容。转发原附件时，前端只传附件 ID，后端按当前用户和来源邮件校验后从本地附件目录读取并重新组包，避免前端重复下载再上传。
 
 回复和转发发送成功后，应在本地已发送邮件中保存来源邮件 ID、回复/转发模式和线程头，方便后续扩展会话聚合、发信追踪和草稿箱。
@@ -444,7 +446,31 @@ database:
 
 规则日志记录同步或手动应用规则时的命中、跳过和失败结果。`rule_name` 和 `condition_snapshot_json` 保存当时快照，即使后续删除或修改规则，历史记录仍可用于排障。建议索引 `user_id + created_at`、`user_id + message_id + created_at`、`user_id + rule_id + created_at`。
 
-### 5.11 mail_sync_jobs
+### 5.11 mail_send_logs
+
+- `id`
+- `user_id`
+- `account_id`
+- `message_id`
+- `draft_id`
+- `source_message_id`
+- `compose_mode`
+- `smtp_message_id`
+- `recipients_json`
+- `subject`
+- `attachment_count`
+- `status`
+- `retry_status`
+- `retry_count`
+- `error_message`
+- `started_at`
+- `finished_at`
+- `created_at`
+- `updated_at`
+
+发送记录以 `user_id` 做硬隔离。`status` 支持 `sending`、`success`、`failed`、`local_save_failed`；`retry_status` 支持 `none`、`retryable`、`retrying`、`exhausted`。当前版本先记录可重试状态和失败原因，后续可在同一表上扩展手动重试或后台重试任务。建议索引 `user_id + created_at`、`user_id + account_id + created_at`、`user_id + message_id + created_at`、`user_id + status + created_at`。
+
+### 5.12 mail_sync_jobs
 
 - `id`
 - `user_id`
@@ -456,7 +482,7 @@ database:
 - `new_message_count`
 - `error_message`
 
-### 5.12 mail_message_states
+### 5.13 mail_message_states
 
 - `id`
 - `user_id`
@@ -473,7 +499,7 @@ database:
 
 `mail_message_states` 保存 Mail Nest 本地阅读和整理状态，不回写远端 IMAP。建议对 `user_id + message_id` 建唯一约束，批量操作时使用 upsert 保证幂等。
 
-### 5.13 mail_sync_job_events
+### 5.14 mail_sync_job_events
 
 - `id`
 - `job_id`
@@ -485,7 +511,7 @@ database:
 
 同步事件日志用于排障，`phase` 建议覆盖连接、目录列表、拉取、解析、入库、规则执行和服务器清理等阶段。日志内容必须脱敏。
 
-### 5.14 附件中心索引
+### 5.15 附件中心索引
 
 附件中心复用 `mail_attachments` 表，不单独复制附件文件。建议增加以下索引：
 

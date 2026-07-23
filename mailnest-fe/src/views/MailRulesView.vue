@@ -4,7 +4,7 @@
       <div class="page-toolbar">
         <div>
           <h2 class="page-title">规则</h2>
-          <p class="page-subtitle">按发件人、主题、正文和附件条件自动放入本地文件夹</p>
+          <p class="page-subtitle">按发件人、域名、关键词、正文和附件条件自动归档或移动到垃圾邮件</p>
         </div>
         <div class="toolbar-actions">
           <a-select v-model:value="applyScope" class="apply-scope-select">
@@ -13,6 +13,7 @@
             <a-select-option value="all">全部邮件</a-select-option>
           </a-select>
           <a-button @click="applyRules">应用到历史邮件</a-button>
+          <a-button @click="openSpamTemplate">垃圾规则模板</a-button>
           <a-button type="primary" @click="openCreate">新增规则</a-button>
         </div>
       </div>
@@ -77,7 +78,7 @@
               <a-radio value="move_folder">移动文件夹</a-radio>
               <a-radio value="mark_read">标记已读</a-radio>
               <a-radio value="star">加星标</a-radio>
-              <a-radio value="mark_spam">标记垃圾邮件</a-radio>
+              <a-radio value="mark_spam">移动到垃圾邮件</a-radio>
             </a-radio-group>
           </a-form-item>
           <a-form-item label="匹配方式">
@@ -100,6 +101,9 @@
           <div v-for="(condition, index) in form.conditions" :key="index" class="condition-row">
             <a-select v-model:value="condition.field" class="condition-field">
               <a-select-option value="from">发件人</a-select-option>
+              <a-select-option value="blacklist_sender">黑名单发件人</a-select-option>
+              <a-select-option value="blacklist_domain">黑名单域名</a-select-option>
+              <a-select-option value="spam_keyword">垃圾关键词</a-select-option>
               <a-select-option value="subject">主题</a-select-option>
               <a-select-option value="body">正文</a-select-option>
               <a-select-option value="has_attachments">是否有附件</a-select-option>
@@ -117,7 +121,7 @@
               <a-select-option value="greater_than">大于</a-select-option>
               <a-select-option value="less_than">小于</a-select-option>
             </a-select>
-            <a-input v-model:value="condition.value" class="condition-value" placeholder="匹配值" />
+            <a-input v-model:value="condition.value" class="condition-value" :placeholder="conditionPlaceholder(condition)" />
             <a-button danger @click="removeCondition(index)">删除</a-button>
           </div>
         </a-form>
@@ -242,6 +246,24 @@ function openCreate() {
   form.targetFolderId = folders.value[0]?.id;
   form.sortOrder = rules.value.length * 10 + 10;
   form.conditions = [{ field: 'subject', operator: 'contains', value: '' }];
+  drawerOpen.value = true;
+}
+
+function openSpamTemplate() {
+  editingId.value = '';
+  form.name = '垃圾邮件黑名单';
+  form.enabled = true;
+  form.matchMode = 'any';
+  form.priority = 10;
+  form.stopOnMatch = true;
+  form.actionType = 'mark_spam';
+  form.targetFolderId = undefined;
+  form.sortOrder = rules.value.length * 10 + 10;
+  form.conditions = [
+    { field: 'blacklist_sender', operator: 'equals', value: '' },
+    { field: 'blacklist_domain', operator: 'equals', value: '' },
+    { field: 'spam_keyword', operator: 'contains', value: '' },
+  ];
   drawerOpen.value = true;
 }
 
@@ -383,7 +405,7 @@ function actionLabel(rule: MailRule) {
     case 'star':
       return '加星标';
     case 'mark_spam':
-      return '标记垃圾邮件';
+      return '移动到垃圾邮件';
     default:
       return `移动到 ${folderName(rule.targetFolderId || '')}`;
   }
@@ -421,6 +443,9 @@ function ruleLogStatusLabel(status: string) {
 function conditionLabel(condition: MailRuleCondition) {
   const fieldMap: Record<string, string> = {
     from: '发件人',
+    blacklist_sender: '黑名单发件人',
+    blacklist_domain: '黑名单域名',
+    spam_keyword: '垃圾关键词',
     subject: '主题',
     body: '正文',
     has_attachments: '附件',
@@ -439,6 +464,19 @@ function conditionLabel(condition: MailRuleCondition) {
     less_than: '小于',
   };
   return `${fieldMap[condition.field] || condition.field} ${operatorMap[condition.operator] || condition.operator} ${condition.value}`;
+}
+
+function conditionPlaceholder(condition: MailRuleCondition) {
+  switch (condition.field) {
+    case 'blacklist_sender':
+      return 'bad@example.com, cheat@example.com';
+    case 'blacklist_domain':
+      return 'promo.example.com, ads.example.net';
+    case 'spam_keyword':
+      return '优惠, 返利, 免费提现';
+    default:
+      return '匹配值';
+  }
 }
 </script>
 

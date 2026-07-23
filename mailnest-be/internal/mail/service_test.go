@@ -1,6 +1,7 @@
 package mail
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,6 +118,76 @@ func TestSendMessageUsesSMTPAndSavesSentMessage(t *testing.T) {
 	}
 	if !hasContactEmail(contacts, "hidden@example.com") {
 		t.Fatalf("expected bcc contact to be upserted, got %#v", contacts)
+	}
+	sendLogs, total, err := store.ListMailSendLogs(storage.ListMailSendLogsQuery{UserID: user.ID, Limit: 20})
+	if err != nil {
+		t.Fatalf("list send logs: %v", err)
+	}
+	if total != 1 || len(sendLogs) != 1 {
+		t.Fatalf("expected one send log, total=%d logs=%#v", total, sendLogs)
+	}
+	if sendLogs[0].Status != "success" || !sendLogs[0].MessageID.Valid || sendLogs[0].MessageID.Int64 != message.ID || !sendLogs[0].SMTPMessageID.Valid {
+		t.Fatalf("expected successful send log linked to message, got %#v", sendLogs[0])
+	}
+}
+
+func TestSendMessageRecordsFailureStatus(t *testing.T) {
+	const secret = "test-credential-secret"
+
+	store, err := storage.Open(filepath.Join(t.TempDir(), "mailnest.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	user, err := store.CreateUser("failed-sender", "failed-sender@example.com", "hash")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	encrypted, err := crypto.EncryptString("smtp-pass", secret)
+	if err != nil {
+		t.Fatalf("encrypt password: %v", err)
+	}
+	account, err := store.CreateMailAccount(storage.MailAccount{
+		UserID:              user.ID,
+		DisplayName:         "失败发件人",
+		Email:               "failed-sender@example.com",
+		IMAPHost:            "imap.example.com",
+		IMAPPort:            993,
+		IMAPTLS:             true,
+		IMAPUsername:        "failed-sender@example.com",
+		IMAPPasswordEncoded: encrypted,
+		SMTPHost:            "smtp.example.com",
+		SMTPPort:            587,
+		SMTPStartTLS:        true,
+		SMTPUsername:        "smtp-user",
+		SMTPPasswordEncoded: encrypted,
+		SentFolder:          "Sent",
+		PollIntervalMinutes: 10,
+		Enabled:             true,
+	})
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+
+	service := NewServiceWithSender(store, &FakeFetcher{}, &FakeSender{Err: errors.New("smtp refused")}, nil, t.TempDir(), secret)
+	_, err = service.SendMessage(user.ID, account.ID, OutgoingMessage{
+		To:       []string{"friend@example.com"},
+		Subject:  "失败发信",
+		TextBody: "这封邮件会失败",
+	})
+	if err == nil {
+		t.Fatal("expected send error")
+	}
+	sendLogs, total, err := store.ListMailSendLogs(storage.ListMailSendLogsQuery{UserID: user.ID, Status: "failed", Limit: 20})
+	if err != nil {
+		t.Fatalf("list failed send logs: %v", err)
+	}
+	if total != 1 || len(sendLogs) != 1 {
+		t.Fatalf("expected one failed send log, total=%d logs=%#v", total, sendLogs)
+	}
+	if sendLogs[0].RetryStatus != "retryable" || !sendLogs[0].ErrorMessage.Valid || !strings.Contains(sendLogs[0].ErrorMessage.String, "smtp refused") {
+		t.Fatalf("expected retryable failed log, got %#v", sendLogs[0])
 	}
 }
 

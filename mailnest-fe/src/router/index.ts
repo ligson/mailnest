@@ -6,6 +6,7 @@ import DashboardView from '../views/DashboardView.vue';
 import AttachmentsView from '../views/AttachmentsView.vue';
 import MailAccountsView from '../views/MailAccountsView.vue';
 import MailRulesView from '../views/MailRulesView.vue';
+import SendLogsView from '../views/SendLogsView.vue';
 import ContactsView from '../views/ContactsView.vue';
 import ProfileSettingsView from '../views/ProfileSettingsView.vue';
 import MicrosoftOAuthCallbackView from '../views/MicrosoftOAuthCallbackView.vue';
@@ -23,6 +24,7 @@ export const router = createRouter({
     { path: '/accounts', component: MailAccountsView },
     { path: '/contacts', component: ContactsView },
     { path: '/rules', component: MailRulesView },
+    { path: '/send-logs', component: SendLogsView },
     { path: '/settings/profile', component: ProfileSettingsView },
     { path: '/admin/users', component: AdminUsersView, meta: { admin: true } },
   ],

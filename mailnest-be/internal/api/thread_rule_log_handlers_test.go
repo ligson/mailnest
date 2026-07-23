@@ -192,3 +192,91 @@ func TestMailRuleLogsExposeRuleStatsAndMessageHistory(t *testing.T) {
 		t.Fatalf("expected rule hit stats, got %#v", rule)
 	}
 }
+
+func TestSpamRuleBlacklistConditionsMoveMessagesToSpam(t *testing.T) {
+	fetcher := &mail.FakeFetcher{}
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	token := registerTestUser(t, router, "spam-blacklist-user", "spam-blacklist-user@example.com")
+	accountID := createTestAccount(t, router, token)
+
+	ruleResp := performRequest(router, http.MethodPost, "/api/v1/mail-rules", `{
+		"name":"黑名单垃圾邮件",
+		"enabled":true,
+		"matchMode":"any",
+		"actionType":"mark_spam",
+		"sortOrder":10,
+		"conditions":[
+			{"field":"blacklist_sender","operator":"equals","value":"bad@example.com, cheat@example.com"},
+			{"field":"blacklist_domain","operator":"equals","value":"promo.example.com"},
+			{"field":"spam_keyword","operator":"contains","value":"免费提现, 限时返利"}
+		]
+	}`, token)
+	if ruleResp.Code != http.StatusCreated {
+		t.Fatalf("expected spam blacklist rule status 201, got %d: %s", ruleResp.Code, ruleResp.Body.String())
+	}
+
+	fetcher.Messages = []mail.FetchedMessage{
+		{
+			UID:        "blacklist-sender",
+			MessageID:  "<blacklist-sender@example.com>",
+			Subject:    "普通通知",
+			From:       "坏人 <bad@example.com>",
+			To:         []string{"spam-blacklist-user@example.com"},
+			SentAt:     "2026-07-06T10:00:00+08:00",
+			TextBody:   "普通正文",
+			RawContent: "Subject: 普通通知\r\n\r\n普通正文",
+		},
+		{
+			UID:        "blacklist-domain",
+			MessageID:  "<blacklist-domain@example.com>",
+			Subject:    "账户提醒",
+			From:       "notice@promo.example.com",
+			To:         []string{"spam-blacklist-user@example.com"},
+			SentAt:     "2026-07-06T10:01:00+08:00",
+			TextBody:   "域名命中",
+			RawContent: "Subject: 账户提醒\r\n\r\n域名命中",
+		},
+		{
+			UID:        "keyword-spam",
+			MessageID:  "<keyword-spam@example.com>",
+			Subject:    "免费提现活动",
+			From:       "service@example.org",
+			To:         []string{"spam-blacklist-user@example.com"},
+			SentAt:     "2026-07-06T10:02:00+08:00",
+			TextBody:   "关键词命中",
+			RawContent: "Subject: 免费提现活动\r\n\r\n关键词命中",
+		},
+		{
+			UID:        "clean-message",
+			MessageID:  "<clean-message@example.com>",
+			Subject:    "团队会议",
+			From:       "team@example.org",
+			To:         []string{"spam-blacklist-user@example.com"},
+			SentAt:     "2026-07-06T10:03:00+08:00",
+			TextBody:   "正常正文",
+			RawContent: "Subject: 团队会议\r\n\r\n正常正文",
+		},
+	}
+	syncResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/sync", "", token)
+	if syncResp.Code != http.StatusOK {
+		t.Fatalf("expected sync status 200, got %d: %s", syncResp.Code, syncResp.Body.String())
+	}
+	spamResp := performRequest(router, http.MethodGet, "/api/v1/messages?systemFolder=spam&pageSize=10", "", token)
+	if spamResp.Code != http.StatusOK {
+		t.Fatalf("expected spam list status 200, got %d: %s", spamResp.Code, spamResp.Body.String())
+	}
+	if got := listSubjects(t, spamResp.Body.Bytes()); !equalStringSlices(got, []string{"免费提现活动", "账户提醒", "普通通知"}) {
+		t.Fatalf("expected three blacklist spam messages, got %#v", got)
+	}
+	inboxResp := performRequest(router, http.MethodGet, "/api/v1/messages?systemFolder=inbox&pageSize=10", "", token)
+	if got := listSubjects(t, inboxResp.Body.Bytes()); !equalStringSlices(got, []string{"团队会议"}) {
+		t.Fatalf("expected clean message to remain in inbox, got %#v", got)
+	}
+	logsResp := performRequest(router, http.MethodGet, "/api/v1/rule-logs?pageSize=10", "", token)
+	if logsResp.Code != http.StatusOK {
+		t.Fatalf("expected rule logs status 200, got %d: %s", logsResp.Code, logsResp.Body.String())
+	}
+	if got := listItemCount(t, logsResp.Body.Bytes()); got != 3 {
+		t.Fatalf("expected three rule logs, got %d: %s", got, logsResp.Body.String())
+	}
+}

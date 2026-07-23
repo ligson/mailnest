@@ -194,7 +194,8 @@ func (a *App) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sent, err := a.mailService.SendMessage(userID, accountID, mail.OutgoingMessage{
+	result, err := a.mailService.SendMessageWithLog(userID, accountID, mail.OutgoingMessage{
+		DraftID:              draftID,
 		To:                   to,
 		CC:                   cc,
 		BCC:                  bcc,
@@ -220,7 +221,9 @@ func (a *App) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	response.OK(w, "发送成功", messageListPayload(sent))
+	payload := messageListPayload(result.Message)
+	payload["sendLog"] = mailSendLogPayload(result.Log)
+	response.OK(w, "发送成功", payload)
 }
 
 func (a *App) handleMessageComposeContext(w http.ResponseWriter, r *http.Request) {

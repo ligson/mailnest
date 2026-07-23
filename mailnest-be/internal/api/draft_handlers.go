@@ -163,7 +163,8 @@ func (a *App) handleSendDraft(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, "主题和正文不能同时为空")
 		return
 	}
-	sent, err := a.mailService.SendMessage(userID, draft.AccountID, mail.OutgoingMessage{
+	result, err := a.mailService.SendMessageWithLog(userID, draft.AccountID, mail.OutgoingMessage{
+		DraftID:              draft.ID,
 		To:                   to,
 		CC:                   cc,
 		BCC:                  bcc,
@@ -186,7 +187,9 @@ func (a *App) handleSendDraft(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusInternalServerError, "邮件已发送，但删除草稿失败")
 		return
 	}
-	response.OK(w, "发送成功", messageListPayload(sent))
+	payload := messageListPayload(result.Message)
+	payload["sendLog"] = mailSendLogPayload(result.Log)
+	response.OK(w, "发送成功", payload)
 }
 
 func draftRouteIDs(w http.ResponseWriter, r *http.Request) (int64, int64, bool) {

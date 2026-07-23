@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	netmail "net/mail"
 	"strconv"
 	"strings"
 
@@ -148,7 +149,7 @@ func ruleActionResultMessage(rule storage.MailRule, changed bool) string {
 	case "star":
 		return "已加星标"
 	case "mark_spam":
-		return "已标记为垃圾邮件"
+		return "已移动到垃圾邮件"
 	default:
 		return "已移动到目标文件夹"
 	}
@@ -219,6 +220,12 @@ func conditionMatchesMessage(condition storage.MailRuleCondition, message storag
 	expected := strings.ToLower(strings.TrimSpace(condition.Value))
 
 	switch field {
+	case "blacklist_sender":
+		return listStringCondition(operator, senderAddress(message), expected)
+	case "blacklist_domain":
+		return listStringCondition(operator, senderDomain(message), expected)
+	case "spam_keyword":
+		return keywordListCondition(operator, message, expected)
 	case "has_attachments":
 		return boolCondition(operator, message.HasAttachments)
 	case "is_read":
@@ -332,6 +339,105 @@ func messageFieldValue(field string, message storage.MailMessage) string {
 	default:
 		return ""
 	}
+}
+
+func senderAddress(message storage.MailMessage) string {
+	value := strings.TrimSpace(nullableStringValue(message.FromAddr))
+	if value == "" {
+		return ""
+	}
+	address, err := netmail.ParseAddress(value)
+	if err != nil {
+		return strings.ToLower(value)
+	}
+	return strings.ToLower(strings.TrimSpace(address.Address))
+}
+
+func senderDomain(message storage.MailMessage) string {
+	email := senderAddress(message)
+	at := strings.LastIndex(email, "@")
+	if at < 0 || at == len(email)-1 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(email[at+1:]))
+}
+
+func listStringCondition(operator, actual, expected string) bool {
+	actual = strings.ToLower(strings.TrimSpace(actual))
+	if actual == "" {
+		return false
+	}
+	values := splitRuleListValues(expected)
+	if len(values) == 0 {
+		return false
+	}
+	switch operator {
+	case "contains":
+		for _, value := range values {
+			if value != "" && strings.Contains(actual, value) {
+				return true
+			}
+		}
+	case "domain_equals":
+		for _, value := range values {
+			if actual == value || strings.HasSuffix(actual, "@"+value) {
+				return true
+			}
+		}
+	default:
+		for _, value := range values {
+			if actual == value {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func keywordListCondition(operator string, message storage.MailMessage, expected string) bool {
+	haystack := strings.ToLower(strings.Join([]string{
+		nullableStringValue(message.Subject),
+		nullableStringValue(message.SearchText),
+		nullableStringValue(message.FromAddr),
+	}, "\n"))
+	if strings.TrimSpace(haystack) == "" {
+		return false
+	}
+	values := splitRuleListValues(expected)
+	if len(values) == 0 {
+		return false
+	}
+	switch operator {
+	case "equals":
+		for _, value := range values {
+			if haystack == value {
+				return true
+			}
+		}
+	default:
+		for _, value := range values {
+			if value != "" && strings.Contains(haystack, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func splitRuleListValues(value string) []string {
+	replacer := strings.NewReplacer("，", ",", "；", ",", ";", ",", "\n", ",", "\r", ",", "\t", ",")
+	parts := strings.Split(replacer.Replace(strings.ToLower(strings.TrimSpace(value))), ",")
+	result := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || seen[part] {
+			continue
+		}
+		seen[part] = true
+		result = append(result, part)
+	}
+	return result
 }
 
 func nullableStringValue(value sql.NullString) string {

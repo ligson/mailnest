@@ -32,6 +32,7 @@ type SMTPConfig struct {
 }
 
 type OutgoingMessage struct {
+	DraftID              int64
 	FromName             string
 	From                 string
 	To                   []string

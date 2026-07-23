@@ -846,6 +846,7 @@ JSON 请求：
 - SMTP 发送成功后，后端会把该邮件保存到本地已发送目录，目录名使用账号配置的 `sentFolder`，邮件列表可通过 `systemFolder=sent` 查询。
 - 发送成功后会自动沉淀收件人、抄送人和密送人为联系人；本地保存的邮件不会在邮件头中展示密送人。
 - 如果请求携带 `draftId`，发送成功后会删除对应草稿；发送失败不会删除草稿。
+- 发送会写入 `mail_send_logs` 记录，成功、SMTP 失败、已投递但本地保存失败都会保留状态和失败原因，便于后续排查。
 
 响应：
 
@@ -861,7 +862,14 @@ JSON 请求：
     "from": "发件人 <sender@example.com>",
     "to": ["好友 <friend@example.com>"],
     "sentAt": "2026-07-16T10:00:00+08:00",
-    "hasAttachments": false
+    "hasAttachments": false,
+    "sendLog": {
+      "id": "send-log-id",
+      "status": "success",
+      "retryStatus": "none",
+      "smtpMessageId": "<message-id@example.com>",
+      "errorMessage": null
+    }
   }
 }
 ```
@@ -1204,7 +1212,7 @@ JSON 请求：
         "triggerType": "sync",
         "conditionSnapshot": [],
         "resultStatus": "applied",
-        "resultMessage": "已标记为垃圾邮件",
+        "resultMessage": "已移动到垃圾邮件",
         "createdAt": "2026-07-23T16:20:00+08:00"
       }
     ],
@@ -1299,6 +1307,12 @@ JSON 请求：
 
 `GET /api/v1/mail-rules`
 
+规则项额外返回：
+
+- `hitCount`：规则命中次数。
+- `lastHitAt`：最近命中时间。
+- `lastResult`：最近执行结果，支持 `applied`、`skipped`、`failed`。
+
 ### 9.2 创建规则
 
 `POST /api/v1/mail-rules`
@@ -1318,6 +1332,51 @@ JSON 请求：
       "field": "subject",
       "operator": "contains",
       "value": "网络安全"
+    }
+  ]
+}
+```
+
+`actionType` 支持：
+
+- `move_folder`：移动到本地文件夹，必须提供 `targetFolderId`。
+- `mark_read`：标记为已读。
+- `star`：加星标。
+- `mark_spam`：移动到垃圾邮件，邮件会从默认收件箱列表隐藏，并可在 `systemFolder=spam` 查询。
+
+垃圾邮件规则可使用的专用条件：
+
+- `blacklist_sender`：黑名单发件人邮箱，支持逗号、分号、换行分隔多个邮箱。
+- `blacklist_domain`：黑名单域名，支持多个域名。
+- `spam_keyword`：垃圾关键词，会匹配主题、正文索引和发件人。
+
+示例：
+
+```json
+{
+  "name": "垃圾邮件黑名单",
+  "enabled": true,
+  "matchMode": "any",
+  "priority": 10,
+  "stopOnMatch": true,
+  "actionType": "mark_spam",
+  "targetFolderId": null,
+  "sortOrder": 10,
+  "conditions": [
+    {
+      "field": "blacklist_sender",
+      "operator": "equals",
+      "value": "bad@example.com, cheat@example.com"
+    },
+    {
+      "field": "blacklist_domain",
+      "operator": "equals",
+      "value": "promo.example.com"
+    },
+    {
+      "field": "spam_keyword",
+      "operator": "contains",
+      "value": "优惠, 返利, 免费提现"
     }
   ]
 }
@@ -1405,9 +1464,74 @@ JSON 请求：
 }
 ```
 
-## 10. 收取任务接口
+## 10. 发送记录接口
 
-### 10.1 任务列表
+### 10.1 发送记录列表
+
+`GET /api/v1/send-logs`
+
+查询参数：
+
+- `accountId`
+- `messageId`
+- `status`：`sending`、`success`、`failed`、`local_save_failed`
+- `retryStatus`：`none`、`retryable`、`retrying`、`exhausted`
+- `composeMode`
+- `keyword`
+- `dateFrom` / `dateTo`
+- `page`
+- `pageSize`
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "获取成功",
+  "httpCode": 200,
+  "data": {
+    "items": [
+      {
+        "id": "send-log-id",
+        "accountId": "account-id",
+        "accountEmail": "sender@example.com",
+        "messageId": "message-id",
+        "messageSubject": "会议纪要",
+        "draftId": null,
+        "sourceMessageId": null,
+        "composeMode": "new",
+        "smtpMessageId": "<message-id@example.com>",
+        "recipients": {
+          "to": ["好友 <friend@example.com>"],
+          "cc": [],
+          "bcc": []
+        },
+        "subject": "会议纪要",
+        "attachmentCount": 0,
+        "status": "success",
+        "retryStatus": "none",
+        "retryCount": 0,
+        "errorMessage": null,
+        "startedAt": "2026-07-23T17:20:00+08:00",
+        "finishedAt": "2026-07-23T17:20:02+08:00"
+      }
+    ],
+    "page": 1,
+    "pageSize": 20,
+    "total": 1
+  }
+}
+```
+
+### 10.2 发送记录详情
+
+`GET /api/v1/send-logs/{id}`
+
+返回单条发送记录。普通用户只能查看自己的发信记录。
+
+## 11. 收取任务接口
+
+### 11.1 任务列表
 
 `GET /api/v1/sync-jobs`
 
@@ -1417,13 +1541,13 @@ JSON 请求：
 - `page`：页码。
 - `pageSize`：每页数量。
 
-### 10.2 任务详情
+### 11.2 任务详情
 
 `GET /api/v1/sync-jobs/{id}`
 
 响应包含任务状态、触发方式、开始时间、结束时间、新增邮件数和错误信息。
 
-### 10.3 任务事件日志
+### 11.3 任务事件日志
 
 `GET /api/v1/sync-jobs/{id}/events`
 
@@ -1461,9 +1585,9 @@ JSON 请求：
 }
 ```
 
-## 11. OAuth 接口
+## 12. OAuth 接口
 
-### 11.1 开始 Microsoft 授权
+### 12.1 开始 Microsoft 授权
 
 `POST /api/v1/oauth/microsoft/start`
 
@@ -1483,7 +1607,7 @@ JSON 请求：
 
 前端拿到 `authUrl` 后跳转到 Microsoft 授权页。
 
-### 11.2 完成 Microsoft 授权
+### 12.2 完成 Microsoft 授权
 
 `POST /api/v1/oauth/microsoft/complete`
 
@@ -1498,7 +1622,7 @@ JSON 请求：
 
 响应为创建后的邮箱账号。后端会把 access token 和 refresh token 加密存储。
 
-## 12. 前端处理要求
+## 13. 前端处理要求
 
 - 前端 API 客户端必须统一解析 envelope。
 - 当 `success=false` 时，优先显示 `message`。

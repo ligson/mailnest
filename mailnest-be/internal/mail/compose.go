@@ -2,6 +2,7 @@ package mail
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"html"
 	"log"
@@ -40,36 +41,72 @@ const maxOutgoingAttachmentCount = 20
 
 const maxOutgoingAttachmentBytes = 25 << 20
 
+type SendMessageResult struct {
+	Message storage.MailMessage
+	Log     storage.MailSendLog
+}
+
 func (s *Service) SendMessage(userID int64, accountID int64, message OutgoingMessage) (storage.MailMessage, error) {
+	result, err := s.SendMessageWithLog(userID, accountID, message)
+	return result.Message, err
+}
+
+func (s *Service) SendMessageWithLog(userID int64, accountID int64, message OutgoingMessage) (SendMessageResult, error) {
 	started := time.Now()
 	log.Printf("发送邮件开始 userID=%d accountID=%d mode=%s attachments=%d forwardAttachments=%d", userID, accountID, normalizeComposeMode(message.ComposeMode), len(message.Attachments), len(message.ForwardAttachmentIDs))
+	sendLog, err := s.store.CreateMailSendLog(storage.CreateMailSendLogParams{
+		UserID:          userID,
+		AccountID:       accountID,
+		DraftID:         sql.NullInt64{Int64: message.DraftID, Valid: message.DraftID > 0},
+		SourceMessageID: sql.NullInt64{Int64: message.SourceMessageID, Valid: message.SourceMessageID > 0},
+		ComposeMode:     message.ComposeMode,
+		RecipientsJSON:  recipientsSnapshot(message),
+		Subject:         message.Subject,
+		AttachmentCount: len(message.Attachments) + len(message.ForwardAttachmentIDs),
+		StartedAt:       sql.NullTime{Time: started, Valid: true},
+	})
+	if err != nil {
+		return SendMessageResult{}, err
+	}
+	fail := func(status string, retryStatus string, cause error) (SendMessageResult, error) {
+		updated := s.updateSendLog(userID, sendLog.ID, storage.UpdateMailSendLogParams{
+			Status:       status,
+			RetryStatus:  retryStatus,
+			ErrorMessage: sanitizeSendError(cause),
+			FinishedAt:   sql.NullTime{Time: time.Now(), Valid: true},
+		})
+		if updated.ID != 0 {
+			sendLog = updated
+		}
+		return SendMessageResult{Log: sendLog}, cause
+	}
 	account, err := s.store.FindMailAccountByID(userID, accountID)
 	if err != nil {
-		return storage.MailMessage{}, err
+		return fail("failed", "none", err)
 	}
 	if err := s.prepareOutgoingSource(userID, &message); err != nil {
-		return storage.MailMessage{}, err
+		return fail("failed", "none", err)
 	}
 	if len(message.ForwardAttachmentIDs) > 0 {
 		forwarded, err := s.forwardedAttachments(userID, message.SourceMessageID, message.ForwardAttachmentIDs)
 		if err != nil {
-			return storage.MailMessage{}, err
+			return fail("failed", "none", err)
 		}
 		message.Attachments = append(message.Attachments, forwarded...)
 	}
 	if err := validateOutgoingAttachments(message.Attachments); err != nil {
-		return storage.MailMessage{}, err
+		return fail("failed", "none", err)
 	}
 	config, err := s.smtpConfig(account)
 	if err != nil {
-		return storage.MailMessage{}, err
+		return fail("failed", "none", err)
 	}
 	message.From = account.Email
 	message.FromName = account.DisplayName
 	result, err := s.sender.Send(config, message)
 	if err != nil {
 		log.Printf("发送邮件失败 userID=%d accountID=%d err=%v", userID, accountID, err)
-		return storage.MailMessage{}, err
+		return fail("failed", "retryable", err)
 	}
 
 	fetched := FetchedMessage{
@@ -97,13 +134,35 @@ func (s *Service) SendMessage(userID int64, accountID int64, message OutgoingMes
 	}
 	if _, err := s.saveMessage(userID, accountID, normalizeSentFolder(account.SentFolder), fetched); err != nil {
 		log.Printf("发送邮件已投递但本地保存失败 userID=%d accountID=%d hasMessageID=%t err=%v", userID, accountID, strings.TrimSpace(result.MessageID) != "", err)
-		return storage.MailMessage{}, err
+		return fail("local_save_failed", "none", err)
 	}
 	if err := s.upsertBCCContacts(userID, message.BCC, result.SentAt); err != nil {
 		log.Printf("发送邮件后沉淀密送联系人失败 userID=%d accountID=%d err=%v", userID, accountID, err)
 	}
 	log.Printf("发送邮件完成 userID=%d accountID=%d hasMessageID=%t duration=%s", userID, accountID, strings.TrimSpace(result.MessageID) != "", time.Since(started))
-	return s.store.FindMailMessageByUID(userID, accountID, normalizeSentFolder(account.SentFolder), fetched.UID)
+	sent, err := s.store.FindMailMessageByUID(userID, accountID, normalizeSentFolder(account.SentFolder), fetched.UID)
+	if err != nil {
+		return fail("local_save_failed", "none", err)
+	}
+	sendLog = s.updateSendLog(userID, sendLog.ID, storage.UpdateMailSendLogParams{
+		MessageID:     sql.NullInt64{Int64: sent.ID, Valid: true},
+		SMTPMessageID: result.MessageID,
+		Status:        "success",
+		RetryStatus:   "none",
+		FinishedAt:    sql.NullTime{Time: time.Now(), Valid: true},
+	})
+	return SendMessageResult{Message: sent, Log: sendLog}, nil
+}
+
+func (s *Service) updateSendLog(userID, id int64, params storage.UpdateMailSendLogParams) storage.MailSendLog {
+	params.UserID = userID
+	params.ID = id
+	logItem, err := s.store.UpdateMailSendLog(params)
+	if err != nil {
+		log.Printf("更新发信记录失败 userID=%d sendLogID=%d err=%v", userID, id, err)
+		return storage.MailSendLog{}
+	}
+	return logItem
 }
 
 func (s *Service) GetComposeContext(userID, messageID int64, mode string) (ComposeContext, error) {
@@ -218,6 +277,30 @@ func (s *Service) forwardedAttachments(userID, sourceMessageID int64, ids []int6
 		})
 	}
 	return attachments, nil
+}
+
+func recipientsSnapshot(message OutgoingMessage) string {
+	payload := map[string][]string{
+		"to":  nonEmptyStrings(message.To),
+		"cc":  nonEmptyStrings(message.CC),
+		"bcc": nonEmptyStrings(message.BCC),
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return `{"to":[],"cc":[],"bcc":[]}`
+	}
+	return string(data)
+}
+
+func sanitizeSendError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.TrimSpace(err.Error())
+	if len([]rune(message)) > 500 {
+		message = string([]rune(message)[:500])
+	}
+	return message
 }
 
 func validateOutgoingAttachments(attachments []OutgoingAttachment) error {

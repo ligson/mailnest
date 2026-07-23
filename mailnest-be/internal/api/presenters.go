@@ -282,6 +282,39 @@ func mailRuleLogPayload(item storage.MailRuleLog) map[string]any {
 	}
 }
 
+func mailSendLogPayload(item storage.MailSendLog) map[string]any {
+	var recipients any = map[string]any{
+		"to":  []any{},
+		"cc":  []any{},
+		"bcc": []any{},
+	}
+	if strings.TrimSpace(item.RecipientsJSON) != "" {
+		_ = json.Unmarshal([]byte(item.RecipientsJSON), &recipients)
+	}
+	return map[string]any{
+		"id":              strconv.FormatInt(item.ID, 10),
+		"accountId":       strconv.FormatInt(item.AccountID, 10),
+		"accountEmail":    nullableString(item.AccountEmail),
+		"messageId":       nullableInt64(item.MessageID),
+		"messageSubject":  nullableString(item.MessageSubject),
+		"draftId":         nullableInt64(item.DraftID),
+		"sourceMessageId": nullableInt64(item.SourceMessageID),
+		"composeMode":     item.ComposeMode,
+		"smtpMessageId":   nullableString(item.SMTPMessageID),
+		"recipients":      recipients,
+		"subject":         item.Subject,
+		"attachmentCount": item.AttachmentCount,
+		"status":          item.Status,
+		"retryStatus":     item.RetryStatus,
+		"retryCount":      item.RetryCount,
+		"errorMessage":    nullableString(item.ErrorMessage),
+		"startedAt":       nullableTime(item.StartedAt),
+		"finishedAt":      nullableTime(item.FinishedAt),
+		"createdAt":       item.CreatedAt,
+		"updatedAt":       item.UpdatedAt,
+	}
+}
+
 func nullableRuleTargetFolderID(id int64) any {
 	if id <= 0 {
 		return nil

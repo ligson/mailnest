@@ -231,6 +231,30 @@ type MailRuleLog struct {
 	CreatedAt             time.Time
 }
 
+type MailSendLog struct {
+	ID              int64
+	UserID          int64
+	AccountID       int64
+	AccountEmail    sql.NullString
+	MessageID       sql.NullInt64
+	MessageSubject  sql.NullString
+	DraftID         sql.NullInt64
+	SourceMessageID sql.NullInt64
+	ComposeMode     string
+	SMTPMessageID   sql.NullString
+	RecipientsJSON  string
+	Subject         string
+	AttachmentCount int
+	Status          string
+	RetryStatus     string
+	RetryCount      int
+	ErrorMessage    sql.NullString
+	StartedAt       sql.NullTime
+	FinishedAt      sql.NullTime
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
 type CreateMailMessageParams struct {
 	UserID          int64
 	AccountID       int64
@@ -434,6 +458,44 @@ type ListMailRuleLogsQuery struct {
 	TriggerType  string
 	Limit        int
 	Offset       int
+}
+
+type CreateMailSendLogParams struct {
+	UserID          int64
+	AccountID       int64
+	DraftID         sql.NullInt64
+	SourceMessageID sql.NullInt64
+	ComposeMode     string
+	RecipientsJSON  string
+	Subject         string
+	AttachmentCount int
+	StartedAt       sql.NullTime
+}
+
+type UpdateMailSendLogParams struct {
+	UserID        int64
+	ID            int64
+	MessageID     sql.NullInt64
+	SMTPMessageID string
+	Status        string
+	RetryStatus   string
+	RetryCount    int
+	ErrorMessage  string
+	FinishedAt    sql.NullTime
+}
+
+type ListMailSendLogsQuery struct {
+	UserID      int64
+	AccountID   int64
+	MessageID   int64
+	Status      string
+	RetryStatus string
+	ComposeMode string
+	Keyword     string
+	DateFrom    sql.NullTime
+	DateTo      sql.NullTime
+	Limit       int
+	Offset      int
 }
 
 type MessageBatchActionParams struct {

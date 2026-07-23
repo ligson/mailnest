@@ -8,7 +8,7 @@ import (
 
 func (s *Store) migrateGORM() error {
 	if s.db.dialect == dialectMySQL && s.db.gormDB.Migrator().HasTable(&userModel{}) {
-		if err := s.db.gormDB.AutoMigrate(&mailDraftModel{}, &mailThreadModel{}, &mailRuleLogModel{}); err != nil {
+		if err := s.db.gormDB.AutoMigrate(&mailDraftModel{}, &mailThreadModel{}, &mailRuleLogModel{}, &mailSendLogModel{}); err != nil {
 			return fmt.Errorf("gorm automigrate mysql incremental tables: %w", err)
 		}
 		return s.createSupplementalIndexes()
@@ -23,6 +23,7 @@ func (s *Store) migrateGORM() error {
 		&mailRuleModel{},
 		&mailRuleConditionModel{},
 		&mailRuleLogModel{},
+		&mailSendLogModel{},
 		&mailAttachmentModel{},
 		&mailDraftModel{},
 		&mailSyncJobModel{},
@@ -48,6 +49,7 @@ func (s *Store) migrateExistingSQLite() error {
 		{table: "mail_rules", model: &mailRuleModel{}},
 		{table: "mail_rule_conditions", model: &mailRuleConditionModel{}},
 		{table: "mail_rule_logs", model: &mailRuleLogModel{}},
+		{table: "mail_send_logs", model: &mailSendLogModel{}},
 		{table: "mail_attachments", model: &mailAttachmentModel{}},
 		{table: "mail_drafts", model: &mailDraftModel{}},
 		{table: "mail_sync_jobs", model: &mailSyncJobModel{}},
@@ -267,6 +269,10 @@ func sqliteExistingIndexStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_mail_rule_logs_user_created ON mail_rule_logs(user_id, created_at DESC, id DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_mail_rule_logs_user_message ON mail_rule_logs(user_id, message_id, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_mail_rule_logs_user_rule ON mail_rule_logs(user_id, rule_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_created ON mail_send_logs(user_id, created_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_account ON mail_send_logs(user_id, account_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_message ON mail_send_logs(user_id, message_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_status ON mail_send_logs(user_id, status, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_mail_message_states_user_message ON mail_message_states(user_id, message_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_mail_message_states_user_deleted ON mail_message_states(user_id, deleted_at, message_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_mail_message_states_user_spam ON mail_message_states(user_id, is_spam, message_id)`,
@@ -334,6 +340,10 @@ func supplementalIndexStatements(dialect dbDialect) []string {
 			`CREATE INDEX idx_mail_rule_logs_user_created ON mail_rule_logs(user_id, created_at DESC, id DESC)`,
 			`CREATE INDEX idx_mail_rule_logs_user_message ON mail_rule_logs(user_id, message_id, created_at DESC)`,
 			`CREATE INDEX idx_mail_rule_logs_user_rule ON mail_rule_logs(user_id, rule_id, created_at DESC)`,
+			`CREATE INDEX idx_mail_send_logs_user_created ON mail_send_logs(user_id, created_at DESC, id DESC)`,
+			`CREATE INDEX idx_mail_send_logs_user_account ON mail_send_logs(user_id, account_id, created_at DESC)`,
+			`CREATE INDEX idx_mail_send_logs_user_message ON mail_send_logs(user_id, message_id, created_at DESC)`,
+			`CREATE INDEX idx_mail_send_logs_user_status ON mail_send_logs(user_id, status, created_at DESC)`,
 		}
 	case dialectPostgres:
 		return []string{
@@ -349,6 +359,10 @@ func supplementalIndexStatements(dialect dbDialect) []string {
 			`CREATE INDEX IF NOT EXISTS idx_mail_rule_logs_user_created ON mail_rule_logs(user_id, created_at DESC, id DESC)`,
 			`CREATE INDEX IF NOT EXISTS idx_mail_rule_logs_user_message ON mail_rule_logs(user_id, message_id, created_at DESC)`,
 			`CREATE INDEX IF NOT EXISTS idx_mail_rule_logs_user_rule ON mail_rule_logs(user_id, rule_id, created_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_created ON mail_send_logs(user_id, created_at DESC, id DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_account ON mail_send_logs(user_id, account_id, created_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_message ON mail_send_logs(user_id, message_id, created_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_status ON mail_send_logs(user_id, status, created_at DESC)`,
 		}
 	default:
 		return []string{
@@ -364,6 +378,10 @@ func supplementalIndexStatements(dialect dbDialect) []string {
 			`CREATE INDEX IF NOT EXISTS idx_mail_rule_logs_user_created ON mail_rule_logs(user_id, created_at DESC, id DESC)`,
 			`CREATE INDEX IF NOT EXISTS idx_mail_rule_logs_user_message ON mail_rule_logs(user_id, message_id, created_at DESC)`,
 			`CREATE INDEX IF NOT EXISTS idx_mail_rule_logs_user_rule ON mail_rule_logs(user_id, rule_id, created_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_created ON mail_send_logs(user_id, created_at DESC, id DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_account ON mail_send_logs(user_id, account_id, created_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_message ON mail_send_logs(user_id, message_id, created_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_status ON mail_send_logs(user_id, status, created_at DESC)`,
 		}
 	}
 }
@@ -550,6 +568,30 @@ type mailRuleLogModel struct {
 }
 
 func (mailRuleLogModel) TableName() string { return "mail_rule_logs" }
+
+type mailSendLogModel struct {
+	ID              int64      `gorm:"primaryKey;autoIncrement;column:id;index:idx_mail_send_logs_user_created,priority:3,sort:desc"`
+	UserID          int64      `gorm:"column:user_id;not null;index:idx_mail_send_logs_user_created,priority:1;index:idx_mail_send_logs_user_account,priority:1;index:idx_mail_send_logs_user_message,priority:1;index:idx_mail_send_logs_user_status,priority:1"`
+	AccountID       int64      `gorm:"column:account_id;not null;index:idx_mail_send_logs_user_account,priority:2"`
+	MessageID       *int64     `gorm:"column:message_id;index:idx_mail_send_logs_user_message,priority:2"`
+	DraftID         *int64     `gorm:"column:draft_id"`
+	SourceMessageID *int64     `gorm:"column:source_message_id"`
+	ComposeMode     string     `gorm:"column:compose_mode;size:64;not null;default:new"`
+	SMTPMessageID   *string    `gorm:"column:smtp_message_id;size:512"`
+	RecipientsJSON  string     `gorm:"column:recipients_json;type:text;not null"`
+	Subject         string     `gorm:"column:subject;type:text;not null"`
+	AttachmentCount int        `gorm:"column:attachment_count;not null;default:0"`
+	Status          string     `gorm:"column:status;size:64;not null;default:sending;index:idx_mail_send_logs_user_status,priority:2"`
+	RetryStatus     string     `gorm:"column:retry_status;size:64;not null;default:none"`
+	RetryCount      int        `gorm:"column:retry_count;not null;default:0"`
+	ErrorMessage    *string    `gorm:"column:error_message;type:text"`
+	StartedAt       *time.Time `gorm:"column:started_at"`
+	FinishedAt      *time.Time `gorm:"column:finished_at"`
+	CreatedAt       time.Time  `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP;index:idx_mail_send_logs_user_created,priority:2,sort:desc;index:idx_mail_send_logs_user_account,priority:3,sort:desc;index:idx_mail_send_logs_user_message,priority:3,sort:desc;index:idx_mail_send_logs_user_status,priority:3,sort:desc"`
+	UpdatedAt       time.Time  `gorm:"column:updated_at;not null;default:CURRENT_TIMESTAMP"`
+}
+
+func (mailSendLogModel) TableName() string { return "mail_send_logs" }
 
 type mailAttachmentModel struct {
 	ID          int64     `gorm:"primaryKey;autoIncrement;column:id;index:idx_mail_attachments_user_message,priority:4;index:idx_mail_attachments_user_created,priority:3,sort:desc;index:idx_mail_attachments_user_inline,priority:3"`

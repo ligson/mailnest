@@ -102,6 +102,8 @@ func (a *App) Routes() http.Handler {
 	mux.Handle("GET /api/v1/sync-jobs", a.authMiddleware(http.HandlerFunc(a.handleListSyncJobs)))
 	mux.Handle("GET /api/v1/sync-jobs/{id}", a.authMiddleware(http.HandlerFunc(a.handleSyncJobDetail)))
 	mux.Handle("GET /api/v1/sync-jobs/{id}/events", a.authMiddleware(http.HandlerFunc(a.handleSyncJobEvents)))
+	mux.Handle("GET /api/v1/send-logs", a.authMiddleware(http.HandlerFunc(a.handleListSendLogs)))
+	mux.Handle("GET /api/v1/send-logs/{id}", a.authMiddleware(http.HandlerFunc(a.handleSendLogDetail)))
 	mux.Handle("GET /api/v1/contacts", a.authMiddleware(http.HandlerFunc(a.handleListContacts)))
 	mux.Handle("POST /api/v1/contacts", a.authMiddleware(http.HandlerFunc(a.handleCreateContact)))
 	mux.Handle("PUT /api/v1/contacts/{id}", a.authMiddleware(http.HandlerFunc(a.handleUpdateContact)))
