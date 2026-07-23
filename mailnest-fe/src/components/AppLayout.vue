@@ -9,7 +9,7 @@
     >
       <div class="shell-brand" :class="{ collapsed }">
         <div class="shell-logo">
-          <mail-outlined class="shell-logo-mark" />
+          <img class="shell-logo-mark" src="/mailnest-icon.svg" alt="" />
           <span class="shell-logo-text">Mail Nest</span>
         </div>
       </div>
@@ -17,6 +17,10 @@
         <a-menu-item key="/mail">
           <mail-outlined />
           <span>邮件</span>
+        </a-menu-item>
+        <a-menu-item key="/attachments">
+          <paper-clip-outlined />
+          <span>附件中心</span>
         </a-menu-item>
         <a-menu-item key="/accounts">
           <setting-outlined />
@@ -52,7 +56,7 @@
         </a-tooltip>
       </div>
     </a-layout-sider>
-    <a-layout>
+    <a-layout class="shell-main">
       <a-layout-header class="shell-header">
         <div class="shell-header-spacer"></div>
         <a-dropdown :trigger="['click']">
@@ -116,6 +120,7 @@ import {
   LockOutlined,
   LogoutOutlined,
   MailOutlined,
+  PaperClipOutlined,
   SettingOutlined,
   TeamOutlined,
   UnlockOutlined,

@@ -21,9 +21,18 @@
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'enabled'">
-            <a-tag :color="record.enabled ? 'green' : 'default'">
-              {{ record.enabled ? '启用' : '停用' }}
-            </a-tag>
+            <div class="account-status-cell">
+              <a-switch
+                :checked="record.enabled"
+                :loading="togglingId === record.id"
+                checked-children="启用"
+                un-checked-children="停用"
+                @change="onAccountEnabledChanged(record, $event)"
+              />
+              <span class="account-status-hint">
+                {{ record.enabled ? '正常收取' : '已从邮件页隐藏' }}
+              </span>
+            </div>
           </template>
           <template v-if="column.key === 'syncStatus'">
             <div class="account-sync-cell">
@@ -245,19 +254,68 @@
         </a-form>
       </a-modal>
 
-      <a-modal v-model:open="syncDetailOpen" title="同步日志" :footer="null">
-        <a-descriptions v-if="syncDetailAccount" bordered size="small" :column="1">
-          <a-descriptions-item label="邮箱">{{ syncDetailAccount.email }}</a-descriptions-item>
-          <a-descriptions-item label="状态">{{ fullSyncStatusText(syncDetailAccount.fullSyncStatus) }}</a-descriptions-item>
-          <a-descriptions-item label="进度">
-            {{ syncDetailAccount.fullSyncProcessed }}/{{ syncDetailAccount.fullSyncTotal || 0 }} 封
-          </a-descriptions-item>
-          <a-descriptions-item label="新增">{{ syncDetailAccount.fullSyncNewCount || 0 }} 封</a-descriptions-item>
-          <a-descriptions-item label="开始时间">{{ formatTime(syncDetailAccount.fullSyncStartedAt) }}</a-descriptions-item>
-          <a-descriptions-item label="结束时间">{{ formatTime(syncDetailAccount.fullSyncFinishedAt) }}</a-descriptions-item>
-          <a-descriptions-item label="说明">{{ syncDetailAccount.fullSyncError || '暂无错误' }}</a-descriptions-item>
-        </a-descriptions>
-      </a-modal>
+      <a-drawer v-model:open="syncLogOpen" title="同步日志中心" width="980" :destroy-on-close="false">
+        <div v-if="syncLogAccount" class="sync-log-header">
+          <div>
+            <strong>{{ syncLogAccount.displayName }}</strong>
+            <div class="sync-log-subtitle">{{ syncLogAccount.email }}</div>
+          </div>
+          <a-space>
+            <a-button @click="loadSyncJobs">刷新</a-button>
+          </a-space>
+        </div>
+        <a-row :gutter="16">
+          <a-col :span="10">
+            <a-table
+              row-key="id"
+              size="small"
+              :columns="jobColumns"
+              :data-source="syncJobs"
+              :loading="syncJobsLoading"
+              :pagination="false"
+              :custom-row="syncJobCustomRow"
+            >
+              <template #bodyCell="{ column, record }">
+                <template v-if="column.key === 'status'">
+                  <a-tag :color="syncJobTagColor(record.status)">{{ record.status }}</a-tag>
+                </template>
+                <template v-if="column.key === 'startedAt'">
+                  {{ formatTime(record.startedAt) }}
+                </template>
+              </template>
+            </a-table>
+          </a-col>
+          <a-col :span="14">
+            <a-descriptions v-if="selectedSyncJob" bordered size="small" :column="1">
+              <a-descriptions-item label="触发方式">{{ selectedSyncJob.triggerType }}</a-descriptions-item>
+              <a-descriptions-item label="状态">{{ selectedSyncJob.status }}</a-descriptions-item>
+              <a-descriptions-item label="新增">{{ selectedSyncJob.newMessageCount }}</a-descriptions-item>
+              <a-descriptions-item label="开始">{{ formatTime(selectedSyncJob.startedAt) }}</a-descriptions-item>
+              <a-descriptions-item label="结束">{{ formatTime(selectedSyncJob.finishedAt) }}</a-descriptions-item>
+              <a-descriptions-item label="错误">{{ selectedSyncJob.errorMessage || '暂无' }}</a-descriptions-item>
+            </a-descriptions>
+            <a-divider orientation="left">事件</a-divider>
+            <a-list :data-source="syncJobEvents" size="small" :loading="syncJobEventsLoading">
+              <template #renderItem="{ item }">
+                <a-list-item>
+                  <a-list-item-meta>
+                    <template #title>
+                      <a-space>
+                        <a-tag :color="syncEventTagColor(item.level)">{{ item.level }}</a-tag>
+                        <span>{{ item.phase }}</span>
+                      </a-space>
+                    </template>
+                    <template #description>
+                      <div>{{ item.message }}</div>
+                      <small>{{ formatTime(item.createdAt) }}</small>
+                    </template>
+                  </a-list-item-meta>
+                </a-list-item>
+              </template>
+            </a-list>
+          </a-col>
+        </a-row>
+      </a-drawer>
     </section>
   </AppLayout>
 </template>
@@ -270,9 +328,13 @@ import type { MenuInfo } from 'ant-design-vue/es/menu/src/interface';
 import {
   mailAccountApi,
   oauthApi,
+  syncJobApi,
   type CreateMailAccountPayload,
   type MailAccount,
   type MailAccountFolder,
+  type SyncJob,
+  type SyncJobEvent,
+  type UpdateMailAccountPayload,
 } from '../api/client';
 import AppLayout from '../components/AppLayout.vue';
 
@@ -280,6 +342,7 @@ const loading = ref(false);
 const saving = ref(false);
 const testingId = ref('');
 const syncingId = ref('');
+const togglingId = ref('');
 const folderLoading = ref(false);
 const fullSyncingId = ref('');
 const stoppingId = ref('');
@@ -291,8 +354,13 @@ const accounts = ref<MailAccount[]>([]);
 const accountFolders = ref<MailAccountFolder[]>([]);
 const pollErrors = reactive<Record<string, string>>({});
 const pollingIds = new Set<string>();
-const syncDetailOpen = ref(false);
-const syncDetailAccount = ref<MailAccount | null>(null);
+const syncLogOpen = ref(false);
+const syncLogAccount = ref<MailAccount | null>(null);
+const syncJobs = ref<SyncJob[]>([]);
+const syncJobsLoading = ref(false);
+const selectedSyncJob = ref<SyncJob | null>(null);
+const syncJobEvents = ref<SyncJobEvent[]>([]);
+const syncJobEventsLoading = ref(false);
 let statusTimer: number | undefined;
 const columns: TableColumnsType<MailAccount> = [
   { title: '名称', dataIndex: 'displayName', key: 'displayName' },
@@ -301,9 +369,14 @@ const columns: TableColumnsType<MailAccount> = [
   { title: 'SMTP 主机', dataIndex: 'smtpHost', key: 'smtpHost' },
   { title: '端口', dataIndex: 'imapPort', key: 'imapPort', width: 90 },
   { title: '认证', key: 'authType', width: 90 },
-  { title: '状态', key: 'enabled', width: 90 },
+  { title: '状态', key: 'enabled', width: 150 },
   { title: '同步状态', key: 'syncStatus', width: 170 },
   { title: '操作', key: 'action', width: 250 },
+];
+const jobColumns: TableColumnsType<SyncJob> = [
+  { title: '状态', key: 'status', width: 90 },
+  { title: '触发', dataIndex: 'triggerType', key: 'triggerType', width: 90 },
+  { title: '开始时间', key: 'startedAt' },
 ];
 const form = reactive<CreateMailAccountPayload>({
   displayName: '',
@@ -455,6 +528,66 @@ async function saveAccount() {
   }
 }
 
+function accountToUpdatePayload(account: MailAccount, enabled = account.enabled): UpdateMailAccountPayload {
+  return {
+    displayName: account.displayName,
+    email: account.email,
+    imapHost: account.imapHost,
+    imapPort: account.imapPort,
+    imapTls: account.imapTls,
+    imapUsername: account.imapUsername,
+    imapPassword: '',
+    smtpHost: account.smtpHost || '',
+    smtpPort: account.smtpPort || 587,
+    smtpTls: account.smtpTls,
+    smtpStartTls: account.smtpStartTls,
+    smtpUsername: account.smtpUsername || '',
+    smtpPassword: '',
+    smtpUseImapPassword: false,
+    sentFolder: account.sentFolder || 'Sent',
+    signatureHtml: account.signatureHtml || '',
+    pollIntervalMinutes: account.pollIntervalMinutes || 10,
+    enabled,
+    cleanupEnabled: account.cleanupEnabled,
+    cleanupRetentionDays: account.cleanupRetentionDays || 90,
+  };
+}
+
+async function updateAccountEnabled(account: MailAccount, enabled: boolean) {
+  togglingId.value = account.id;
+  try {
+    const updated = await mailAccountApi.update(account.id, accountToUpdatePayload(account, enabled));
+    accounts.value = accounts.value.map((item) => (item.id === updated.id ? updated : item));
+    message.success(enabled ? '邮箱账号已启用' : '邮箱账号已停用');
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '更新邮箱账号状态失败');
+  } finally {
+    togglingId.value = '';
+  }
+}
+
+function toggleAccountEnabled(account: MailAccount, enabled: boolean) {
+  if (account.enabled === enabled || togglingId.value === account.id) {
+    return;
+  }
+  if (enabled) {
+    void updateAccountEnabled(account, true);
+    return;
+  }
+  Modal.confirm({
+    title: '停用邮箱账号',
+    content: '停用后不会自动收取邮件，也不会出现在邮件页左侧账号筛选中；账号管理页仍可重新启用。',
+    okText: '停用',
+    cancelText: '取消',
+    okButtonProps: { danger: true },
+    onOk: () => updateAccountEnabled(account, false),
+  });
+}
+
+function onAccountEnabledChanged(account: MailAccount, checked: boolean | string | number) {
+  toggleAccountEnabled(account, Boolean(checked));
+}
+
 async function removeAccount(id: string) {
   try {
     await mailAccountApi.remove(id);
@@ -485,7 +618,7 @@ async function handleAccountAction(account: MailAccount, info: MenuInfo) {
       await testConnection(account.id);
       break;
     case 'sync-log':
-      openSyncDetail(account);
+      await openSyncLogCenter(account);
       break;
     case 'delete':
       confirmRemoveAccount(account.id);
@@ -636,9 +769,6 @@ function mergeAccountSyncStatus(id: string, status: Awaited<ReturnType<typeof ma
         }
       : account
   ));
-  if (syncDetailAccount.value?.id === id) {
-    syncDetailAccount.value = accounts.value.find((account) => account.id === id) || null;
-  }
 }
 
 function fullSyncPercent(account: MailAccount) {
@@ -686,9 +816,71 @@ function fullSyncHint(account: MailAccount) {
   return account.cleanupEnabled ? `清理保留 ${account.cleanupRetentionDays} 天` : '清理关闭';
 }
 
-function openSyncDetail(account: MailAccount) {
-  syncDetailAccount.value = account;
-  syncDetailOpen.value = true;
+async function openSyncLogCenter(account: MailAccount) {
+  syncLogAccount.value = account;
+  syncLogOpen.value = true;
+  selectedSyncJob.value = null;
+  syncJobEvents.value = [];
+  await loadSyncJobs();
+}
+
+async function loadSyncJobs() {
+  if (!syncLogAccount.value) {
+    return;
+  }
+  syncJobsLoading.value = true;
+  try {
+    const data = await syncJobApi.list({ accountId: syncLogAccount.value.id, pageSize: 50 });
+    syncJobs.value = data.items;
+    if (!selectedSyncJob.value && data.items.length > 0) {
+      await selectSyncJob(data.items[0]);
+    }
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '获取同步任务失败');
+  } finally {
+    syncJobsLoading.value = false;
+  }
+}
+
+async function selectSyncJob(record: SyncJob) {
+  selectedSyncJob.value = record;
+  syncJobEventsLoading.value = true;
+  try {
+    const data = await syncJobApi.events(record.id, { pageSize: 100 });
+    syncJobEvents.value = data.items;
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '获取同步事件失败');
+  } finally {
+    syncJobEventsLoading.value = false;
+  }
+}
+
+function syncJobCustomRow(record: SyncJob) {
+  return {
+    class: selectedSyncJob.value?.id === record.id ? 'sync-job-row active' : 'sync-job-row',
+    onClick: () => {
+      void selectSyncJob(record);
+    },
+  };
+}
+
+function syncJobTagColor(status: string) {
+  const map: Record<string, string> = {
+    running: 'processing',
+    success: 'green',
+    failed: 'red',
+    cancelled: 'orange',
+  };
+  return map[status] || 'default';
+}
+
+function syncEventTagColor(level: string) {
+  const map: Record<string, string> = {
+    info: 'blue',
+    warn: 'orange',
+    error: 'red',
+  };
+  return map[level] || 'default';
 }
 
 function formatTime(value: string | null) {
@@ -717,8 +909,22 @@ async function startMicrosoftOAuth() {
   min-width: 130px;
 }
 
+.account-status-cell {
+  display: grid;
+  gap: 5px;
+  min-width: 118px;
+  justify-items: start;
+}
+
+.account-status-hint {
+  color: var(--muted-color);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
 .account-sync-hint {
-  color: #6b7280;
+  color: var(--muted-color);
   font-size: 12px;
   line-height: 18px;
   overflow: hidden;
@@ -737,7 +943,7 @@ async function startMicrosoftOAuth() {
 
 .form-help {
   margin-top: 6px;
-  color: #6b7280;
+  color: var(--muted-color);
   font-size: 12px;
   line-height: 18px;
 }
@@ -822,13 +1028,13 @@ async function startMicrosoftOAuth() {
 
 .advanced-settings {
   padding: 12px 14px;
-  border: 1px solid #e5ebf3;
+  border: 1px solid var(--border-color);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--surface-muted);
 }
 
 .advanced-settings summary {
-  color: #334155;
+  color: var(--heading-color);
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
@@ -848,9 +1054,9 @@ async function startMicrosoftOAuth() {
   gap: 12px;
   margin-top: 2px;
   padding: 14px;
-  border: 1px solid #fde3cf;
+  border: 1px solid color-mix(in srgb, #dc2626 22%, var(--border-color));
   border-radius: 8px;
-  background: #fff7ed;
+  background: color-mix(in srgb, #f97316 10%, var(--surface-bg));
 }
 
 .danger-settings-title {
@@ -863,13 +1069,13 @@ async function startMicrosoftOAuth() {
   display: grid;
   gap: 8px;
   padding: 12px 14px;
-  border: 1px solid #e5ebf3;
+  border: 1px solid var(--border-color);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--surface-muted);
 }
 
 .signature-preview-title {
-  color: #334155;
+  color: var(--heading-color);
   font-size: 13px;
   font-weight: 700;
 }
@@ -877,10 +1083,10 @@ async function startMicrosoftOAuth() {
 .signature-preview-body {
   min-height: 70px;
   padding: 12px;
-  border: 1px solid #edf1f7;
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: #ffffff;
-  color: #1f2329;
+  background: var(--surface-bg);
+  color: var(--text-color);
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
@@ -892,10 +1098,10 @@ async function startMicrosoftOAuth() {
 
 .signature-preview-empty {
   padding: 14px 12px;
-  border: 1px dashed #cbd5e1;
+  border: 1px dashed var(--border-color);
   border-radius: 8px;
-  color: #8a96a8;
-  background: #ffffff;
+  color: var(--muted-weak);
+  background: var(--surface-bg);
 }
 
 .cleanup-grid {
@@ -912,8 +1118,8 @@ async function startMicrosoftOAuth() {
   justify-content: flex-end;
   gap: 10px;
   padding: 14px 0 4px;
-  border-top: 1px solid #edf1f7;
-  background: #ffffff;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-bg);
 }
 
 @media (max-width: 760px) {

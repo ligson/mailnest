@@ -3,12 +3,8 @@ package storage
 import (
 	"database/sql"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 type User struct {
@@ -19,6 +15,7 @@ type User struct {
 	Nickname     sql.NullString
 	AvatarPath   sql.NullString
 	Bio          sql.NullString
+	UITheme      string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -65,26 +62,35 @@ type MailAccount struct {
 }
 
 type MailMessage struct {
-	ID             int64
-	UserID         int64
-	AccountID      int64
-	LocalFolderID  sql.NullInt64
-	Folder         string
-	IMAPUID        string
-	MessageID      sql.NullString
-	Subject        sql.NullString
-	FromAddr       sql.NullString
-	ToAddrs        sql.NullString
-	CCAddrs        sql.NullString
-	SentAt         sql.NullTime
-	ReceivedAt     sql.NullTime
-	HasAttachments bool
-	TextBodyPath   sql.NullString
-	HTMLBodyPath   sql.NullString
-	RawPath        sql.NullString
-	SearchText     sql.NullString
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID              int64
+	UserID          int64
+	AccountID       int64
+	LocalFolderID   sql.NullInt64
+	Folder          string
+	IMAPUID         string
+	MessageID       sql.NullString
+	Subject         sql.NullString
+	FromAddr        sql.NullString
+	ToAddrs         sql.NullString
+	CCAddrs         sql.NullString
+	SentAt          sql.NullTime
+	ReceivedAt      sql.NullTime
+	HasAttachments  bool
+	TextBodyPath    sql.NullString
+	HTMLBodyPath    sql.NullString
+	RawPath         sql.NullString
+	SearchText      sql.NullString
+	InReplyTo       sql.NullString
+	References      sql.NullString
+	SourceMessageID sql.NullInt64
+	ComposeMode     sql.NullString
+	IsRead          bool
+	Starred         bool
+	IsSpam          bool
+	SpamAt          sql.NullTime
+	DeletedAt       sql.NullTime
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type MailAttachment struct {
@@ -106,6 +112,7 @@ type MailFolder struct {
 	Name      string
 	Color     sql.NullString
 	SortOrder int
+	RuleCount int
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -133,6 +140,9 @@ type MailRule struct {
 	Name           string
 	Enabled        bool
 	MatchMode      string
+	Priority       int
+	StopOnMatch    bool
+	ActionType     string
 	TargetFolderID int64
 	SortOrder      int
 	CreatedAt      time.Time
@@ -149,22 +159,26 @@ type MailRuleCondition struct {
 }
 
 type CreateMailMessageParams struct {
-	UserID         int64
-	AccountID      int64
-	Folder         string
-	IMAPUID        string
-	MessageID      string
-	Subject        string
-	FromAddr       string
-	ToAddrs        string
-	CCAddrs        string
-	SentAt         sql.NullTime
-	ReceivedAt     sql.NullTime
-	HasAttachments bool
-	TextBodyPath   string
-	HTMLBodyPath   string
-	RawPath        string
-	SearchText     string
+	UserID          int64
+	AccountID       int64
+	Folder          string
+	IMAPUID         string
+	MessageID       string
+	Subject         string
+	FromAddr        string
+	ToAddrs         string
+	CCAddrs         string
+	SentAt          sql.NullTime
+	ReceivedAt      sql.NullTime
+	HasAttachments  bool
+	TextBodyPath    string
+	HTMLBodyPath    string
+	RawPath         string
+	SearchText      string
+	InReplyTo       string
+	References      string
+	SourceMessageID sql.NullInt64
+	ComposeMode     string
 }
 
 type UpdateMailMessageContentParams struct {
@@ -178,6 +192,8 @@ type UpdateMailMessageContentParams struct {
 	TextBodyPath string
 	HTMLBodyPath string
 	SearchText   string
+	InReplyTo    string
+	References   string
 }
 
 type ListMailMessagesQuery struct {
@@ -192,6 +208,11 @@ type ListMailMessagesQuery struct {
 	DateFrom       sql.NullTime
 	DateTo         sql.NullTime
 	HasAttachments sql.NullBool
+	IncludeDeleted bool
+	OnlyDeleted    bool
+	IsRead         sql.NullBool
+	Starred        sql.NullBool
+	IsSpam         sql.NullBool
 	Limit          int
 	Offset         int
 	SummaryOnly    bool
@@ -214,6 +235,8 @@ type CreateMailFolderParams struct {
 	Color     string
 	SortOrder int
 }
+
+var ErrMailFolderHasRules = errors.New("mail folder has rules")
 
 type CreateContactParams struct {
 	UserID      int64
@@ -239,6 +262,9 @@ type CreateMailRuleParams struct {
 	Name           string
 	Enabled        bool
 	MatchMode      string
+	Priority       int
+	StopOnMatch    bool
+	ActionType     string
 	TargetFolderID int64
 	SortOrder      int
 	Conditions     []CreateMailRuleConditionParams
@@ -250,23 +276,108 @@ type CreateMailRuleConditionParams struct {
 	Value    string
 }
 
+type MessageBatchActionParams struct {
+	UserID     int64
+	MessageIDs []int64
+	Action     string
+	FolderID   sql.NullInt64
+}
+
+type MessageBatchActionResult struct {
+	MatchedCount int
+	ChangedCount int
+	SkippedCount int
+}
+
+type MessageBatchPreview struct {
+	Total        int
+	ReadCount    int
+	UnreadCount  int
+	StarredCount int
+	SpamCount    int
+	DeletedCount int
+	FolderCounts []MessageBatchFolderCount
+}
+
+type MessageBatchFolderCount struct {
+	FolderID int64
+	Name     string
+	Count    int
+}
+
+type ListAttachmentsQuery struct {
+	UserID      int64
+	Keyword     string
+	ContentType string
+	AccountID   int64
+	FolderID    int64
+	Inline      sql.NullBool
+	DateFrom    sql.NullTime
+	DateTo      sql.NullTime
+	Limit       int
+	Offset      int
+}
+
+type AttachmentListItem struct {
+	Attachment     MailAttachment
+	AccountID      int64
+	LocalFolderID  sql.NullInt64
+	MessageSubject sql.NullString
+	MessageFrom    sql.NullString
+	MessageTime    sql.NullTime
+}
+
+type MailSyncJob struct {
+	ID              int64
+	UserID          int64
+	AccountID       int64
+	TriggerType     string
+	Status          string
+	StartedAt       sql.NullTime
+	FinishedAt      sql.NullTime
+	NewMessageCount int
+	ErrorMessage    sql.NullString
+}
+
+type ListSyncJobsQuery struct {
+	UserID    int64
+	AccountID int64
+	Limit     int
+	Offset    int
+}
+
+type MailSyncJobEvent struct {
+	ID         int64
+	JobID      int64
+	Level      string
+	Phase      string
+	Message    string
+	DetailJSON sql.NullString
+	CreatedAt  time.Time
+}
+
+type ListSyncJobEventsQuery struct {
+	UserID int64
+	JobID  int64
+	Level  string
+	Limit  int
+	Offset int
+}
+
 type Store struct {
-	db *sql.DB
+	db *database
 }
 
 func Open(path string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
+	return OpenWithOptions(DatabaseOptions{
+		Driver: "sqlite",
+		Path:   path,
+	})
+}
 
-	db, err := sql.Open("sqlite3", sqliteDSN(path))
+func OpenWithOptions(options DatabaseOptions) (*Store, error) {
+	db, err := openDatabase(options)
 	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(4)
-	db.SetMaxIdleConns(4)
-	if _, err := db.Exec(`PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 10000; PRAGMA temp_store = MEMORY;`); err != nil {
-		_ = db.Close()
 		return nil, err
 	}
 
@@ -279,237 +390,16 @@ func Open(path string) (*Store, error) {
 	return store, nil
 }
 
-func sqliteDSN(path string) string {
-	separator := "?"
-	if strings.Contains(path, "?") {
-		separator = "&"
-	}
-	return path + separator + "_busy_timeout=10000&_journal_mode=WAL&_synchronous=NORMAL&_temp_store=MEMORY"
-}
-
 func (s *Store) Close() error {
 	return s.db.Close()
 }
 
 func (s *Store) migrate() error {
-	_, err := s.db.Exec(`
-CREATE TABLE IF NOT EXISTS users (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	username TEXT NOT NULL UNIQUE,
-	email TEXT NOT NULL UNIQUE,
-	password_hash TEXT NOT NULL,
-	nickname TEXT,
-	avatar_path TEXT,
-	bio TEXT,
-	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS mail_accounts (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	user_id INTEGER NOT NULL,
-	provider TEXT NOT NULL DEFAULT 'custom',
-	auth_type TEXT NOT NULL DEFAULT 'password',
-	display_name TEXT NOT NULL,
-	email TEXT NOT NULL,
-	imap_host TEXT NOT NULL,
-	imap_port INTEGER NOT NULL,
-	imap_tls INTEGER NOT NULL DEFAULT 1,
-	imap_username TEXT NOT NULL,
-	imap_password_encrypted TEXT NOT NULL,
-	smtp_host TEXT NOT NULL DEFAULT '',
-	smtp_port INTEGER NOT NULL DEFAULT 587,
-	smtp_tls INTEGER NOT NULL DEFAULT 0,
-	smtp_starttls INTEGER NOT NULL DEFAULT 1,
-	smtp_username TEXT NOT NULL DEFAULT '',
-	smtp_password_encrypted TEXT NOT NULL DEFAULT '',
-	sent_folder TEXT NOT NULL DEFAULT 'Sent',
-	signature_html TEXT NOT NULL DEFAULT '',
-	oauth_access_token_encrypted TEXT,
-	oauth_refresh_token_encrypted TEXT,
-	oauth_expires_at DATETIME,
-	poll_interval_minutes INTEGER NOT NULL DEFAULT 10,
-	enabled INTEGER NOT NULL DEFAULT 1,
-	last_sync_at DATETIME,
-	last_sync_status TEXT,
-	last_sync_error TEXT,
-	full_sync_status TEXT NOT NULL DEFAULT 'idle',
-	full_sync_total INTEGER NOT NULL DEFAULT 0,
-	full_sync_processed INTEGER NOT NULL DEFAULT 0,
-	full_sync_new_count INTEGER NOT NULL DEFAULT 0,
-	full_sync_started_at DATETIME,
-	full_sync_finished_at DATETIME,
-	full_sync_error TEXT,
-	cleanup_enabled INTEGER NOT NULL DEFAULT 0,
-	cleanup_retention_days INTEGER NOT NULL DEFAULT 90,
-	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	FOREIGN KEY(user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS mail_messages (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	user_id INTEGER NOT NULL,
-	account_id INTEGER NOT NULL,
-	local_folder_id INTEGER,
-	folder TEXT NOT NULL,
-	imap_uid TEXT NOT NULL,
-	message_id TEXT,
-	subject TEXT,
-	from_addr TEXT,
-	to_addrs TEXT,
-	cc_addrs TEXT,
-	sent_at DATETIME,
-	received_at DATETIME,
-	has_attachments INTEGER NOT NULL DEFAULT 0,
-	text_body_path TEXT,
-	html_body_path TEXT,
-	raw_path TEXT,
-	search_text TEXT,
-	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	UNIQUE(account_id, folder, imap_uid),
-	FOREIGN KEY(user_id) REFERENCES users(id),
-	FOREIGN KEY(account_id) REFERENCES mail_accounts(id),
-	FOREIGN KEY(local_folder_id) REFERENCES mail_folders(id)
-);
-
-CREATE TABLE IF NOT EXISTS mail_folders (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	user_id INTEGER NOT NULL,
-	name TEXT NOT NULL,
-	color TEXT,
-	sort_order INTEGER NOT NULL DEFAULT 0,
-	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	UNIQUE(user_id, name),
-	FOREIGN KEY(user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS contacts (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	user_id INTEGER NOT NULL,
-	email TEXT NOT NULL,
-	email_key TEXT NOT NULL,
-	display_name TEXT,
-	nickname TEXT,
-	phone TEXT,
-	company TEXT,
-	notes TEXT,
-	source TEXT NOT NULL DEFAULT 'manual',
-	first_seen_at DATETIME,
-	last_seen_at DATETIME,
-	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	UNIQUE(user_id, email_key),
-	FOREIGN KEY(user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS mail_rules (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	user_id INTEGER NOT NULL,
-	name TEXT NOT NULL,
-	enabled INTEGER NOT NULL DEFAULT 1,
-	match_mode TEXT NOT NULL DEFAULT 'all',
-	target_folder_id INTEGER NOT NULL,
-	sort_order INTEGER NOT NULL DEFAULT 0,
-	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	FOREIGN KEY(user_id) REFERENCES users(id),
-	FOREIGN KEY(target_folder_id) REFERENCES mail_folders(id)
-);
-
-CREATE TABLE IF NOT EXISTS mail_rule_conditions (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	rule_id INTEGER NOT NULL,
-	field TEXT NOT NULL,
-	operator TEXT NOT NULL,
-	value TEXT,
-	FOREIGN KEY(rule_id) REFERENCES mail_rules(id)
-);
-
-CREATE TABLE IF NOT EXISTS mail_attachments (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	user_id INTEGER NOT NULL,
-	message_id INTEGER NOT NULL,
-	filename TEXT NOT NULL,
-	content_type TEXT,
-	content_id TEXT,
-	inline INTEGER NOT NULL DEFAULT 0,
-	size INTEGER NOT NULL DEFAULT 0,
-	file_path TEXT NOT NULL,
-	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	FOREIGN KEY(user_id) REFERENCES users(id),
-	FOREIGN KEY(message_id) REFERENCES mail_messages(id)
-);
-
-CREATE TABLE IF NOT EXISTS mail_sync_jobs (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	user_id INTEGER NOT NULL,
-	account_id INTEGER NOT NULL,
-	trigger_type TEXT NOT NULL,
-	status TEXT NOT NULL,
-	started_at DATETIME,
-	finished_at DATETIME,
-	new_message_count INTEGER NOT NULL DEFAULT 0,
-	error_message TEXT,
-	FOREIGN KEY(user_id) REFERENCES users(id),
-	FOREIGN KEY(account_id) REFERENCES mail_accounts(id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_mail_messages_user_received ON mail_messages(user_id, received_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_mail_messages_account ON mail_messages(account_id, folder, imap_uid);
-CREATE INDEX IF NOT EXISTS idx_mail_messages_user_sort ON mail_messages(user_id, COALESCE(sent_at, received_at, created_at) DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_mail_messages_user_folder_sort ON mail_messages(user_id, folder, COALESCE(sent_at, received_at, created_at) DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_mail_messages_user_account_sort ON mail_messages(user_id, account_id, COALESCE(sent_at, received_at, created_at) DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_mail_messages_user_attachment_sort ON mail_messages(user_id, has_attachments, COALESCE(sent_at, received_at, created_at) DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_mail_messages_user_local_folder_sort ON mail_messages(user_id, local_folder_id, COALESCE(sent_at, received_at, created_at) DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_mail_attachments_user_message ON mail_attachments(user_id, message_id, inline DESC, id ASC);
-CREATE INDEX IF NOT EXISTS idx_contacts_user_updated ON contacts(user_id, updated_at DESC, id DESC);
-`)
-	if err != nil {
-		return err
-	}
-	for _, stmt := range []string{
-		`ALTER TABLE mail_accounts ADD COLUMN provider TEXT NOT NULL DEFAULT 'custom'`,
-		`ALTER TABLE mail_accounts ADD COLUMN auth_type TEXT NOT NULL DEFAULT 'password'`,
-		`ALTER TABLE mail_accounts ADD COLUMN oauth_access_token_encrypted TEXT`,
-		`ALTER TABLE mail_accounts ADD COLUMN oauth_refresh_token_encrypted TEXT`,
-		`ALTER TABLE mail_accounts ADD COLUMN oauth_expires_at DATETIME`,
-		`ALTER TABLE mail_attachments ADD COLUMN content_id TEXT`,
-		`ALTER TABLE mail_attachments ADD COLUMN inline INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE mail_messages ADD COLUMN search_text TEXT`,
-		`ALTER TABLE mail_messages ADD COLUMN local_folder_id INTEGER`,
-		`ALTER TABLE mail_accounts ADD COLUMN full_sync_status TEXT NOT NULL DEFAULT 'idle'`,
-		`ALTER TABLE mail_accounts ADD COLUMN full_sync_total INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE mail_accounts ADD COLUMN full_sync_processed INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE mail_accounts ADD COLUMN full_sync_new_count INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE mail_accounts ADD COLUMN full_sync_started_at DATETIME`,
-		`ALTER TABLE mail_accounts ADD COLUMN full_sync_finished_at DATETIME`,
-		`ALTER TABLE mail_accounts ADD COLUMN full_sync_error TEXT`,
-		`ALTER TABLE mail_accounts ADD COLUMN cleanup_enabled INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE mail_accounts ADD COLUMN cleanup_retention_days INTEGER NOT NULL DEFAULT 90`,
-		`ALTER TABLE users ADD COLUMN nickname TEXT`,
-		`ALTER TABLE users ADD COLUMN avatar_path TEXT`,
-		`ALTER TABLE users ADD COLUMN bio TEXT`,
-		`ALTER TABLE mail_accounts ADD COLUMN sent_folder TEXT NOT NULL DEFAULT 'Sent'`,
-		`ALTER TABLE mail_accounts ADD COLUMN smtp_host TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE mail_accounts ADD COLUMN smtp_port INTEGER NOT NULL DEFAULT 587`,
-		`ALTER TABLE mail_accounts ADD COLUMN smtp_tls INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE mail_accounts ADD COLUMN smtp_starttls INTEGER NOT NULL DEFAULT 1`,
-		`ALTER TABLE mail_accounts ADD COLUMN smtp_username TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE mail_accounts ADD COLUMN smtp_password_encrypted TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE mail_accounts ADD COLUMN signature_html TEXT NOT NULL DEFAULT ''`,
-	} {
-		if _, alterErr := s.db.Exec(stmt); alterErr != nil && !strings.Contains(alterErr.Error(), "duplicate column name") {
-			return alterErr
-		}
-	}
-	return nil
+	return s.migrateGORM()
 }
 
 func (s *Store) CreateUser(username, email, passwordHash string) (User, error) {
-	result, err := s.db.Exec(
+	id, err := s.db.insertAndGetID(
 		`INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)`,
 		username,
 		email,
@@ -519,17 +409,12 @@ func (s *Store) CreateUser(username, email, passwordHash string) (User, error) {
 		return User{}, err
 	}
 
-	id, err := result.LastInsertId()
-	if err != nil {
-		return User{}, err
-	}
-
 	return s.FindUserByID(id)
 }
 
 func (s *Store) FindUserByAccount(account string) (User, error) {
 	row := s.db.QueryRow(
-		`SELECT id, username, email, password_hash, nickname, avatar_path, bio, created_at, updated_at FROM users WHERE username = ? OR email = ?`,
+		`SELECT id, username, email, password_hash, nickname, avatar_path, bio, ui_theme, created_at, updated_at FROM users WHERE username = ? OR email = ?`,
 		account,
 		account,
 	)
@@ -538,17 +423,18 @@ func (s *Store) FindUserByAccount(account string) (User, error) {
 
 func (s *Store) FindUserByID(id int64) (User, error) {
 	row := s.db.QueryRow(
-		`SELECT id, username, email, password_hash, nickname, avatar_path, bio, created_at, updated_at FROM users WHERE id = ?`,
+		`SELECT id, username, email, password_hash, nickname, avatar_path, bio, ui_theme, created_at, updated_at FROM users WHERE id = ?`,
 		id,
 	)
 	return scanUser(row)
 }
 
-func (s *Store) UpdateUserProfile(id int64, nickname, bio string) (User, error) {
+func (s *Store) UpdateUserProfile(id int64, nickname, bio, uiTheme string) (User, error) {
 	result, err := s.db.Exec(
-		`UPDATE users SET nickname = ?, bio = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		`UPDATE users SET nickname = ?, bio = ?, ui_theme = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 		nullIfEmpty(nickname),
 		nullIfEmpty(bio),
+		normalizeUITheme(uiTheme),
 		id,
 	)
 	if err != nil {
@@ -614,6 +500,7 @@ func scanUser(scanner interface {
 		&user.Nickname,
 		&user.AvatarPath,
 		&user.Bio,
+		&user.UITheme,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 	)
@@ -623,7 +510,18 @@ func scanUser(scanner interface {
 	if err != nil {
 		return User{}, err
 	}
+	user.UITheme = normalizeUITheme(user.UITheme)
 	return user, nil
+}
+
+func normalizeUITheme(value string) string {
+	theme := strings.TrimSpace(value)
+	switch theme {
+	case "sky", "grape", "ember", "graphite", "qinghua", "cinnabar", "ink", "daishan":
+		return theme
+	default:
+		return "forest"
+	}
 }
 
 var ErrNotFound = errors.New("not found")
@@ -635,7 +533,7 @@ func (s *Store) CreateMailAccount(account MailAccount) (MailAccount, error) {
 	if strings.TrimSpace(account.AuthType) == "" {
 		account.AuthType = "password"
 	}
-	result, err := s.db.Exec(
+	id, err := s.db.insertAndGetID(
 		`INSERT INTO mail_accounts (
 			user_id, provider, auth_type, display_name, email, imap_host, imap_port, imap_tls, imap_username,
 			imap_password_encrypted, smtp_host, smtp_port, smtp_tls, smtp_starttls, smtp_username,
@@ -668,11 +566,6 @@ func (s *Store) CreateMailAccount(account MailAccount) (MailAccount, error) {
 		boolToInt(account.CleanupEnabled),
 		normalizeRetentionDays(account.CleanupRetentionDays),
 	)
-	if err != nil {
-		return MailAccount{}, err
-	}
-
-	id, err := result.LastInsertId()
 	if err != nil {
 		return MailAccount{}, err
 	}
@@ -727,13 +620,7 @@ func (s *Store) ListDueMailAccounts(limit int) ([]MailAccount, error) {
 			full_sync_started_at, full_sync_finished_at, full_sync_error, cleanup_enabled, cleanup_retention_days,
 			created_at, updated_at
 		FROM mail_accounts
-		WHERE enabled = 1
-			AND poll_interval_minutes > 0
-			AND COALESCE(full_sync_status, 'idle') != 'running'
-			AND (
-				last_sync_at IS NULL
-				OR datetime(last_sync_at, printf('+%d minutes', poll_interval_minutes)) <= CURRENT_TIMESTAMP
-			)
+		`+s.db.dueMailAccountsWhere()+`
 		ORDER BY last_sync_at IS NOT NULL ASC, last_sync_at ASC, id ASC
 		LIMIT ?`,
 		limit,
@@ -943,17 +830,76 @@ func (s *Store) ListSyncedInboxUIDsBefore(userID, accountID int64, before time.T
 }
 
 func (s *Store) CreateSyncJob(userID, accountID int64, triggerType, status string) (int64, error) {
-	result, err := s.db.Exec(
+	return s.db.insertAndGetID(
 		`INSERT INTO mail_sync_jobs (user_id, account_id, trigger_type, status, started_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		userID,
 		accountID,
 		triggerType,
 		status,
 	)
-	if err != nil {
-		return 0, err
+}
+
+func (s *Store) ListSyncJobs(query ListSyncJobsQuery) ([]MailSyncJob, int, error) {
+	where := "WHERE user_id = ?"
+	args := []any{query.UserID}
+	if query.AccountID > 0 {
+		where += " AND account_id = ?"
+		args = append(args, query.AccountID)
 	}
-	return result.LastInsertId()
+	countArgs := append([]any{}, args...)
+	var total int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mail_sync_jobs `+where, countArgs...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if query.Limit <= 0 || query.Limit > 500 {
+		query.Limit = 50
+	}
+	if query.Offset < 0 {
+		query.Offset = 0
+	}
+	args = append(args, query.Limit, query.Offset)
+	rows, err := s.db.Query(
+		`SELECT id, user_id, account_id, trigger_type, status, started_at, finished_at, new_message_count, error_message
+		FROM mail_sync_jobs `+where+`
+		ORDER BY started_at DESC, id DESC
+		LIMIT ? OFFSET ?`,
+		args...,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	items := make([]MailSyncJob, 0)
+	for rows.Next() {
+		var job MailSyncJob
+		if err := rows.Scan(&job.ID, &job.UserID, &job.AccountID, &job.TriggerType, &job.Status, &job.StartedAt, &job.FinishedAt, &job.NewMessageCount, &job.ErrorMessage); err != nil {
+			return nil, 0, err
+		}
+		items = append(items, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
+func (s *Store) FindSyncJobByID(userID, id int64) (MailSyncJob, error) {
+	row := s.db.QueryRow(
+		`SELECT id, user_id, account_id, trigger_type, status, started_at, finished_at, new_message_count, error_message
+		FROM mail_sync_jobs
+		WHERE user_id = ? AND id = ?`,
+		userID,
+		id,
+	)
+	var job MailSyncJob
+	if err := row.Scan(&job.ID, &job.UserID, &job.AccountID, &job.TriggerType, &job.Status, &job.StartedAt, &job.FinishedAt, &job.NewMessageCount, &job.ErrorMessage); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return MailSyncJob{}, ErrNotFound
+		}
+		return MailSyncJob{}, err
+	}
+	return job, nil
 }
 
 func (s *Store) FinishSyncJob(id int64, status string, newMessageCount int, errMessage string) error {
@@ -969,12 +915,75 @@ func (s *Store) FinishSyncJob(id int64, status string, newMessageCount int, errM
 	return err
 }
 
+func (s *Store) CreateSyncJobEvent(jobID int64, level, phase, message string, detailJSON string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO mail_sync_job_events (job_id, level, phase, message, detail_json) VALUES (?, ?, ?, ?, ?)`,
+		jobID,
+		level,
+		phase,
+		message,
+		nullIfEmpty(detailJSON),
+	)
+	return err
+}
+
+func (s *Store) ListSyncJobEvents(query ListSyncJobEventsQuery) ([]MailSyncJobEvent, int, error) {
+	where := "WHERE j.user_id = ? AND e.job_id = ?"
+	args := []any{query.UserID, query.JobID}
+	if query.Level = strings.TrimSpace(query.Level); query.Level != "" {
+		where += " AND e.level = ?"
+		args = append(args, query.Level)
+	}
+	countArgs := append([]any{}, args...)
+	var total int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mail_sync_job_events e JOIN mail_sync_jobs j ON j.id = e.job_id `+where, countArgs...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if query.Limit <= 0 || query.Limit > 500 {
+		query.Limit = 100
+	}
+	if query.Offset < 0 {
+		query.Offset = 0
+	}
+	args = append(args, query.Limit, query.Offset)
+	rows, err := s.db.Query(
+		`SELECT e.id, e.job_id, e.level, e.phase, e.message, e.detail_json, e.created_at
+		FROM mail_sync_job_events e
+		JOIN mail_sync_jobs j ON j.id = e.job_id `+where+`
+		ORDER BY e.created_at DESC, e.id DESC
+		LIMIT ? OFFSET ?`,
+		args...,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	items := make([]MailSyncJobEvent, 0)
+	for rows.Next() {
+		var event MailSyncJobEvent
+		if err := rows.Scan(&event.ID, &event.JobID, &event.Level, &event.Phase, &event.Message, &event.DetailJSON, &event.CreatedAt); err != nil {
+			return nil, 0, err
+		}
+		items = append(items, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
 func (s *Store) InsertMailMessageIfNew(params CreateMailMessageParams) (MailMessage, bool, error) {
 	result, err := s.db.Exec(
-		`INSERT OR IGNORE INTO mail_messages (
-			user_id, account_id, folder, imap_uid, message_id, subject, from_addr, to_addrs, cc_addrs,
-			sent_at, received_at, has_attachments, text_body_path, html_body_path, raw_path, search_text
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.db.insertIgnoreSQL(
+			"mail_messages",
+			[]string{
+				"user_id", "account_id", "folder", "imap_uid", "message_id", "subject", "from_addr", "to_addrs", "cc_addrs",
+				"sent_at", "received_at", "has_attachments", "text_body_path", "html_body_path", "raw_path", "search_text",
+				"in_reply_to", "references_header", "source_message_id", "compose_mode",
+			},
+			[]string{"account_id", "folder", "imap_uid"},
+		),
 		params.UserID,
 		params.AccountID,
 		params.Folder,
@@ -991,6 +1000,10 @@ func (s *Store) InsertMailMessageIfNew(params CreateMailMessageParams) (MailMess
 		nullIfEmpty(params.HTMLBodyPath),
 		nullIfEmpty(params.RawPath),
 		nullIfEmpty(params.SearchText),
+		nullIfEmpty(params.InReplyTo),
+		nullIfEmpty(params.References),
+		nullInt64Value(params.SourceMessageID),
+		nullIfEmpty(params.ComposeMode),
 	)
 	if err != nil {
 		return MailMessage{}, false, err
@@ -1011,10 +1024,13 @@ func (s *Store) InsertMailMessageIfNew(params CreateMailMessageParams) (MailMess
 
 func (s *Store) FindMailMessageByUID(userID, accountID int64, folder, uid string) (MailMessage, error) {
 	row := s.db.QueryRow(
-		`SELECT id, user_id, account_id, local_folder_id, folder, imap_uid, message_id, subject, from_addr, to_addrs, cc_addrs,
-			sent_at, received_at, has_attachments, text_body_path, html_body_path, raw_path, search_text, created_at, updated_at
-		FROM mail_messages
-		WHERE user_id = ? AND account_id = ? AND folder = ? AND imap_uid = ?`,
+		`SELECT m.id, m.user_id, m.account_id, m.local_folder_id, m.folder, m.imap_uid, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs,
+			m.sent_at, m.received_at, m.has_attachments, m.text_body_path, m.html_body_path, m.raw_path, m.search_text,
+			m.in_reply_to, m.references_header, m.source_message_id, m.compose_mode,
+			COALESCE(ms.is_read, 0), COALESCE(ms.starred, 0), COALESCE(ms.is_spam, 0), ms.spam_at, ms.deleted_at, m.created_at, m.updated_at
+		FROM mail_messages m
+		LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id
+		WHERE m.user_id = ? AND m.account_id = ? AND m.folder = ? AND m.imap_uid = ?`,
 		userID,
 		accountID,
 		folder,
@@ -1033,69 +1049,94 @@ func (s *Store) ListMailMessages(userID int64, accountID int64, limit, offset in
 }
 
 func (s *Store) ListMailMessagesByQuery(query ListMailMessagesQuery) ([]MailMessage, int, error) {
-	where := "WHERE user_id = ?"
+	where := "WHERE m.user_id = ?"
 	args := []any{query.UserID}
 	if query.AccountID > 0 {
-		where += " AND account_id = ?"
+		where += " AND m.account_id = ?"
 		args = append(args, query.AccountID)
 	}
 	if query.FolderID > 0 {
-		where += " AND local_folder_id = ?"
+		where += " AND m.local_folder_id = ?"
 		args = append(args, query.FolderID)
 	}
 	switch strings.TrimSpace(query.SystemFolder) {
 	case "inbox":
-		where += " AND folder = ?"
+		where += " AND m.folder = ?"
 		args = append(args, "INBOX")
 	case "sent":
-		where += ` AND folder IN (
+		where += ` AND m.folder IN (
 			SELECT COALESCE(NULLIF(TRIM(sent_folder), ''), 'Sent')
 			FROM mail_accounts
 			WHERE user_id = ?
 		)`
 		args = append(args, query.UserID)
 	case "attachments":
-		where += " AND has_attachments = 1"
+		where += " AND m.has_attachments = 1"
+	case "trash":
+		query.OnlyDeleted = true
+	case "starred":
+		query.Starred = sql.NullBool{Bool: true, Valid: true}
+	case "spam":
+		query.IsSpam = sql.NullBool{Bool: true, Valid: true}
 	}
 	if query.Keyword = strings.TrimSpace(query.Keyword); query.Keyword != "" {
 		like := "%" + query.Keyword + "%"
 		where += ` AND (
-			COALESCE(subject, '') LIKE ?
-			OR COALESCE(from_addr, '') LIKE ?
-			OR COALESCE(to_addrs, '') LIKE ?
-			OR COALESCE(cc_addrs, '') LIKE ?
-			OR COALESCE(search_text, '') LIKE ?
+			COALESCE(m.subject, '') LIKE ?
+			OR COALESCE(m.from_addr, '') LIKE ?
+			OR COALESCE(m.to_addrs, '') LIKE ?
+			OR COALESCE(m.cc_addrs, '') LIKE ?
+			OR COALESCE(m.search_text, '') LIKE ?
 		)`
 		args = append(args, like, like, like, like, like)
 	}
 	if query.From = strings.TrimSpace(query.From); query.From != "" {
-		where += " AND COALESCE(from_addr, '') LIKE ?"
+		where += " AND COALESCE(m.from_addr, '') LIKE ?"
 		args = append(args, "%"+query.From+"%")
 	}
 	if query.Subject = strings.TrimSpace(query.Subject); query.Subject != "" {
-		where += " AND COALESCE(subject, '') LIKE ?"
+		where += " AND COALESCE(m.subject, '') LIKE ?"
 		args = append(args, "%"+query.Subject+"%")
 	}
 	if query.Body = strings.TrimSpace(query.Body); query.Body != "" {
-		where += " AND COALESCE(search_text, '') LIKE ?"
+		where += " AND COALESCE(m.search_text, '') LIKE ?"
 		args = append(args, "%"+query.Body+"%")
 	}
 	if query.DateFrom.Valid {
-		where += " AND COALESCE(sent_at, received_at, created_at) >= ?"
+		where += " AND COALESCE(m.sent_at, m.received_at, m.created_at) >= ?"
 		args = append(args, query.DateFrom.Time)
 	}
 	if query.DateTo.Valid {
-		where += " AND COALESCE(sent_at, received_at, created_at) < ?"
+		where += " AND COALESCE(m.sent_at, m.received_at, m.created_at) < ?"
 		args = append(args, query.DateTo.Time.AddDate(0, 0, 1))
 	}
 	if query.HasAttachments.Valid {
-		where += " AND has_attachments = ?"
+		where += " AND m.has_attachments = ?"
 		args = append(args, boolToInt(query.HasAttachments.Bool))
+	}
+	if query.IsRead.Valid {
+		where += " AND COALESCE(ms.is_read, 0) = ?"
+		args = append(args, boolToInt(query.IsRead.Bool))
+	}
+	if query.Starred.Valid {
+		where += " AND COALESCE(ms.starred, 0) = ?"
+		args = append(args, boolToInt(query.Starred.Bool))
+	}
+	if query.IsSpam.Valid {
+		where += " AND COALESCE(ms.is_spam, 0) = ?"
+		args = append(args, boolToInt(query.IsSpam.Bool))
+	} else {
+		where += " AND COALESCE(ms.is_spam, 0) = 0"
+	}
+	if query.OnlyDeleted {
+		where += " AND ms.deleted_at IS NOT NULL"
+	} else if !query.IncludeDeleted {
+		where += " AND ms.deleted_at IS NULL"
 	}
 
 	countArgs := append([]any{}, args...)
 	var total int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mail_messages `+where, countArgs...).Scan(&total); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mail_messages m LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id `+where, countArgs...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
@@ -1107,16 +1148,20 @@ func (s *Store) ListMailMessagesByQuery(query ListMailMessagesQuery) ([]MailMess
 	}
 	args = append(args, query.Limit, query.Offset)
 
-	selectSQL := `SELECT id, user_id, account_id, local_folder_id, folder, imap_uid, message_id, subject, from_addr, to_addrs, cc_addrs,
-			sent_at, received_at, has_attachments, text_body_path, html_body_path, raw_path, search_text, created_at, updated_at
-		FROM mail_messages ` + where + `
-		ORDER BY COALESCE(sent_at, received_at, created_at) DESC, id DESC
+	selectSQL := `SELECT m.id, m.user_id, m.account_id, m.local_folder_id, m.folder, m.imap_uid, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs,
+			m.sent_at, m.received_at, m.has_attachments, m.text_body_path, m.html_body_path, m.raw_path, m.search_text,
+			m.in_reply_to, m.references_header, m.source_message_id, m.compose_mode,
+			COALESCE(ms.is_read, 0), COALESCE(ms.starred, 0), COALESCE(ms.is_spam, 0), ms.spam_at, ms.deleted_at, m.created_at, m.updated_at
+		FROM mail_messages m
+		LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id ` + where + `
+		ORDER BY COALESCE(m.sent_at, m.received_at, m.created_at) DESC, m.id DESC
 		LIMIT ? OFFSET ?`
 	if query.SummaryOnly {
-		selectSQL = `SELECT id, user_id, account_id, local_folder_id, folder, imap_uid, subject, from_addr, to_addrs,
-			sent_at, received_at, has_attachments, created_at, updated_at
-		FROM mail_messages ` + where + `
-		ORDER BY COALESCE(sent_at, received_at, created_at) DESC, id DESC
+		selectSQL = `SELECT m.id, m.user_id, m.account_id, m.local_folder_id, m.folder, m.imap_uid, m.subject, m.from_addr, m.to_addrs,
+			m.sent_at, m.received_at, m.has_attachments, COALESCE(ms.is_read, 0), COALESCE(ms.starred, 0), COALESCE(ms.is_spam, 0), ms.spam_at, ms.deleted_at, m.created_at, m.updated_at
+		FROM mail_messages m
+		LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id ` + where + `
+		ORDER BY COALESCE(m.sent_at, m.received_at, m.created_at) DESC, m.id DESC
 		LIMIT ? OFFSET ?`
 	}
 
@@ -1147,10 +1192,13 @@ func (s *Store) ListMailMessagesByQuery(query ListMailMessagesQuery) ([]MailMess
 
 func (s *Store) FindMailMessageByID(userID, id int64) (MailMessage, error) {
 	row := s.db.QueryRow(
-		`SELECT id, user_id, account_id, local_folder_id, folder, imap_uid, message_id, subject, from_addr, to_addrs, cc_addrs,
-			sent_at, received_at, has_attachments, text_body_path, html_body_path, raw_path, search_text, created_at, updated_at
-		FROM mail_messages
-		WHERE user_id = ? AND id = ?`,
+		`SELECT m.id, m.user_id, m.account_id, m.local_folder_id, m.folder, m.imap_uid, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs,
+			m.sent_at, m.received_at, m.has_attachments, m.text_body_path, m.html_body_path, m.raw_path, m.search_text,
+			m.in_reply_to, m.references_header, m.source_message_id, m.compose_mode,
+			COALESCE(ms.is_read, 0), COALESCE(ms.starred, 0), COALESCE(ms.is_spam, 0), ms.spam_at, ms.deleted_at, m.created_at, m.updated_at
+		FROM mail_messages m
+		LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id
+		WHERE m.user_id = ? AND m.id = ?`,
 		userID,
 		id,
 	)
@@ -1162,11 +1210,14 @@ func (s *Store) ListMailMessagesWithRawContent(limit int) ([]MailMessage, error)
 		limit = 1000
 	}
 	rows, err := s.db.Query(
-		`SELECT id, user_id, account_id, local_folder_id, folder, imap_uid, message_id, subject, from_addr, to_addrs, cc_addrs,
-			sent_at, received_at, has_attachments, text_body_path, html_body_path, raw_path, search_text, created_at, updated_at
-		FROM mail_messages
-		WHERE raw_path IS NOT NULL
-		ORDER BY id ASC
+		`SELECT m.id, m.user_id, m.account_id, m.local_folder_id, m.folder, m.imap_uid, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs,
+			m.sent_at, m.received_at, m.has_attachments, m.text_body_path, m.html_body_path, m.raw_path, m.search_text,
+			m.in_reply_to, m.references_header, m.source_message_id, m.compose_mode,
+			COALESCE(ms.is_read, 0), COALESCE(ms.starred, 0), COALESCE(ms.is_spam, 0), ms.spam_at, ms.deleted_at, m.created_at, m.updated_at
+		FROM mail_messages m
+		LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id
+		WHERE m.raw_path IS NOT NULL
+		ORDER BY m.id ASC
 		LIMIT ?`,
 		limit,
 	)
@@ -1193,7 +1244,8 @@ func (s *Store) UpdateMailMessageParsedContent(params UpdateMailMessageContentPa
 	result, err := s.db.Exec(
 		`UPDATE mail_messages
 		SET message_id = ?, subject = ?, from_addr = ?, to_addrs = ?, cc_addrs = ?,
-			text_body_path = ?, html_body_path = ?, search_text = ?, updated_at = CURRENT_TIMESTAMP
+			text_body_path = ?, html_body_path = ?, search_text = ?, in_reply_to = ?, references_header = ?,
+			updated_at = CURRENT_TIMESTAMP
 		WHERE user_id = ? AND id = ?`,
 		nullIfEmpty(params.MessageID),
 		nullIfEmpty(params.Subject),
@@ -1203,6 +1255,8 @@ func (s *Store) UpdateMailMessageParsedContent(params UpdateMailMessageContentPa
 		nullIfEmpty(params.TextBodyPath),
 		nullIfEmpty(params.HTMLBodyPath),
 		nullIfEmpty(params.SearchText),
+		nullIfEmpty(params.InReplyTo),
+		nullIfEmpty(params.References),
 		params.UserID,
 		params.ID,
 	)
@@ -1231,6 +1285,376 @@ func (s *Store) UpdateMailMessageHasAttachments(userID, messageID int64, hasAtta
 	return err
 }
 
+func (s *Store) UpsertMailMessageState(userID, messageID int64, isRead, starred, isSpam *bool, deletedAt *time.Time) error {
+	var exists int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mail_messages WHERE user_id = ? AND id = ?`, userID, messageID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		return ErrNotFound
+	}
+	if _, err := s.db.Exec(
+		s.db.insertIgnoreSQL(
+			"mail_message_states",
+			[]string{"user_id", "message_id"},
+			[]string{"user_id", "message_id"},
+		),
+		userID,
+		messageID,
+	); err != nil {
+		return err
+	}
+	if isRead != nil {
+		if _, err := s.db.Exec(
+			`UPDATE mail_message_states
+			SET is_read = ?, read_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END, updated_at = CURRENT_TIMESTAMP
+			WHERE user_id = ? AND message_id = ?`,
+			boolToInt(*isRead),
+			boolToInt(*isRead),
+			userID,
+			messageID,
+		); err != nil {
+			return err
+		}
+	}
+	if starred != nil {
+		if _, err := s.db.Exec(
+			`UPDATE mail_message_states SET starred = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND message_id = ?`,
+			boolToInt(*starred),
+			userID,
+			messageID,
+		); err != nil {
+			return err
+		}
+	}
+	if isSpam != nil {
+		if _, err := s.db.Exec(
+			`UPDATE mail_message_states
+			SET is_spam = ?, spam_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END, updated_at = CURRENT_TIMESTAMP
+			WHERE user_id = ? AND message_id = ?`,
+			boolToInt(*isSpam),
+			boolToInt(*isSpam),
+			userID,
+			messageID,
+		); err != nil {
+			return err
+		}
+	}
+	if deletedAt != nil {
+		if _, err := s.db.Exec(
+			`UPDATE mail_message_states SET deleted_at = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND message_id = ?`,
+			*deletedAt,
+			userID,
+			messageID,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) SetMailMessageFolderState(userID, messageID int64, folderID sql.NullInt64) error {
+	return s.UpdateMailMessageFolder(userID, messageID, folderID)
+}
+
+func (s *Store) MarkMailMessageDeleted(userID, messageID int64, deleted bool) error {
+	if deleted {
+		now := time.Now()
+		return s.UpsertMailMessageState(userID, messageID, nil, nil, nil, &now)
+	}
+	return s.ClearMailMessageDeleted(userID, messageID)
+}
+
+func (s *Store) ClearMailMessageDeleted(userID, messageID int64) error {
+	if err := s.UpsertMailMessageState(userID, messageID, nil, nil, nil, nil); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(
+		`UPDATE mail_message_states SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND message_id = ?`,
+		userID,
+		messageID,
+	)
+	return err
+}
+
+func (s *Store) BatchUpdateMailMessageStates(userID int64, messageIDs []int64, action string, folderID sql.NullInt64) (MessageBatchActionResult, error) {
+	if len(messageIDs) == 0 {
+		return MessageBatchActionResult{}, nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(messageIDs)), ",")
+	args := make([]any, 0, len(messageIDs)+2)
+	for _, id := range messageIDs {
+		args = append(args, id)
+	}
+	args = append(args, userID)
+	rows, err := s.db.Query(`SELECT id FROM mail_messages WHERE id IN (`+placeholders+`) AND user_id = ?`, args...)
+	if err != nil {
+		return MessageBatchActionResult{}, err
+	}
+	defer rows.Close()
+	ownedIDs := make([]int64, 0, len(messageIDs))
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return MessageBatchActionResult{}, err
+		}
+		ownedIDs = append(ownedIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return MessageBatchActionResult{}, err
+	}
+	matched := len(ownedIDs)
+	changed := 0
+	skipped := len(messageIDs) - matched
+	switch action {
+	case "mark_read":
+		value := true
+		for _, id := range ownedIDs {
+			if err := s.UpsertMailMessageState(userID, id, &value, nil, nil, nil); err != nil {
+				return MessageBatchActionResult{}, err
+			}
+			changed++
+		}
+	case "mark_unread":
+		value := false
+		for _, id := range ownedIDs {
+			if err := s.UpsertMailMessageState(userID, id, &value, nil, nil, nil); err != nil {
+				return MessageBatchActionResult{}, err
+			}
+			changed++
+		}
+	case "star":
+		value := true
+		for _, id := range ownedIDs {
+			if err := s.UpsertMailMessageState(userID, id, nil, &value, nil, nil); err != nil {
+				return MessageBatchActionResult{}, err
+			}
+			changed++
+		}
+	case "unstar":
+		value := false
+		for _, id := range ownedIDs {
+			if err := s.UpsertMailMessageState(userID, id, nil, &value, nil, nil); err != nil {
+				return MessageBatchActionResult{}, err
+			}
+			changed++
+		}
+	case "mark_spam":
+		value := true
+		for _, id := range ownedIDs {
+			if err := s.UpsertMailMessageState(userID, id, nil, nil, &value, nil); err != nil {
+				return MessageBatchActionResult{}, err
+			}
+			changed++
+		}
+	case "unmark_spam":
+		value := false
+		for _, id := range ownedIDs {
+			if err := s.UpsertMailMessageState(userID, id, nil, nil, &value, nil); err != nil {
+				return MessageBatchActionResult{}, err
+			}
+			changed++
+		}
+	case "move_folder":
+		if !folderID.Valid {
+			return MessageBatchActionResult{}, errors.New("folder id required")
+		}
+		for _, id := range ownedIDs {
+			if err := s.UpdateMailMessageFolder(userID, id, folderID); err != nil {
+				return MessageBatchActionResult{}, err
+			}
+			changed++
+		}
+	case "delete":
+		for _, id := range ownedIDs {
+			now := time.Now()
+			if err := s.UpsertMailMessageState(userID, id, nil, nil, nil, &now); err != nil {
+				return MessageBatchActionResult{}, err
+			}
+			changed++
+		}
+	case "restore":
+		for _, id := range ownedIDs {
+			if err := s.ClearMailMessageDeleted(userID, id); err != nil {
+				return MessageBatchActionResult{}, err
+			}
+			changed++
+		}
+	default:
+		return MessageBatchActionResult{}, errors.New("unsupported batch action")
+	}
+	return MessageBatchActionResult{MatchedCount: matched, ChangedCount: changed, SkippedCount: skipped}, nil
+}
+
+func (s *Store) PreviewMailMessageBatch(userID int64, messageIDs []int64) (MessageBatchPreview, error) {
+	preview := MessageBatchPreview{}
+	if len(messageIDs) == 0 {
+		return preview, nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(messageIDs)), ",")
+	args := make([]any, 0, len(messageIDs)+1)
+	for _, id := range messageIDs {
+		args = append(args, id)
+	}
+	args = append(args, userID)
+	rows, err := s.db.Query(
+		`SELECT m.local_folder_id, COALESCE(ms.is_read, 0), COALESCE(ms.starred, 0), COALESCE(ms.is_spam, 0), ms.deleted_at
+		FROM mail_messages m
+		LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id
+		WHERE m.id IN (`+placeholders+`) AND m.user_id = ?`,
+		args...,
+	)
+	if err != nil {
+		return preview, err
+	}
+	defer rows.Close()
+	type folderAgg struct{ count int }
+	folders := make(map[int64]*folderAgg)
+	for rows.Next() {
+		var folderID sql.NullInt64
+		var isRead int
+		var starred int
+		var isSpam int
+		var deletedAt sql.NullTime
+		if err := rows.Scan(&folderID, &isRead, &starred, &isSpam, &deletedAt); err != nil {
+			return preview, err
+		}
+		preview.Total++
+		if isRead == 1 {
+			preview.ReadCount++
+		} else {
+			preview.UnreadCount++
+		}
+		if starred == 1 {
+			preview.StarredCount++
+		}
+		if isSpam == 1 {
+			preview.SpamCount++
+		}
+		if deletedAt.Valid {
+			preview.DeletedCount++
+		}
+		if folderID.Valid {
+			if _, ok := folders[folderID.Int64]; !ok {
+				folders[folderID.Int64] = &folderAgg{}
+			}
+			folders[folderID.Int64].count++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return preview, err
+	}
+	for id, agg := range folders {
+		name := ""
+		if err := s.db.QueryRow(`SELECT name FROM mail_folders WHERE id = ? AND user_id = ?`, id, userID).Scan(&name); err == nil {
+			preview.FolderCounts = append(preview.FolderCounts, MessageBatchFolderCount{FolderID: id, Name: name, Count: agg.count})
+		}
+	}
+	return preview, nil
+}
+
+func (s *Store) ListAttachments(query ListAttachmentsQuery) ([]AttachmentListItem, int, error) {
+	where := "WHERE a.user_id = ?"
+	args := []any{query.UserID}
+	if query.AccountID > 0 {
+		where += " AND m.account_id = ?"
+		args = append(args, query.AccountID)
+	}
+	if query.FolderID > 0 {
+		where += " AND m.local_folder_id = ?"
+		args = append(args, query.FolderID)
+	}
+	if query.Keyword = strings.TrimSpace(query.Keyword); query.Keyword != "" {
+		where += " AND COALESCE(a.filename, '') LIKE ?"
+		args = append(args, "%"+query.Keyword+"%")
+	}
+	if query.ContentType = strings.TrimSpace(query.ContentType); query.ContentType != "" {
+		where += " AND COALESCE(a.content_type, '') LIKE ?"
+		args = append(args, "%"+query.ContentType+"%")
+	}
+	if query.Inline.Valid {
+		where += " AND a.inline = ?"
+		args = append(args, boolToInt(query.Inline.Bool))
+	}
+	if query.DateFrom.Valid {
+		where += " AND COALESCE(m.sent_at, m.received_at, m.created_at) >= ?"
+		args = append(args, query.DateFrom.Time)
+	}
+	if query.DateTo.Valid {
+		where += " AND COALESCE(m.sent_at, m.received_at, m.created_at) < ?"
+		args = append(args, query.DateTo.Time.AddDate(0, 0, 1))
+	}
+	countArgs := append([]any{}, args...)
+	var total int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mail_attachments a JOIN mail_messages m ON m.id = a.message_id `+where, countArgs...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if query.Limit <= 0 || query.Limit > 500 {
+		query.Limit = 20
+	}
+	if query.Offset < 0 {
+		query.Offset = 0
+	}
+	args = append(args, query.Limit, query.Offset)
+	rows, err := s.db.Query(
+		`SELECT a.id, a.user_id, a.message_id, a.filename, a.content_type, a.content_id, a.inline, a.size, a.file_path, a.created_at,
+			m.account_id, m.local_folder_id, m.subject, m.from_addr, m.sent_at, m.received_at, m.created_at
+		FROM mail_attachments a
+		JOIN mail_messages m ON m.id = a.message_id
+		`+where+`
+		ORDER BY COALESCE(m.sent_at, m.received_at, m.created_at) DESC, a.id DESC
+		LIMIT ? OFFSET ?`,
+		args...,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	items := make([]AttachmentListItem, 0)
+	for rows.Next() {
+		var item AttachmentListItem
+		var inline int
+		var sentAt sql.NullTime
+		var receivedAt sql.NullTime
+		var createdAt time.Time
+		if err := rows.Scan(
+			&item.Attachment.ID,
+			&item.Attachment.UserID,
+			&item.Attachment.MessageID,
+			&item.Attachment.Filename,
+			&item.Attachment.ContentType,
+			&item.Attachment.ContentID,
+			&inline,
+			&item.Attachment.Size,
+			&item.Attachment.FilePath,
+			&item.Attachment.CreatedAt,
+			&item.AccountID,
+			&item.LocalFolderID,
+			&item.MessageSubject,
+			&item.MessageFrom,
+			&sentAt,
+			&receivedAt,
+			&createdAt,
+		); err != nil {
+			return nil, 0, err
+		}
+		item.Attachment.Inline = inline == 1
+		switch {
+		case sentAt.Valid:
+			item.MessageTime = sentAt
+		case receivedAt.Valid:
+			item.MessageTime = receivedAt
+		default:
+			item.MessageTime = sql.NullTime{Time: createdAt, Valid: true}
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
 func (s *Store) UpdateMailMessageFolder(userID, messageID int64, folderID sql.NullInt64) error {
 	result, err := s.db.Exec(
 		`UPDATE mail_messages
@@ -1254,7 +1678,7 @@ func (s *Store) UpdateMailMessageFolder(userID, messageID int64, folderID sql.Nu
 }
 
 func (s *Store) CreateMailFolder(params CreateMailFolderParams) (MailFolder, error) {
-	result, err := s.db.Exec(
+	id, err := s.db.insertAndGetID(
 		`INSERT INTO mail_folders (user_id, name, color, sort_order) VALUES (?, ?, ?, ?)`,
 		params.UserID,
 		params.Name,
@@ -1264,19 +1688,17 @@ func (s *Store) CreateMailFolder(params CreateMailFolderParams) (MailFolder, err
 	if err != nil {
 		return MailFolder{}, err
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return MailFolder{}, err
-	}
 	return s.FindMailFolderByID(params.UserID, id)
 }
 
 func (s *Store) ListMailFolders(userID int64) ([]MailFolder, error) {
 	rows, err := s.db.Query(
-		`SELECT id, user_id, name, color, sort_order, created_at, updated_at
-		FROM mail_folders
-		WHERE user_id = ?
-		ORDER BY sort_order ASC, name ASC, id ASC`,
+		`SELECT f.id, f.user_id, f.name, f.color, f.sort_order,
+			(SELECT COUNT(*) FROM mail_rules r WHERE r.user_id = f.user_id AND r.target_folder_id = f.id) AS rule_count,
+			f.created_at, f.updated_at
+		FROM mail_folders f
+		WHERE f.user_id = ?
+		ORDER BY f.sort_order ASC, f.name ASC, f.id ASC`,
 		userID,
 	)
 	if err != nil {
@@ -1300,13 +1722,39 @@ func (s *Store) ListMailFolders(userID int64) ([]MailFolder, error) {
 
 func (s *Store) FindMailFolderByID(userID, id int64) (MailFolder, error) {
 	row := s.db.QueryRow(
-		`SELECT id, user_id, name, color, sort_order, created_at, updated_at
-		FROM mail_folders
-		WHERE user_id = ? AND id = ?`,
+		`SELECT f.id, f.user_id, f.name, f.color, f.sort_order,
+			(SELECT COUNT(*) FROM mail_rules r WHERE r.user_id = f.user_id AND r.target_folder_id = f.id) AS rule_count,
+			f.created_at, f.updated_at
+		FROM mail_folders f
+		WHERE f.user_id = ? AND f.id = ?`,
 		userID,
 		id,
 	)
 	return scanMailFolder(row)
+}
+
+func (s *Store) UpdateMailFolder(userID, id int64, params CreateMailFolderParams) (MailFolder, error) {
+	result, err := s.db.Exec(
+		`UPDATE mail_folders
+		SET name = ?, color = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE user_id = ? AND id = ?`,
+		params.Name,
+		nullIfEmpty(params.Color),
+		params.SortOrder,
+		userID,
+		id,
+	)
+	if err != nil {
+		return MailFolder{}, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return MailFolder{}, err
+	}
+	if count == 0 {
+		return MailFolder{}, ErrNotFound
+	}
+	return s.FindMailFolderByID(userID, id)
 }
 
 func (s *Store) DeleteMailFolder(userID, id int64) error {
@@ -1315,6 +1763,14 @@ func (s *Store) DeleteMailFolder(userID, id int64) error {
 		return err
 	}
 	defer tx.Rollback()
+
+	var ruleCount int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM mail_rules WHERE user_id = ? AND target_folder_id = ?`, userID, id).Scan(&ruleCount); err != nil {
+		return err
+	}
+	if ruleCount > 0 {
+		return ErrMailFolderHasRules
+	}
 
 	if _, err := tx.Exec(`UPDATE mail_messages SET local_folder_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND local_folder_id = ?`, userID, id); err != nil {
 		return err
@@ -1344,7 +1800,7 @@ func (s *Store) CreateContact(params CreateContactParams) (Contact, error) {
 		now := time.Now()
 		seenAt = sql.NullTime{Time: now, Valid: true}
 	}
-	result, err := s.db.Exec(
+	id, err := s.db.insertAndGetID(
 		`INSERT INTO contacts (
 			user_id, email, email_key, display_name, nickname, phone, company, notes, source, first_seen_at, last_seen_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1360,10 +1816,6 @@ func (s *Store) CreateContact(params CreateContactParams) (Contact, error) {
 		nullTimeValue(seenAt),
 		nullTimeValue(seenAt),
 	)
-	if err != nil {
-		return Contact{}, err
-	}
-	id, err := result.LastInsertId()
 	if err != nil {
 		return Contact{}, err
 	}
@@ -1384,21 +1836,7 @@ func (s *Store) UpsertContactSeen(params CreateContactParams) (Contact, error) {
 		seenAt = sql.NullTime{Time: time.Now(), Valid: true}
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO contacts (
-			user_id, email, email_key, display_name, source, first_seen_at, last_seen_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(user_id, email_key) DO UPDATE SET
-			email = excluded.email,
-			display_name = CASE
-				WHEN contacts.display_name IS NULL OR TRIM(contacts.display_name) = '' THEN excluded.display_name
-				ELSE contacts.display_name
-			END,
-			source = CASE
-				WHEN contacts.source = 'auto' THEN excluded.source
-				ELSE contacts.source
-			END,
-			last_seen_at = excluded.last_seen_at,
-			updated_at = CURRENT_TIMESTAMP`,
+		s.db.upsertContactSeenSQL(),
 		params.UserID,
 		email,
 		emailKey,
@@ -1444,7 +1882,7 @@ func (s *Store) ListContacts(query ListContactsQuery) ([]Contact, int, error) {
 		`SELECT id, user_id, email, email_key, display_name, nickname, phone, company, notes, source,
 			first_seen_at, last_seen_at, created_at, updated_at
 		FROM contacts `+where+`
-		ORDER BY COALESCE(nickname, display_name, email) COLLATE NOCASE ASC, id ASC
+		ORDER BY LOWER(COALESCE(nickname, display_name, email)) ASC, id ASC
 		LIMIT ? OFFSET ?`,
 		args...,
 	)
@@ -1545,20 +1983,19 @@ func (s *Store) CreateMailRule(params CreateMailRuleParams) (MailRule, error) {
 	}
 	defer tx.Rollback()
 
-	result, err := tx.Exec(
-		`INSERT INTO mail_rules (user_id, name, enabled, match_mode, target_folder_id, sort_order)
-		VALUES (?, ?, ?, ?, ?, ?)`,
+	ruleID, err := tx.insertAndGetID(
+		`INSERT INTO mail_rules (user_id, name, enabled, match_mode, priority, stop_on_match, action_type, target_folder_id, sort_order)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		params.UserID,
 		params.Name,
 		boolToInt(params.Enabled),
 		params.MatchMode,
+		params.Priority,
+		boolToInt(params.StopOnMatch),
+		normalizeRuleActionType(params.ActionType),
 		params.TargetFolderID,
 		params.SortOrder,
 	)
-	if err != nil {
-		return MailRule{}, err
-	}
-	ruleID, err := result.LastInsertId()
 	if err != nil {
 		return MailRule{}, err
 	}
@@ -1586,9 +2023,9 @@ func (s *Store) ListMailRules(userID int64, enabledOnly bool) ([]MailRule, error
 		where += " AND enabled = 1"
 	}
 	rows, err := s.db.Query(
-		`SELECT id, user_id, name, enabled, match_mode, target_folder_id, sort_order, created_at, updated_at
+		`SELECT id, user_id, name, enabled, match_mode, priority, stop_on_match, action_type, target_folder_id, sort_order, created_at, updated_at
 		FROM mail_rules `+where+`
-		ORDER BY sort_order ASC, id ASC`,
+		ORDER BY priority ASC, sort_order ASC, id ASC`,
 		args...,
 	)
 	if err != nil {
@@ -1617,7 +2054,7 @@ func (s *Store) ListMailRules(userID int64, enabledOnly bool) ([]MailRule, error
 
 func (s *Store) FindMailRuleByID(userID, id int64) (MailRule, error) {
 	row := s.db.QueryRow(
-		`SELECT id, user_id, name, enabled, match_mode, target_folder_id, sort_order, created_at, updated_at
+		`SELECT id, user_id, name, enabled, match_mode, priority, stop_on_match, action_type, target_folder_id, sort_order, created_at, updated_at
 		FROM mail_rules
 		WHERE user_id = ? AND id = ?`,
 		userID,
@@ -1644,11 +2081,14 @@ func (s *Store) UpdateMailRule(userID, id int64, params CreateMailRuleParams) (M
 
 	result, err := tx.Exec(
 		`UPDATE mail_rules
-		SET name = ?, enabled = ?, match_mode = ?, target_folder_id = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
+		SET name = ?, enabled = ?, match_mode = ?, priority = ?, stop_on_match = ?, action_type = ?, target_folder_id = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE user_id = ? AND id = ?`,
 		params.Name,
 		boolToInt(params.Enabled),
 		params.MatchMode,
+		params.Priority,
+		boolToInt(params.StopOnMatch),
+		normalizeRuleActionType(params.ActionType),
 		params.TargetFolderID,
 		params.SortOrder,
 		userID,
@@ -1742,7 +2182,7 @@ func (s *Store) CreateMailAttachment(params CreateMailAttachmentParams) (MailAtt
 	if strings.TrimSpace(params.Filename) == "" {
 		params.Filename = "attachment"
 	}
-	result, err := s.db.Exec(
+	id, err := s.db.insertAndGetID(
 		`INSERT INTO mail_attachments (
 			user_id, message_id, filename, content_type, content_id, inline, size, file_path
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1755,10 +2195,6 @@ func (s *Store) CreateMailAttachment(params CreateMailAttachmentParams) (MailAtt
 		params.Size,
 		params.FilePath,
 	)
-	if err != nil {
-		return MailAttachment{}, err
-	}
-	id, err := result.LastInsertId()
 	if err != nil {
 		return MailAttachment{}, err
 	}
@@ -1879,6 +2315,9 @@ func scanMailMessage(scanner interface {
 }) (MailMessage, error) {
 	var message MailMessage
 	var hasAttachments int
+	var isRead int
+	var starred int
+	var isSpam int
 	err := scanner.Scan(
 		&message.ID,
 		&message.UserID,
@@ -1898,6 +2337,15 @@ func scanMailMessage(scanner interface {
 		&message.HTMLBodyPath,
 		&message.RawPath,
 		&message.SearchText,
+		&message.InReplyTo,
+		&message.References,
+		&message.SourceMessageID,
+		&message.ComposeMode,
+		&isRead,
+		&starred,
+		&isSpam,
+		&message.SpamAt,
+		&message.DeletedAt,
 		&message.CreatedAt,
 		&message.UpdatedAt,
 	)
@@ -1908,6 +2356,9 @@ func scanMailMessage(scanner interface {
 		return MailMessage{}, err
 	}
 	message.HasAttachments = hasAttachments == 1
+	message.IsRead = isRead == 1
+	message.Starred = starred == 1
+	message.IsSpam = isSpam == 1
 	return message, nil
 }
 
@@ -1916,6 +2367,9 @@ func scanMailMessageSummary(scanner interface {
 }) (MailMessage, error) {
 	var message MailMessage
 	var hasAttachments int
+	var isRead int
+	var starred int
+	var isSpam int
 	err := scanner.Scan(
 		&message.ID,
 		&message.UserID,
@@ -1929,6 +2383,11 @@ func scanMailMessageSummary(scanner interface {
 		&message.SentAt,
 		&message.ReceivedAt,
 		&hasAttachments,
+		&isRead,
+		&starred,
+		&isSpam,
+		&message.SpamAt,
+		&message.DeletedAt,
 		&message.CreatedAt,
 		&message.UpdatedAt,
 	)
@@ -1939,6 +2398,9 @@ func scanMailMessageSummary(scanner interface {
 		return MailMessage{}, err
 	}
 	message.HasAttachments = hasAttachments == 1
+	message.IsRead = isRead == 1
+	message.Starred = starred == 1
+	message.IsSpam = isSpam == 1
 	return message, nil
 }
 
@@ -1946,12 +2408,14 @@ func scanMailFolder(scanner interface {
 	Scan(dest ...any) error
 }) (MailFolder, error) {
 	var folder MailFolder
+	var ruleCount int
 	err := scanner.Scan(
 		&folder.ID,
 		&folder.UserID,
 		&folder.Name,
 		&folder.Color,
 		&folder.SortOrder,
+		&ruleCount,
 		&folder.CreatedAt,
 		&folder.UpdatedAt,
 	)
@@ -1961,6 +2425,7 @@ func scanMailFolder(scanner interface {
 	if err != nil {
 		return MailFolder{}, err
 	}
+	folder.RuleCount = ruleCount
 	return folder, nil
 }
 
@@ -2001,12 +2466,16 @@ func scanMailRule(scanner interface {
 }) (MailRule, error) {
 	var rule MailRule
 	var enabled int
+	var stopOnMatch int
 	err := scanner.Scan(
 		&rule.ID,
 		&rule.UserID,
 		&rule.Name,
 		&enabled,
 		&rule.MatchMode,
+		&rule.Priority,
+		&stopOnMatch,
+		&rule.ActionType,
 		&rule.TargetFolderID,
 		&rule.SortOrder,
 		&rule.CreatedAt,
@@ -2019,6 +2488,8 @@ func scanMailRule(scanner interface {
 		return MailRule{}, err
 	}
 	rule.Enabled = enabled == 1
+	rule.StopOnMatch = stopOnMatch == 1
+	rule.ActionType = normalizeRuleActionType(rule.ActionType)
 	return rule, nil
 }
 
@@ -2093,6 +2564,15 @@ func normalizeSentFolder(value string) string {
 		return "Sent"
 	}
 	return value
+}
+
+func normalizeRuleActionType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "mark_read", "mark_unread", "star", "unstar", "mark_spam", "unmark_spam", "move_folder", "delete", "restore":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "move_folder"
+	}
 }
 
 func normalizeEmailKey(value string) string {

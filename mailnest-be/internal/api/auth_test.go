@@ -56,6 +56,9 @@ func TestAuthFlowRegisterLoginAndMe(t *testing.T) {
 	if nestedString(t, meEnvelope, "data", "username") != "demo" {
 		t.Fatalf("expected username demo, got %#v", meEnvelope)
 	}
+	if nestedString(t, meEnvelope, "data", "uiTheme") != "forest" {
+		t.Fatalf("expected default uiTheme forest, got %#v", meEnvelope)
+	}
 }
 
 func TestRegisterRespectsConfigSwitch(t *testing.T) {
@@ -121,12 +124,12 @@ func TestProfileCanBeUpdatedAndAvatarCanBeUploaded(t *testing.T) {
 	router := newTestRouter(t, true)
 	token := registerTestUser(t, router, "profile-user", "profile-user@example.com")
 
-	updateResp := performRequest(router, http.MethodPut, "/api/v1/profile", `{"nickname":"信匣用户","bio":"用 Mail Nest 管理邮件"}`, token)
+	updateResp := performRequest(router, http.MethodPut, "/api/v1/profile", `{"nickname":"信匣用户","bio":"用 Mail Nest 管理邮件","uiTheme":"grape"}`, token)
 	if updateResp.Code != http.StatusOK {
 		t.Fatalf("expected update profile status 200, got %d: %s", updateResp.Code, updateResp.Body.String())
 	}
 	data := decodeEnvelope(t, updateResp.Body.Bytes())["data"].(map[string]any)
-	if data["nickname"] != "信匣用户" || data["bio"] != "用 Mail Nest 管理邮件" {
+	if data["nickname"] != "信匣用户" || data["bio"] != "用 Mail Nest 管理邮件" || data["uiTheme"] != "grape" {
 		t.Fatalf("expected updated profile data, got %#v", data)
 	}
 
@@ -136,6 +139,9 @@ func TestProfileCanBeUpdatedAndAvatarCanBeUploaded(t *testing.T) {
 	}
 	if nestedString(t, decodeEnvelope(t, meResp.Body.Bytes()), "data", "nickname") != "信匣用户" {
 		t.Fatalf("expected me payload to include nickname, got %s", meResp.Body.String())
+	}
+	if nestedString(t, decodeEnvelope(t, meResp.Body.Bytes()), "data", "uiTheme") != "grape" {
+		t.Fatalf("expected me payload to include uiTheme, got %s", meResp.Body.String())
 	}
 
 	var body bytes.Buffer
@@ -253,6 +259,64 @@ func TestContactsCanBeMaintainedAndAreIsolatedByUser(t *testing.T) {
 	deleteResp := performRequest(router, http.MethodDelete, "/api/v1/contacts/"+contactID, "", firstToken)
 	if deleteResp.Code != http.StatusOK {
 		t.Fatalf("expected delete contact status 200, got %d: %s", deleteResp.Code, deleteResp.Body.String())
+	}
+}
+
+func TestMailFoldersCanBeUpdatedAndReportRuleLinks(t *testing.T) {
+	router := newTestRouter(t, true)
+	token := registerTestUser(t, router, "folder-edit", "folder-edit@example.com")
+
+	createResp := performRequest(router, http.MethodPost, "/api/v1/mail-folders", `{
+		"name":"安全通知",
+		"color":"#1f66d1",
+		"sortOrder":10
+	}`, token)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("expected create folder status 201, got %d: %s", createResp.Code, createResp.Body.String())
+	}
+	folderID := nestedString(t, decodeEnvelope(t, createResp.Body.Bytes()), "data", "id")
+
+	updateResp := performRequest(router, http.MethodPut, "/api/v1/mail-folders/"+folderID, `{
+		"name":"安全与登录",
+		"color":"#dc2626",
+		"sortOrder":20
+	}`, token)
+	if updateResp.Code != http.StatusOK {
+		t.Fatalf("expected update folder status 200, got %d: %s", updateResp.Code, updateResp.Body.String())
+	}
+	updated := decodeEnvelope(t, updateResp.Body.Bytes())["data"].(map[string]any)
+	if updated["name"] != "安全与登录" || updated["color"] != "#dc2626" || updated["sortOrder"] != float64(20) {
+		t.Fatalf("expected updated folder payload, got %#v", updated)
+	}
+
+	ruleResp := performRequest(router, http.MethodPost, "/api/v1/mail-rules", `{
+		"name":"登录提醒归档",
+		"enabled":true,
+		"matchMode":"all",
+		"targetFolderId":"`+folderID+`",
+		"sortOrder":10,
+		"conditions":[{"field":"subject","operator":"contains","value":"登录"}]
+	}`, token)
+	if ruleResp.Code != http.StatusCreated {
+		t.Fatalf("expected create rule status 201, got %d: %s", ruleResp.Code, ruleResp.Body.String())
+	}
+
+	listResp := performRequest(router, http.MethodGet, "/api/v1/mail-folders", "", token)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("expected list folder status 200, got %d: %s", listResp.Code, listResp.Body.String())
+	}
+	items := decodeEnvelope(t, listResp.Body.Bytes())["data"].(map[string]any)["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one folder, got %#v", items)
+	}
+	listed := items[0].(map[string]any)
+	if listed["name"] != "安全与登录" || listed["ruleCount"] != float64(1) {
+		t.Fatalf("expected folder to report rule count, got %#v", listed)
+	}
+
+	deleteResp := performRequest(router, http.MethodDelete, "/api/v1/mail-folders/"+folderID, "", token)
+	if deleteResp.Code != http.StatusConflict {
+		t.Fatalf("expected linked folder delete status 409, got %d: %s", deleteResp.Code, deleteResp.Body.String())
 	}
 }
 
@@ -746,6 +810,61 @@ func TestMessageDetailConvertsInlineTIFFToPNG(t *testing.T) {
 	}
 }
 
+func TestMessageDetailDoesNotEmbedLargeUnsupportedInlineImage(t *testing.T) {
+	largeImage := bytes.Repeat([]byte{0x01}, maxInlineImageTransformBytes+1)
+	fetcher := &mail.FakeFetcher{
+		Messages: []mail.FetchedMessage{
+			{
+				UID:        "large-inline-tiff",
+				MessageID:  "<large-inline-tiff@example.com>",
+				Subject:    "大内嵌图片",
+				From:       "sender@example.com",
+				To:         []string{"receiver@example.com"},
+				HTMLBody:   `<p>截图如下</p><img src="cid:large-inline-image">`,
+				RawContent: "Subject: 大内嵌图片\r\n\r\n截图如下",
+				Attachments: []mail.FetchedAttachment{
+					{
+						Filename:    "large.tiff",
+						ContentType: "image/tiff",
+						ContentID:   "large-inline-image",
+						Inline:      true,
+						Data:        largeImage,
+					},
+				},
+			},
+		},
+	}
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	token := registerTestUser(t, router, "large-inline-user", "large-inline@example.com")
+	accountID := createTestAccount(t, router, token)
+
+	syncResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/sync", "", token)
+	if syncResp.Code != http.StatusOK {
+		t.Fatalf("expected sync status 200, got %d: %s", syncResp.Code, syncResp.Body.String())
+	}
+
+	listResp := performRequest(router, http.MethodGet, "/api/v1/messages", "", token)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("expected messages status 200, got %d: %s", listResp.Code, listResp.Body.String())
+	}
+	messageID := firstListItem(t, listResp.Body.Bytes())["id"].(string)
+
+	detailResp := performRequest(router, http.MethodGet, "/api/v1/messages/"+messageID, "", token)
+	if detailResp.Code != http.StatusOK {
+		t.Fatalf("expected detail status 200, got %d: %s", detailResp.Code, detailResp.Body.String())
+	}
+	htmlBody := nestedString(t, decodeEnvelope(t, detailResp.Body.Bytes()), "data", "htmlBody")
+	if strings.Contains(htmlBody, "cid:large-inline-image") || strings.Contains(htmlBody, "data:image/tiff;base64") {
+		t.Fatalf("expected large inline image to be replaced without embedding original bytes, got %q", htmlBody)
+	}
+	if !strings.Contains(htmlBody, "data:image/svg+xml") || !strings.Contains(htmlBody, "%E5%86%85%E5%B5%8C%E5%9B%BE%E7%89%87%E8%BE%83%E5%A4%A7") {
+		t.Fatalf("expected large inline image placeholder, got %q", htmlBody)
+	}
+	if len(detailResp.Body.Bytes()) > maxInlineImageTransformBytes/2 {
+		t.Fatalf("expected compact detail response, got %d bytes", len(detailResp.Body.Bytes()))
+	}
+}
+
 func tinyTIFFImage() []byte {
 	return []byte{
 		0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00,
@@ -1192,6 +1311,78 @@ func TestMailRulesArchiveNewAndExistingMessages(t *testing.T) {
 	oldFilterResp := performRequest(router, http.MethodGet, "/api/v1/messages?folderId="+otherFolderID, "", token)
 	if got := listSubjects(t, oldFilterResp.Body.Bytes()); !equalStringSlices(got, []string{"认证考试倒计时"}) {
 		t.Fatalf("expected history rule message in folder, got %#v", got)
+	}
+}
+
+func TestMailRulesMarkSpamNewAndExistingMessages(t *testing.T) {
+	fetcher := &mail.FakeFetcher{}
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	token := registerTestUser(t, router, "spam-rule-user", "spam-rule-user@example.com")
+	accountID := createTestAccount(t, router, token)
+
+	fetcher.Messages = []mail.FetchedMessage{
+		{
+			UID:        "spam-old-message",
+			MessageID:  "<spam-old-message@example.com>",
+			Subject:    "优惠专享到货",
+			From:       "promo@example.com",
+			To:         []string{"rule@example.com"},
+			SentAt:     "2026-07-07T10:00:00+08:00",
+			TextBody:   "历史广告内容",
+			RawContent: "Subject: 优惠专享到货\r\n\r\n历史广告内容",
+		},
+	}
+	initialSyncResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/sync", "", token)
+	if initialSyncResp.Code != http.StatusOK {
+		t.Fatalf("expected initial sync status 200, got %d: %s", initialSyncResp.Code, initialSyncResp.Body.String())
+	}
+	initialSpamResp := performRequest(router, http.MethodGet, "/api/v1/messages?systemFolder=spam", "", token)
+	if got := listSubjects(t, initialSpamResp.Body.Bytes()); len(got) != 0 {
+		t.Fatalf("expected no spam before rule creation, got %#v", got)
+	}
+
+	ruleResp := performRequest(router, http.MethodPost, "/api/v1/mail-rules", `{
+		"name":"广告邮件标记垃圾",
+		"enabled":true,
+		"matchMode":"all",
+		"actionType":"mark_spam",
+		"sortOrder":10,
+		"conditions":[
+			{"field":"subject","operator":"contains","value":"优惠"},
+			{"field":"from","operator":"contains","value":"promo@example.com"}
+		]
+	}`, token)
+	if ruleResp.Code != http.StatusCreated {
+		t.Fatalf("expected spam rule status 201, got %d: %s", ruleResp.Code, ruleResp.Body.String())
+	}
+
+	fetcher.Messages = []mail.FetchedMessage{
+		{
+			UID:        "spam-new-message",
+			MessageID:  "<spam-new-message@example.com>",
+			Subject:    "限时优惠提醒",
+			From:       "promo@example.com",
+			To:         []string{"rule@example.com"},
+			SentAt:     "2026-07-06T10:00:00+08:00",
+			TextBody:   "广告内容",
+			RawContent: "Subject: 限时优惠提醒\r\n\r\n广告内容",
+		},
+	}
+	syncResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/sync", "", token)
+	if syncResp.Code != http.StatusOK {
+		t.Fatalf("expected sync status 200, got %d: %s", syncResp.Code, syncResp.Body.String())
+	}
+	spamResp := performRequest(router, http.MethodGet, "/api/v1/messages?systemFolder=spam", "", token)
+	if got := listSubjects(t, spamResp.Body.Bytes()); !equalStringSlices(got, []string{"限时优惠提醒"}) {
+		t.Fatalf("expected new spam message in spam folder, got %#v", got)
+	}
+	applyResp := performRequest(router, http.MethodPost, "/api/v1/mail-rules/apply", `{"scope":"all"}`, token)
+	if applyResp.Code != http.StatusOK {
+		t.Fatalf("expected spam apply status 200, got %d: %s", applyResp.Code, applyResp.Body.String())
+	}
+	afterApplyResp := performRequest(router, http.MethodGet, "/api/v1/messages?systemFolder=spam", "", token)
+	if got := listSubjects(t, afterApplyResp.Body.Bytes()); !equalStringSlices(got, []string{"优惠专享到货", "限时优惠提醒"}) {
+		t.Fatalf("expected historical spam message in spam folder, got %#v", got)
 	}
 }
 
@@ -1755,4 +1946,195 @@ func equalStringSlices(left, right []string) bool {
 		}
 	}
 	return true
+}
+
+func TestBatchActionsAttachmentsAndSyncJobsAreAvailableAndIsolated(t *testing.T) {
+	fetcher := &mail.FakeFetcher{
+		Messages: []mail.FetchedMessage{
+			{
+				UID:        "batch-1",
+				MessageID:  "<batch-1@example.com>",
+				Subject:    "带附件批量邮件",
+				From:       "sender@example.com",
+				To:         []string{"first@example.com"},
+				SentAt:     "2026-07-19T10:00:00+08:00",
+				TextBody:   "批量操作测试",
+				RawContent: "Subject: 带附件批量邮件\r\n\r\n批量操作测试",
+				Attachments: []mail.FetchedAttachment{
+					{
+						Filename:    "report.pdf",
+						ContentType: "application/pdf",
+						Data:        []byte("%PDF-batch"),
+					},
+				},
+			},
+		},
+	}
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	firstToken := registerTestUser(t, router, "batch-first", "batch-first@example.com")
+	secondToken := registerTestUser(t, router, "batch-second", "batch-second@example.com")
+	accountID := createTestAccount(t, router, firstToken)
+
+	syncResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/sync", "", firstToken)
+	if syncResp.Code != http.StatusOK {
+		t.Fatalf("expected sync status 200, got %d: %s", syncResp.Code, syncResp.Body.String())
+	}
+	jobID := nestedString(t, decodeEnvelope(t, syncResp.Body.Bytes()), "data", "jobId")
+
+	listResp := performRequest(router, http.MethodGet, "/api/v1/messages", "", firstToken)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("expected messages status 200, got %d: %s", listResp.Code, listResp.Body.String())
+	}
+	messageID := firstListItemID(t, listResp.Body.Bytes())
+
+	batchResp := performRequest(router, http.MethodPost, "/api/v1/messages/batch-actions", `{
+		"messageIds":["`+messageID+`"],
+		"action":"star"
+	}`, firstToken)
+	if batchResp.Code != http.StatusOK {
+		t.Fatalf("expected batch star status 200, got %d: %s", batchResp.Code, batchResp.Body.String())
+	}
+
+	starredResp := performRequest(router, http.MethodGet, "/api/v1/messages?starred=true", "", firstToken)
+	if starredResp.Code != http.StatusOK || listItemCount(t, starredResp.Body.Bytes()) != 1 {
+		t.Fatalf("expected one starred message, got %d %s", starredResp.Code, starredResp.Body.String())
+	}
+
+	spamResp := performRequest(router, http.MethodPost, "/api/v1/messages/batch-actions", `{
+		"messageIds":["`+messageID+`"],
+		"action":"mark_spam"
+	}`, firstToken)
+	if spamResp.Code != http.StatusOK {
+		t.Fatalf("expected batch spam status 200, got %d: %s", spamResp.Code, spamResp.Body.String())
+	}
+	spamFolderResp := performRequest(router, http.MethodGet, "/api/v1/messages?systemFolder=spam", "", firstToken)
+	if spamFolderResp.Code != http.StatusOK || listItemCount(t, spamFolderResp.Body.Bytes()) != 1 {
+		t.Fatalf("expected one spam message, got %d %s", spamFolderResp.Code, spamFolderResp.Body.String())
+	}
+	defaultListResp := performRequest(router, http.MethodGet, "/api/v1/messages", "", firstToken)
+	if defaultListResp.Code != http.StatusOK || listItemCount(t, defaultListResp.Body.Bytes()) != 0 {
+		t.Fatalf("expected spam message to leave default list, got %d %s", defaultListResp.Code, defaultListResp.Body.String())
+	}
+	unspamResp := performRequest(router, http.MethodPost, "/api/v1/messages/batch-actions", `{
+		"messageIds":["`+messageID+`"],
+		"action":"unmark_spam"
+	}`, firstToken)
+	if unspamResp.Code != http.StatusOK {
+		t.Fatalf("expected batch unspam status 200, got %d: %s", unspamResp.Code, unspamResp.Body.String())
+	}
+	clearedSpamResp := performRequest(router, http.MethodGet, "/api/v1/messages?systemFolder=spam", "", firstToken)
+	if clearedSpamResp.Code != http.StatusOK || listItemCount(t, clearedSpamResp.Body.Bytes()) != 0 {
+		t.Fatalf("expected spam folder to be empty after unmark, got %d %s", clearedSpamResp.Code, clearedSpamResp.Body.String())
+	}
+
+	deleteResp := performRequest(router, http.MethodPost, "/api/v1/messages/batch-actions", `{
+		"messageIds":["`+messageID+`"],
+		"action":"delete"
+	}`, firstToken)
+	if deleteResp.Code != http.StatusOK {
+		t.Fatalf("expected batch delete status 200, got %d: %s", deleteResp.Code, deleteResp.Body.String())
+	}
+
+	trashResp := performRequest(router, http.MethodGet, "/api/v1/messages?systemFolder=trash", "", firstToken)
+	if trashResp.Code != http.StatusOK || listItemCount(t, trashResp.Body.Bytes()) != 1 {
+		t.Fatalf("expected one trash message, got %d %s", trashResp.Code, trashResp.Body.String())
+	}
+
+	attachmentResp := performRequest(router, http.MethodGet, "/api/v1/attachments", "", firstToken)
+	if attachmentResp.Code != http.StatusOK || listItemCount(t, attachmentResp.Body.Bytes()) != 1 {
+		t.Fatalf("expected one attachment, got %d %s", attachmentResp.Code, attachmentResp.Body.String())
+	}
+	secondAttachmentResp := performRequest(router, http.MethodGet, "/api/v1/attachments", "", secondToken)
+	if secondAttachmentResp.Code != http.StatusOK || listItemCount(t, secondAttachmentResp.Body.Bytes()) != 0 {
+		t.Fatalf("expected second user to see no attachments, got %d %s", secondAttachmentResp.Code, secondAttachmentResp.Body.String())
+	}
+
+	jobsResp := performRequest(router, http.MethodGet, "/api/v1/sync-jobs", "", firstToken)
+	if jobsResp.Code != http.StatusOK || listItemCount(t, jobsResp.Body.Bytes()) == 0 {
+		t.Fatalf("expected sync jobs for first user, got %d %s", jobsResp.Code, jobsResp.Body.String())
+	}
+	eventsResp := performRequest(router, http.MethodGet, "/api/v1/sync-jobs/"+jobID+"/events", "", firstToken)
+	if eventsResp.Code != http.StatusOK || listItemCount(t, eventsResp.Body.Bytes()) == 0 {
+		t.Fatalf("expected sync job events, got %d %s", eventsResp.Code, eventsResp.Body.String())
+	}
+	secondEventsResp := performRequest(router, http.MethodGet, "/api/v1/sync-jobs/"+jobID+"/events", "", secondToken)
+	if secondEventsResp.Code != http.StatusInternalServerError && secondEventsResp.Code != http.StatusNotFound && secondEventsResp.Code != http.StatusOK {
+		t.Fatalf("unexpected second user sync event status %d: %s", secondEventsResp.Code, secondEventsResp.Body.String())
+	}
+	if secondEventsResp.Code == http.StatusOK && listItemCount(t, secondEventsResp.Body.Bytes()) != 0 {
+		t.Fatalf("expected second user to see no sync events, got %s", secondEventsResp.Body.String())
+	}
+}
+
+func TestPreviewMailRuleMatchesEnhancedConditions(t *testing.T) {
+	fetcher := &mail.FakeFetcher{
+		Messages: []mail.FetchedMessage{
+			{
+				UID:        "preview-1",
+				MessageID:  "<preview-1@example.com>",
+				Subject:    "周报附件",
+				From:       "boss@example.com",
+				To:         []string{"first@example.com"},
+				SentAt:     "2026-07-19T09:00:00+08:00",
+				TextBody:   "请查收本周周报",
+				RawContent: "Subject: 周报附件\r\n\r\n请查收本周周报",
+				Attachments: []mail.FetchedAttachment{
+					{
+						Filename:    "weekly-report.pdf",
+						ContentType: "application/pdf",
+						Data:        []byte("%PDF-preview"),
+					},
+				},
+			},
+		},
+	}
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	token := registerTestUser(t, router, "preview-user", "preview-user@example.com")
+	accountID := createTestAccount(t, router, token)
+
+	syncResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/sync", "", token)
+	if syncResp.Code != http.StatusOK {
+		t.Fatalf("expected sync status 200, got %d: %s", syncResp.Code, syncResp.Body.String())
+	}
+
+	folderResp := performRequest(router, http.MethodPost, "/api/v1/mail-folders", `{
+		"name":"附件归档",
+		"color":"#1f66d1",
+		"sortOrder":10
+	}`, token)
+	if folderResp.Code != http.StatusCreated {
+		t.Fatalf("expected create folder status 201, got %d: %s", folderResp.Code, folderResp.Body.String())
+	}
+	folderID := nestedString(t, decodeEnvelope(t, folderResp.Body.Bytes()), "data", "id")
+
+	previewResp := performRequest(router, http.MethodPost, "/api/v1/mail-rules/preview", `{
+		"name":"附件周报预览",
+		"enabled":true,
+		"matchMode":"all",
+		"priority":10,
+		"stopOnMatch":true,
+		"actionType":"move_folder",
+		"targetFolderId":"`+folderID+`",
+		"sortOrder":10,
+		"limit":5,
+		"conditions":[
+			{"field":"has_attachments","operator":"is_true","value":""},
+			{"field":"attachment_filename","operator":"contains","value":"weekly-report"}
+		]
+	}`, token)
+	if previewResp.Code != http.StatusOK {
+		t.Fatalf("expected rule preview status 200, got %d: %s", previewResp.Code, previewResp.Body.String())
+	}
+	data := decodeEnvelope(t, previewResp.Body.Bytes())["data"].(map[string]any)
+	if data["matchedCount"] != float64(1) {
+		t.Fatalf("expected one preview match, got %#v", data)
+	}
+	samples, ok := data["samples"].([]any)
+	if !ok || len(samples) != 1 {
+		t.Fatalf("expected one preview sample, got %#v", data["samples"])
+	}
+	sample := samples[0].(map[string]any)
+	if sample["subject"] != "周报附件" {
+		t.Fatalf("expected preview sample subject, got %#v", sample)
+	}
 }

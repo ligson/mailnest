@@ -196,6 +196,7 @@ JSON 请求：
     "email": "demo@example.com",
     "nickname": "信匣用户",
     "bio": "用 Mail Nest 管理邮件",
+    "uiTheme": "forest",
     "avatarUrl": "/api/v1/profile/avatar/content"
   }
 }
@@ -210,7 +211,8 @@ JSON 请求：
 ```json
 {
   "nickname": "信匣用户",
-  "bio": "用 Mail Nest 管理邮件"
+  "bio": "用 Mail Nest 管理邮件",
+  "uiTheme": "forest"
 }
 ```
 
@@ -218,6 +220,7 @@ JSON 请求：
 
 - 昵称最多 40 个字符。
 - 个人描述最多 200 个字符。
+- `uiTheme` 可选值为 `forest`、`sky`、`grape`、`ember`、`graphite`、`qinghua`、`cinnabar`、`ink`、`daishan`；缺省或非法值按 `forest` 保存。
 - 用户名和邮箱暂不通过该接口修改。
 
 ### 3.8 上传头像
@@ -762,7 +765,65 @@ JSON 请求：
 }
 ```
 
-### 6.4 下载附件
+### 6.4 回复与转发接口
+
+回复、回复全部和转发复用发信能力，但写信初始值和线程头应由后端生成，避免前端重复实现复杂邮件规则。
+
+#### 6.4.1 获取写信上下文
+
+`GET /api/v1/messages/{id}/compose-context?mode=reply|replyAll|forward`
+
+说明：
+
+- 需要登录，且来源邮件必须属于当前用户。
+- `reply` 自动填充原发件人。
+- `replyAll` 自动合并原发件人、收件人和抄送人，并排除当前用户自己的邮箱地址。
+- `forward` 默认不填收件人，返回可转发附件列表。
+- 返回的 HTML 引用正文不得包含邮件详情展示用的短期签名内嵌图片 URL。
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "获取成功",
+  "httpCode": 200,
+  "data": {
+    "mode": "replyAll",
+    "sourceMessageId": "123",
+    "accountId": "8",
+    "to": ["张三 <zhangsan@example.com>"],
+    "cc": ["李四 <lisi@example.com>"],
+    "bcc": [],
+    "subject": "Re: 项目进展",
+    "textBody": "\n\n在 2026-07-19 10:20，张三 写道：\n> 原始正文",
+    "htmlBody": "<p><br></p><blockquote>原始正文</blockquote>",
+    "forwardAttachments": [
+      {
+        "id": "45",
+        "filename": "report.pdf",
+        "contentType": "application/pdf",
+        "size": 204800,
+        "selected": true
+      }
+    ]
+  }
+}
+```
+
+#### 6.4.2 扩展发送字段
+
+`POST /api/v1/messages/send`
+
+在现有 `multipart/form-data` 字段基础上增加可选字段：
+
+- `composeMode`：`new`、`reply`、`replyAll`、`forward`，默认 `new`。
+- `sourceMessageId`：来源邮件 ID，回复和转发时必填。
+- `forwardAttachmentIds`：JSON 字符串数组，转发原附件时使用。
+
+后端发送时必须重新校验来源邮件、发件账号和附件均属于当前用户；回复和回复全部的 `In-Reply-To`、`References` 必须由后端根据来源邮件生成，不能信任前端传入。
+
+### 6.5 下载附件
 
 `GET /api/v1/messages/{messageId}/attachments/{attachmentId}/content`
 
@@ -774,7 +835,7 @@ JSON 请求：
 
 该地址只用于 HTML 正文内嵌图片展示，不要求额外传 `Authorization` 请求头，但必须携带有效签名和未过期时间戳。普通附件下载仍使用受登录保护的 `content` 接口。
 
-### 6.5 邮件列表查询参数
+### 6.6 邮件列表查询参数
 
 `GET /api/v1/messages` 支持：
 
@@ -785,9 +846,9 @@ JSON 请求：
 - `hasAttachments`：是否有附件。
 - `accountId`：按邮箱账号过滤。
 - `folderId`：按本地文件夹过滤。
-- `systemFolder`：系统文件夹，支持 `inbox`、`sent`、`all`、`attachments`。
+- `systemFolder`：系统文件夹，支持 `inbox`、`sent`、`all`、`starred`、`spam`、`trash`、`attachments`。
 
-### 6.6 邮件放入本地文件夹
+### 6.7 邮件放入本地文件夹
 
 `POST /api/v1/messages/{id}/folder`
 
@@ -801,11 +862,129 @@ JSON 请求：
 
 `folderId` 为空字符串时表示移出本地文件夹。
 
+### 6.8 邮件批量操作
+
+`POST /api/v1/messages/batch-actions`
+
+请求：
+
+```json
+{
+  "messageIds": ["1", "2", "3"],
+  "action": "move_folder",
+  "folderId": "10"
+}
+```
+
+`action` 支持：
+
+- `mark_read`
+- `mark_unread`
+- `star`
+- `unstar`
+- `mark_spam`
+- `unmark_spam`
+- `move_folder`
+- `delete`
+- `restore`
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "操作成功",
+  "httpCode": 200,
+  "data": {
+    "matchedCount": 3,
+    "changedCount": 3,
+    "skippedCount": 0
+  }
+}
+```
+
+### 6.9 批量操作预览
+
+`POST /api/v1/messages/batch-preview`
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "获取成功",
+  "httpCode": 200,
+  "data": {
+    "total": 3,
+    "readCount": 1,
+    "unreadCount": 2,
+    "starredCount": 1,
+    "spamCount": 0,
+    "deletedCount": 0,
+    "folderCounts": [
+      {
+        "folderId": "10",
+        "name": "安全通知",
+        "count": 2
+      }
+    ]
+  }
+}
+```
+
+### 6.10 附件中心列表
+
+`GET /api/v1/attachments`
+
+查询参数：
+
+- `keyword`
+- `contentType`
+- `accountId`
+- `folderId`
+- `inline`
+- `dateFrom`
+- `dateTo`
+- `page`
+- `pageSize`
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "获取成功",
+  "httpCode": 200,
+  "data": {
+    "items": [
+      {
+        "id": "45",
+        "messageId": "123",
+        "filename": "report.pdf",
+        "contentType": "application/pdf",
+        "size": 204800,
+        "inline": false,
+        "messageSubject": "项目报告",
+        "messageFrom": "张三 <zhangsan@example.com>",
+        "messageTime": "2026-07-19T10:00:00+08:00",
+        "accountId": "8",
+        "downloadUrl": "/api/v1/messages/123/attachments/45/content"
+      }
+    ],
+    "page": 1,
+    "pageSize": 20,
+    "total": 1
+  }
+}
+```
+
 ## 7. 本地文件夹接口
 
 ### 7.1 文件夹列表
 
 `GET /api/v1/mail-folders`
+
+返回的文件夹项包含 `ruleCount`，表示当前用户有多少条规则将邮件归档到该文件夹。该字段主要用于删除保护、规则管理提示和后续配置入口；邮件页左侧文件夹导航保持简洁，不直接展示规则数量。
 
 ### 7.2 创建文件夹
 
@@ -819,11 +998,17 @@ JSON 请求：
 }
 ```
 
-### 7.3 删除文件夹
+### 7.3 更新文件夹
+
+`PUT /api/v1/mail-folders/{id}`
+
+请求字段同创建接口。更新文件夹名称、颜色或排序不会影响已有邮件归属，也不会断开已有规则；规则会继续指向同一个文件夹 ID。
+
+### 7.4 删除文件夹
 
 `DELETE /api/v1/mail-folders/{id}`
 
-删除文件夹不会删除邮件，只会清空相关邮件的本地文件夹归属。
+删除文件夹不会删除邮件，只会清空相关邮件的本地文件夹归属。若文件夹仍被规则引用，接口返回 `409`，需要先调整或删除相关规则。
 
 ## 8. 邮件规则接口
 
@@ -840,6 +1025,9 @@ JSON 请求：
   "name": "安全通知归档",
   "enabled": true,
   "matchMode": "all",
+  "priority": 10,
+  "stopOnMatch": true,
+  "actionType": "move_folder",
   "targetFolderId": "folder-id",
   "sortOrder": 10,
   "conditions": [
@@ -870,6 +1058,9 @@ JSON 请求：
     "name": "安全通知归档",
     "enabled": true,
     "matchMode": "all",
+    "priority": 10,
+    "stopOnMatch": true,
+    "actionType": "move_folder",
     "targetFolderId": "folder-id",
     "sortOrder": 10,
     "conditions": [
@@ -904,6 +1095,32 @@ JSON 请求：
 
 - `unfiled`：只处理未归档邮件。
 - `all`：重新处理全部邮件并覆盖本地文件夹。
+- `filtered`：处理当前筛选结果。
+
+### 8.6 规则预览
+
+`POST /api/v1/mail-rules/preview`
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "获取成功",
+  "httpCode": 200,
+  "data": {
+    "matchedCount": 12,
+    "samples": [
+      {
+        "id": "123",
+        "subject": "网络安全通知",
+        "from": "security@example.com",
+        "receivedAt": "2026-07-19T10:00:00+08:00"
+      }
+    ]
+  }
+}
+```
 
 ## 9. 收取任务接口
 
@@ -922,6 +1139,44 @@ JSON 请求：
 `GET /api/v1/sync-jobs/{id}`
 
 响应包含任务状态、触发方式、开始时间、结束时间、新增邮件数和错误信息。
+
+### 9.3 任务事件日志
+
+`GET /api/v1/sync-jobs/{id}/events`
+
+查询参数：
+
+- `level`
+- `page`
+- `pageSize`
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "获取成功",
+  "httpCode": 200,
+  "data": {
+    "items": [
+      {
+        "id": "event-id",
+        "level": "error",
+        "phase": "fetch",
+        "message": "读取邮件失败",
+        "detail": {
+          "folder": "INBOX",
+          "uid": "1024"
+        },
+        "createdAt": "2026-07-19T10:00:00+08:00"
+      }
+    ],
+    "page": 1,
+    "pageSize": 100,
+    "total": 1
+  }
+}
+```
 
 ## 10. OAuth 接口
 

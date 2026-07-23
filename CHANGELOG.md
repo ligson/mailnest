@@ -2,6 +2,148 @@
 
 所有重要变更都应记录在本文件中。本文档尽量使用中文，便于后续回忆需求和设计决策。
 
+## 2026-07-23
+
+### 变更
+
+- 后端数据库连接和 schema 迁移替换为 GORM：通过 `gorm.io/driver/sqlite`、`gorm.io/driver/mysql`、`gorm.io/driver/postgres` 统一选择数据库驱动，底层仍暴露 `*sql.DB` 兼容现有复杂查询。
+- 数据库建表、补列和普通索引迁移改为 GORM model + `AutoMigrate`，新增表和字段优先维护 model 标签，不再为 SQLite/MySQL/PostgreSQL 分别手写整套 DDL。
+- 邮件列表表达式排序索引保留少量集中补充 SQL，兼顾跨库维护成本和列表性能。
+
+### 文档
+
+- 更新 README、架构和实施计划文档，明确数据库迁移由 GORM 处理，默认 SQLite，可配置 MySQL/PostgreSQL。
+
+### 测试
+
+- 后端 `rtk go test ./...` 通过，覆盖 GORM AutoMigrate 后的现有 storage、API 和 mail 服务行为。
+
+## 2026-07-22
+
+### 变更
+
+- 后端数据库层从写死 SQLite 重构为可配置方言：`config.yaml` 新增 `database.driver`、`dsn`、连接池配置，默认继续使用 SQLite，同时支持 MySQL，并预留 PostgreSQL 方言层。
+- storage 层保留统一数据库封装，集中处理 PostgreSQL 占位符转换、自增 ID 返回、插入忽略、联系人 upsert 和定时同步到期 SQL，避免业务 handler 或存储方法手写数据库专属语法。
+- MySQL/PostgreSQL 新库初始化使用独立 portable schema，补齐邮件列表、附件中心、同步日志和联系人常用索引；SQLite 旧迁移保持兼容，避免影响现有本地数据库。
+- 文件夹列表的规则数量统计改为子查询，移除 SQLite 宽松 `GROUP BY` 依赖，兼容 MySQL `ONLY_FULL_GROUP_BY` 和 PostgreSQL。
+
+### 文档
+
+- 更新 README、架构、需求、实施计划和邮件界面设计文档，说明数据库默认 SQLite、可配置 MySQL、预留 PostgreSQL，以及不同数据库的 DSN 配置方式。
+
+### 测试
+
+- 新增 storage 方言层单元测试，覆盖数据库配置归一化、SQLite 路径处理、PostgreSQL 占位符改写、插入忽略 SQL、联系人 upsert SQL 和定时同步到期条件。
+
+## 2026-07-21
+
+### 新增
+
+- 写邮件富文本编辑器新增字体、字号、删除线、清除格式、字体颜色、背景色、正文图片插入和粘贴图片能力。
+
+### 修复
+
+- 修复回复、回复全部和转发上下文中中文联系人展示名被显示为 `=?utf-8?q?...?=` 编码词的问题；后端返回给前端的收件人、抄送人和转发正文头信息统一使用可读展示格式，发信时仍由 SMTP 组包逻辑编码为标准邮件头。
+- 修复回复、回复全部和转发上下文未优先使用通讯录名称的问题；收件人、抄送人和转发引用头现在按“联系人昵称、联系人姓名、邮件头姓名、邮箱地址”的顺序生成展示名。
+- 修复邮件页在较窄视口下三栏布局横向溢出、右侧详情被截断、搜索按钮和高级筛选控件错位的问题。
+- 修复邮件列表项多选框缺少定位导致发件人、主题区域被顶乱的问题。
+- 修复写邮件富文本编辑器选中文字后调整字号、字体、文字颜色和背景色不生效的问题；格式应用改为基于已保存选区包裹内联样式，避免下拉框抢焦点导致选区丢失。
+- 修复写邮件背景色无法取消的问题，背景色面板新增“无背景”操作，只清理背景样式并保留其他文字格式。
+
+### 优化
+
+- 简化邮件列表顶部搜索和批量操作区域：默认只保留主搜索框和轻量筛选入口，日期、状态、附件和星标过滤折叠到高级筛选面板；批量操作未选中邮件时只显示选择状态，选中后展示常用动作并将低频动作收进“更多”菜单。
+- 优化邮件页响应式宽度策略：窗口变窄或拖拽调整三栏宽度时，会自动给右侧阅读区保留可用宽度；搜索范围、输入框、搜索按钮保持一体化显示，高级筛选在窄栏下自动换行。
+- 优化写邮件编辑器选区保存逻辑，先选中文字再点击工具栏时能正确应用样式；图片正文支持最大 3MB 内联插入，超过时提示改用附件。
+- 统一个人设置页内容区框架，去除独立限宽外壳，让页面面板宽度、留白和滚动行为与联系人、规则、邮箱账号等页面保持一致。
+- 邮件页左侧自定义文件夹恢复为只显示文件夹名称，不再直接展示 `规则 N`；规则关联数量继续保留在接口中，用于删除保护和规则管理提示。
+
+### 测试
+
+- 更新后端写信上下文测试，覆盖带 RFC 2047 编码词的发件人、收件人和抄送人在回复、回复全部、转发场景下正确解码展示。
+- 更新后端写信上下文测试，覆盖通讯录昵称/姓名优先覆盖邮件头原始显示名。
+- 前端 `rtk npm run build` 通过。
+
+### 部署
+
+- 将后端版本 `20260721104800-191cc5e-addrdecode` 部署到 生产环境 的 Mail Nest Docker Compose 服务；本地 Docker 构建 amd64 镜像后通过 `docker save | ssh docker load` 导入远端，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260721104800-addrdecode.tgz`；线上健康检查、后端容器镜像标签和启动日志验证通过。
+- 将后端版本 `20260721110938-191cc5e-contactname` 部署到 生产环境 的 Mail Nest Docker Compose 服务；本地 Docker 构建 amd64 镜像后通过 `docker save | ssh docker load` 导入远端，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260721110938-contactname.tgz`；线上健康检查、后端容器镜像标签和启动日志验证通过。
+- 将前端版本 `20260721114654-191cc5e-mailtoolbar` 部署到 生产环境 的 Mail Nest Docker Compose 服务；本地 Docker 构建 amd64 镜像后通过 `docker save | ssh docker load` 导入远端，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260721114654-mailtoolbar.tgz`；线上健康检查、`/mail` 静态资源、前端容器镜像标签和启动日志验证通过。
+- 将前端版本 `20260721165650-191cc5e-layoutfix` 部署到 生产环境 的 Mail Nest Docker Compose 服务；本地 Docker 构建 amd64 镜像后通过 `docker save | ssh docker load` 导入远端，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260721165650-layoutfix.tgz`；线上健康检查、`/mail` 静态资源和前端容器镜像标签验证通过。
+- 将前端版本 `20260721194834-191cc5e-profilelayout` 部署到 生产环境 的 Mail Nest Docker Compose 服务；本地 Docker 构建 amd64 镜像后通过 `docker save | ssh docker load` 导入远端，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260721194848-profilelayout.tgz`；线上健康检查、`/settings/profile` 静态资源、前端容器镜像标签和个人设置页 CSS 验证通过。
+- 将富文本编辑器前端镜像 `20260721194920-191cc5e-rich-editor` 导入 生产环境，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260721194920-rich-editor.tgz`；并行前端任务使用 `20260721194834-191cc5e-profilelayout` 标签运行，但两个标签指向同一镜像 ID，线上 `/mail` 已加载包含富文本编辑器的新静态资源，健康检查通过。
+- 将前端版本 `20260721194907-191cc5e-foldernav` 部署到 生产环境 的 Mail Nest Docker Compose 服务；本地 Docker 构建 amd64 镜像后通过 `docker save | ssh docker load` 导入远端，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260721194907-foldernav.tgz`；线上健康检查、前端容器镜像标签和 Chrome 实页验证通过，邮件页自定义文件夹仅显示名称与编辑/删除操作，不再展示 `规则 1`。
+- 将前端版本 `20260721201605-191cc5e-editor-selection` 部署到 生产环境 的 Mail Nest Docker Compose 服务；本地 Docker 构建 amd64 镜像后通过 `docker save | ssh docker load` 导入远端，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260721201605-editor-selection.tgz`；线上健康检查、`/mail` 静态资源和前端容器镜像标签验证通过。
+
+## 2026-07-20
+
+### 优化
+
+- 写邮件、回复、回复全部和转发统一改为居中大弹窗；回复/回复全部/转发点击后会立即打开弹窗并显示“正在准备邮件”加载状态，避免等待写信上下文接口时无反馈。
+- 富文本编辑器工具栏改为自动换行，正文编辑区禁止横向滚动并强制长文本换行，减少水平滚动条带来的割裂感。
+- 邮箱账号页新增启用/停用快捷开关；停用账号仍保留在账号管理页便于重新启用。
+- 邮件页左侧账号筛选和写邮件发件账号只展示启用账号，停用账号不会再出现在邮件页账号列表中。
+- 修复写邮件、回复和转发弹窗在大屏下过宽、表单控件溢出和原生文件选择控件露出的问题，改用稳定的收件人网格布局并限制弹窗内容宽度。
+- 优化邮件详情加载性能：打开详情时不再等待已读状态写库，特殊格式内嵌图片转换增加大小上限，避免大附件被 base64 塞入详情响应导致前端 15 秒超时。
+- 邮件详情请求改为支持取消旧请求并单独使用更长超时，快速切换邮件时不再让已取消的旧请求弹出超时提示或覆盖当前详情。
+
+### 测试
+
+- 前端 `rtk npm run build` 通过。
+- 新增后端测试覆盖大尺寸特殊格式内嵌图片不会进入邮件详情 JSON，防止大邮件详情响应过慢。
+
+### 部署
+
+- 将前端版本 `20260720104739-191cc5e-account-enable` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260720104750-account-enable.tgz`；线上健康检查、首页静态资源和容器镜像标签验证通过。
+- 将前端版本 `20260720111428-191cc5e-composefix` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260720111445-composefix.tgz`；线上健康检查、首页静态资源、容器镜像标签和写邮件弹窗视觉检查通过。
+- 将前后端版本 `20260720145724-191cc5e-detailfast` 部署到 生产环境 的 Mail Nest Docker Compose 服务；本地 Docker 构建 amd64 镜像后通过 `docker save | ssh docker load` 导入远端，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260720145724-detailfast.tgz`；线上健康检查、`/mail` 静态资源、容器镜像标签和启动日志验证通过。
+
+## 2026-07-19
+
+### 新增
+
+- 新增垃圾邮件系统文件夹与规则动作，支持通过 `mark_spam` / `unmark_spam` 批量操作和 `systemFolder=spam` 查看。
+- 新增《垃圾邮件系统文件夹与规则标记设计》文档，明确垃圾邮件仅作为本地状态，不回写远端 IMAP。
+- 本地邮件文件夹新增编辑能力，支持修改名称和颜色，后端新增 `PUT /api/v1/mail-folders/{id}`。
+- 新增《邮件回复与转发功能设计》文档，明确回复、回复全部、转发、引用正文、线程头、转发附件和联系人沉淀规则。
+- 后端落地回复、回复全部和转发能力：新增写信上下文接口，发送接口支持 `composeMode`、`sourceMessageId` 和 `forwardAttachmentIds`，SMTP 原文写入 `In-Reply-To` 与 `References`，并支持从本地安全读取原邮件普通附件重新组包转发。
+- 前端邮件详情新增“回复”“回复全部”“转发”按钮，复用写邮件抽屉预填收件人、主题、引用正文和转发附件勾选列表。
+- 邮件页新增批量操作能力，支持批量标记已读/未读、加星/取消星标、移动文件夹、删除和回收站恢复，并新增星标邮件、回收站、未读/星标筛选。
+- 新增附件中心页面 `/attachments`，支持按附件名、内容类型、账号、文件夹、日期范围集中检索附件，并可直接下载或跳回原始邮件。
+- 邮箱账号页新增同步日志中心，支持查看收取/全量同步任务列表、任务状态、事件流和阶段性错误信息。
+- 规则能力增强，支持优先级、匹配后停止、动作类型、附件类条件、已读/星标条件和规则预览接口。
+
+### 优化
+
+- 文件夹列表返回关联规则数量 `ruleCount`，邮件页左侧显示规则数量；仍被规则引用的文件夹不允许直接删除，需要先调整或删除相关规则。
+- 邮件页将邮箱账号筛选从顶部筛选栏移动到左侧栏，支持直接切换全部账号或单个账号，并保留与邮箱目录、本地文件夹和其他搜索条件的组合筛选。
+- 规则页保存参数补齐 `priority`、`stopOnMatch` 和 `actionType`，保持现有“移动到文件夹”交互不变并满足后端规则模型。
+- Docker Compose 部署模板支持 `MAILNEST_BE_IMAGE_TAG` 和 `MAILNEST_FE_IMAGE_TAG` 分别指定前后端镜像标签，避免只升级一侧时被全局标签绑定。
+- 邮件详情接口和列表返回补齐 `isRead`、`starred`、`deletedAt`，打开详情时会自动回写已读状态。
+- 同步任务写入阶段事件日志，手动收取和全量同步都可通过 `/api/v1/sync-jobs` 与 `/api/v1/sync-jobs/{id}/events` 追踪执行过程。
+
+### 文档
+
+- 新增《邮件批量操作、规则增强、同步日志与附件中心设计》，补充四个高频实用功能的目标场景、数据模型、接口草案、前端交互和实施顺序。
+- 完善 API、架构、需求和实施计划文档，补充批量操作、规则预览、同步事件日志和附件中心的落地约定。
+- 更新 API 与邮件界面设计文档，明确自定义文件夹是规则归档目标，不是孤立目录。
+- 更新 README、需求、架构、API 和实施计划文档，补充回复/转发规划接口、数据模型扩展、前端交互和测试验收点。
+
+### 测试
+
+- 新增后端测试，覆盖规则标记垃圾邮件、历史邮件重新应用规则、批量标记/取消垃圾邮件和 `systemFolder=spam` 过滤。
+- 新增后端 API 测试，覆盖文件夹编辑、规则关联计数和有关联规则时禁止删除。
+- 新增后端 API 测试，覆盖批量操作、附件中心、同步任务事件和增强规则预览；本地验证 `rtk go test ./...` 54 条通过、`rtk npm run build` 通过。
+- 新增后端服务层测试，覆盖回复全部排除当前用户自己的邮箱地址、写信上下文生成、回复线程头和转发原附件重新组包；后端 `rtk go test ./...` 通过，前端 `rtk npm run build` 通过。
+
+### 部署
+
+- 将后端版本 `20260719153500-191cc5e-spamfix` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260719152523-spam.tgz` 与 `backups/pre-20260719152523-spam.tgz` 之外的补充备份；修复旧库迁移顺序后，线上健康检查与后端容器状态验证通过。
+- 将前后端版本 `20260719134547-191cc5e-fourfeatures` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260719142700-fourfeatures.tgz`；因远端直接拉取 Docker Hub 超时，最终采用本地构建镜像后通过 `docker save | ssh sudo /usr/local/bin/docker load` 导入远端，再执行 `sudo /usr/local/bin/docker compose up -d` 完成切换；线上健康检查、首页静态资源版本和容器镜像标签验证通过。
+- 将后端版本 `20260719124449-191cc5e-folderedit` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml` 到 `backups/docker-compose.yml.pre-folderedit-2026071913*`；线上容器运行镜像已切换为 `ligson/mailnest-be:20260719124449-191cc5e-folderedit`，健康检查正常，`PUT /api/v1/mail-folders/{id}` 已从 `405` 修复为受鉴权保护的接口，浏览器文件夹编辑保存验证通过。
+- 将前端账号筛选调整部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260719121138-191cc5e-account-left-20260719121157.tgz`；最终线上前端运行标签为 `20260719122623-191cc5e-roundshell`，与本次 `20260719121138-191cc5e-account-left` 构建同镜像 ID，远端镜像架构为 `linux/amd64`，容器内首页静态资源和后端健康接口访问验证通过。
+- 将前后端版本 `20260719134159-191cc5e-replyforward` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260719134159-191cc5e-replyforward.tgz`；线上后端健康接口 `https://mailnest.ligson.xyz/api/v1/health` 返回正常，前端容器首页静态资源访问验证通过。
+
 ## 2026-07-18
 
 ### 新增
@@ -9,9 +151,16 @@
 - 写邮件功能新增普通附件发送：前端支持选择多个附件，后端支持 `multipart/form-data` 发信请求，SMTP 原文使用 `multipart/mixed` 组包，并在发送成功后把附件保存到本地已发送邮件。
 - 写邮件抽屉新增轻量富文本编辑器，支持添加附件、插入签名、加粗、斜体、下划线、项目/编号列表、对齐和插入链接。
 - 邮箱账号新增 `signature_html` 签名模板字段；账号编辑弹窗新增“签名”标签页，可维护 HTML 签名并预览，写邮件时按发件账号自动插入或手动插入签名。
+- 新增用户级界面主题偏好，个人设置页可在松林、晴空、葡萄、暖木、石墨、青花、朱砂、水墨和黛山 9 套主题中选择，保存后按用户持久化并在登录后自动应用。
 
 ### 优化
 
+- 统一前端滚动条视觉样式，覆盖页面内容区、邮件三栏、写邮件编辑器、弹窗、抽屉、表格和下拉菜单等滚动容器，减少系统默认滚动条造成的割裂感。
+- 前端主框架、邮件阅读区、账号编辑弹窗和个人设置页接入主题变量，主题会影响背景、边框、选中态、侧边栏和关键操作色。
+- 优化主题切换后的主框架一致性，顶部栏和左侧导航统一使用主题框架色，右上角用户信息按钮改为低对比半透明样式，减少白色胶囊按钮的突兀感。
+- 新增 Mail Nest 定制图标，并同步用于浏览器标签栏 favicon 和左侧品牌区，替换默认线性邮件图标。
+- 优化右侧内容工作区外框，四个外角改为主题框架色露出的圆角画布，弱化内容区和导航框架之间的硬切割。
+- 移除顶部栏底部分割线，使内容工作区上方圆角与主题框架色衔接得更自然。
 - 优化邮件列表接口 `GET /api/v1/messages`：列表页改为只读取展示所需的摘要字段，避免无意义加载正文搜索索引、正文路径和原文路径等详情字段。
 - 优化 SQLite 连接配置：将 WAL、busy timeout、同步模式和临时表内存设置写入连接 DSN，并限制连接池规模，降低自动收取写入和页面读取并发时的偶发等待。
 - 为附件表新增 `(user_id, message_id, inline, id)` 索引，减少邮件详情读取附件列表时的扫描和临时排序。
@@ -27,9 +176,14 @@
 
 ### 部署
 
-- 将后端版本 `20260718115642-4e0e307-perf2` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260718-perf-20260718114825.tgz`，线上健康检查、附件索引迁移和邮件列表/详情接口耗时验证通过。
-- 将后端版本 `20260718123318-4e0e307-inlineurl` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260718-inlineurl-20260718123319.tgz`；线上验证 `messages/134879` 详情响应从约 5.7MB 降至约 107KB，公网请求耗时从约 4-5 秒降至约 0.3 秒，签名内嵌图片访问返回正常。
-- 将前后端版本 `20260718130805-4e0e307-compose-rich` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260718-compose-rich-20260718130806.tgz`；线上健康检查、前端首页访问、`mail_accounts.signature_html` 迁移和账号接口签名字段验证通过。
+- 将后端版本 `20260718115642-4e0e307-perf2` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260718-perf-20260718114825.tgz`，线上健康检查、附件索引迁移和邮件列表/详情接口耗时验证通过。
+- 将后端版本 `20260718123318-4e0e307-inlineurl` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260718-inlineurl-20260718123319.tgz`；线上验证 `messages/134879` 详情响应从约 5.7MB 降至约 107KB，公网请求耗时从约 4-5 秒降至约 0.3 秒，签名内嵌图片访问返回正常。
+- 将前后端版本 `20260718130805-4e0e307-compose-rich` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260718-compose-rich-20260718130806.tgz`；线上健康检查、前端首页访问、`mail_accounts.signature_html` 迁移和账号接口签名字段验证通过。
+- 将前后端版本 `20260718163145-191cc5e-themes` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260718163145-191cc5e-themes-20260718163207.tgz`；线上健康检查、前端静态资源访问和 `users.ui_theme` 迁移验证通过。
+- 将前后端版本 `20260718165148-191cc5e-themefix` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260718165148-191cc5e-themefix-20260718165212.tgz`；线上健康检查、前端新版静态资源访问、容器镜像标签和 `users.ui_theme` 字段验证通过。
+- 将前端版本 `20260719121147-191cc5e-brandicon` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260719121147-191cc5e-brandicon-20260719121211.tgz`；线上健康检查、首页 favicon 引用、`mailnest-icon.svg` 资源和前端容器镜像标签验证通过。
+- 将前端版本 `20260719122623-191cc5e-roundshell` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260719122623-191cc5e-roundshell-20260719122659.tgz`；线上健康检查、前端新版静态资源访问、容器镜像标签和内容区圆角 CSS 验证通过。
+- 将前端版本 `20260719123712-191cc5e-headerline` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260719123712-191cc5e-headerline-20260719123732.tgz`；线上健康检查、前端新版静态资源访问、容器镜像标签和顶部栏无底部分割线 CSS 验证通过。
 
 ## 2026-07-16
 
@@ -50,9 +204,9 @@
 
 ### 部署
 
-- 将版本 `20260716154232-4e0e307-sendmail` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260716154232-4e0e307-sendmail-20260716155948.tgz`，线上健康检查、前后端容器互通和 `mail_accounts` SMTP 字段迁移验证通过。
-- 将前端版本 `20260717131227-4e0e307-accountform` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260717131227-4e0e307-accountform-20260717134200.tgz`，线上健康检查、前端容器启动和静态资源版本验证通过。
-- 将前端版本 `20260717164344-4e0e307-accounttabs` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260717164344-4e0e307-accounttabs-20260717164636.tgz`，线上健康检查、前端容器启动和静态资源版本验证通过。
+- 将版本 `20260716154232-4e0e307-sendmail` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260716154232-4e0e307-sendmail-20260716155948.tgz`，线上健康检查、前后端容器互通和 `mail_accounts` SMTP 字段迁移验证通过。
+- 将前端版本 `20260717131227-4e0e307-accountform` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260717131227-4e0e307-accountform-20260717134200.tgz`，线上健康检查、前端容器启动和静态资源版本验证通过。
+- 将前端版本 `20260717164344-4e0e307-accounttabs` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260717164344-4e0e307-accounttabs-20260717164636.tgz`，线上健康检查、前端容器启动和静态资源版本验证通过。
 
 ### 优化
 
@@ -82,10 +236,10 @@
 
 ### 部署
 
-- 将版本 `20260714144753-4e0e307-contacts` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查、联系人路由、联系人接口鉴权和 `contacts` 表迁移验证通过。
-- 将前端版本 `20260714152300-4e0e307-contactedit` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查和联系人编辑跳转路由验证通过。
-- 将前端版本 `20260714154611-4e0e307-layoutfix` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查以及邮件、联系人路由验证通过。
-- 将前端版本 `20260714161220-4e0e307-viewport` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查以及邮件、联系人路由验证通过。
+- 将版本 `20260714144753-4e0e307-contacts` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查、联系人路由、联系人接口鉴权和 `contacts` 表迁移验证通过。
+- 将前端版本 `20260714152300-4e0e307-contactedit` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查和联系人编辑跳转路由验证通过。
+- 将前端版本 `20260714154611-4e0e307-layoutfix` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查以及邮件、联系人路由验证通过。
+- 将前端版本 `20260714161220-4e0e307-viewport` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查以及邮件、联系人路由验证通过。
 
 ## 2026-07-10
 
@@ -126,14 +280,14 @@
 
 ### 部署
 
-- 将版本 `20260710111406-4e0e307-mailfast` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查、邮件列表 SQL 查询计划和浏览器首屏验证通过。
-- 将后端版本 `20260710142458-4e0e307-inlinecid` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查和目标邮件详情内嵌图片显示验证通过。
-- 将后端版本 `20260710153900-4e0e307-tiffpng` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查和目标 TIFF 内嵌图片转换显示验证通过。
-- 将后端版本 `20260710155414-4e0e307-cidfallback` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查验证通过。
-- 将版本 `20260710161834-4e0e307-sentbox` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查和浏览器左侧“发件箱”入口验证通过。
-- 将版本 `20260710172735-4e0e307-folderlist` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查、用友邮箱 IMAP 目录读取、发件箱目录修正和全量同步验证通过。
+- 将版本 `20260710111406-4e0e307-mailfast` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查、邮件列表 SQL 查询计划和浏览器首屏验证通过。
+- 将后端版本 `20260710142458-4e0e307-inlinecid` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查和目标邮件详情内嵌图片显示验证通过。
+- 将后端版本 `20260710153900-4e0e307-tiffpng` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查和目标 TIFF 内嵌图片转换显示验证通过。
+- 将后端版本 `20260710155414-4e0e307-cidfallback` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查验证通过。
+- 将版本 `20260710161834-4e0e307-sentbox` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查和浏览器左侧“发件箱”入口验证通过。
+- 将版本 `20260710172735-4e0e307-folderlist` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查、用友邮箱 IMAP 目录读取、发件箱目录修正和全量同步验证通过。
 - 线上将用友邮箱账号的发件箱目录从不存在的 `Sent` 修正为服务器真实目录 `Sent Items`，并关闭该账号“全量同步成功后清理服务器旧邮件”开关，避免排查期间误删远端邮件。
-- 将前端版本 `20260711104936-4e0e307-addressui` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查和邮件详情联系人标签展示验证通过。
+- 将前端版本 `20260711104936-4e0e307-addressui` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查和邮件详情联系人标签展示验证通过。
 
 ## 2026-07-08
 
@@ -152,10 +306,10 @@
 
 ### 部署
 
-- 将版本 `20260708101038-4e0e307-actions` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查验证通过。
-- 将版本 `20260708102431-4e0e307-maildecode` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查、后端日志和历史乱码邮件修复结果验证通过。
-- 将版本 `20260708104116-4e0e307-bodyparse` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查、正文文件修复结果和浏览器邮件详情验证通过。
-- 将版本 `20260708153226-4e0e307-autosync` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查、自动收取调度器启动日志和首轮自动收取任务记录验证通过。
+- 将版本 `20260708101038-4e0e307-actions` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查验证通过。
+- 将版本 `20260708102431-4e0e307-maildecode` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查、后端日志和历史乱码邮件修复结果验证通过。
+- 将版本 `20260708104116-4e0e307-bodyparse` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查、正文文件修复结果和浏览器邮件详情验证通过。
+- 将版本 `20260708153226-4e0e307-autosync` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查、自动收取调度器启动日志和首轮自动收取任务记录验证通过。
 
 ## 2026-07-07
 
@@ -178,13 +332,13 @@
 - 后端新增个人资料接口 `GET/PUT /api/v1/profile`，支持维护昵称和个人描述，并在当前用户响应中返回资料字段。
 - 后端新增头像上传和读取接口 `POST /api/v1/profile/avatar`、`GET /api/v1/profile/avatar/content`，头像保存到本地用户数据目录且读取需要登录。
 - 前端新增个人设置页 `/settings/profile`，支持查看用户名/邮箱、修改昵称/描述、上传头像，并同步刷新顶部用户区。
-- 将版本 `20260708081342-4e0e307-profile` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查验证通过。
+- 将版本 `20260708081342-4e0e307-profile` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查验证通过。
 - 后端新增停止全量同步接口 `POST /api/v1/mail-accounts/{id}/full-sync/stop`，停止后状态标记为 `cancelled`，已同步到本地的邮件继续保留。
 - 后端启动时会把遗留的 `running` 全量同步状态重置为失败，避免容器重启后页面长期显示假同步中。
 - SQLite 启用 WAL 和 busy timeout，降低全量同步写入期间列表和状态读取被锁住的概率。
 - 前端邮箱账号页调整全量同步轮询逻辑：同步中只轮询单账号状态，不再整表 loading，不再反复弹出超时提示。
 - 前端邮箱账号页新增“停止同步”和“同步日志”入口，同步中仍可点击其他账号操作。
-- 将版本 `20260708085022-4e0e307-syncfix` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查与未登录接口响应验证通过。
+- 将版本 `20260708085022-4e0e307-syncfix` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上健康检查与未登录接口响应验证通过。
 - 优化邮箱账号页操作列，将低频操作收纳到“更多”下拉菜单，保留“收取”和“同步全部/停止同步”为主按钮，避免按钮过多导致表格横向溢出。
 - 后端新增邮箱账号全量历史同步能力：通过 `POST /api/v1/mail-accounts/{id}/full-sync/start` 后台分批同步 `INBOX` 全部 UID，并通过 `GET /api/v1/mail-accounts/{id}/sync-status` 查询进度。
 - 邮箱账号新增全量同步状态字段，记录状态、总数、已处理数、新增数、开始/结束时间和错误信息，账号列表接口同步返回这些字段。
@@ -198,7 +352,7 @@
 - 优化邮件搜索筛选区窄宽度响应式布局，避免邮箱账号、日期范围和附件筛选在列表栏较窄时挤压错位。
 - 调整左侧主菜单锁起按钮位置，将其从顶部品牌区移到底部工具区，避免和系统图标挤在一起。
 - 修复邮件页内容较高时左侧主菜单底部“锁起菜单”按钮可能被挤出视口的问题，侧栏改为固定视口高度并让菜单区域内部滚动。
-- 将版本 `20260707114614-4e0e307-ui` 部署到 nas-proxy 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上首页与健康检查验证通过。
+- 将版本 `20260707114614-4e0e307-ui` 部署到 生产环境 的 Mail Nest Docker Compose 服务，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/`，线上首页与健康检查验证通过。
 
 ## 2026-07-06
 

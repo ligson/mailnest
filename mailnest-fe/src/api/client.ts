@@ -14,6 +14,7 @@ export interface User {
   nickname: string | null;
   avatarUrl: string | null;
   bio: string | null;
+  uiTheme: string;
 }
 
 export interface AuthData {
@@ -30,6 +31,7 @@ export interface ChangePasswordPayload {
 export interface UpdateProfilePayload {
   nickname: string;
   bio: string;
+  uiTheme: string;
 }
 
 export interface MailAccount {
@@ -109,6 +111,11 @@ export interface MailMessage {
   sentAt: string | null;
   receivedAt: string | null;
   hasAttachments: boolean;
+  isRead: boolean;
+  starred: boolean;
+  isSpam: boolean;
+  spamAt: string | null;
+  deletedAt: string | null;
 }
 
 export interface MailAttachment {
@@ -131,6 +138,29 @@ export interface MailMessageDetail extends MailMessage {
   attachments: MailAttachment[];
 }
 
+export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward';
+
+export interface ComposeForwardAttachment {
+  id: string;
+  filename: string;
+  contentType: string;
+  size: number;
+  selected: boolean;
+}
+
+export interface ComposeContext {
+  mode: ComposeMode;
+  sourceMessageId: string;
+  accountId: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  textBody: string;
+  htmlBody: string;
+  forwardAttachments: ComposeForwardAttachment[];
+}
+
 export interface MessageListData {
   items: MailMessage[];
   page: number;
@@ -143,6 +173,7 @@ export interface MailFolder {
   name: string;
   color: string | null;
   sortOrder: number;
+  ruleCount: number;
 }
 
 export interface MailFolderListData {
@@ -193,7 +224,10 @@ export interface MailRule {
   name: string;
   enabled: boolean;
   matchMode: 'all' | 'any';
-  targetFolderId: string;
+  priority: number;
+  stopOnMatch: boolean;
+  actionType: 'move_folder' | 'mark_read' | 'star' | 'mark_spam' | string;
+  targetFolderId: string | null;
   sortOrder: number;
   conditions: MailRuleCondition[];
 }
@@ -240,6 +274,9 @@ export interface SendMessagePayload {
   subject: string;
   textBody: string;
   htmlBody: string;
+  composeMode?: ComposeMode;
+  sourceMessageId?: string;
+  forwardAttachmentIds?: string[];
   attachments?: File[];
 }
 
@@ -247,9 +284,83 @@ export interface MailRulePayload {
   name: string;
   enabled: boolean;
   matchMode: 'all' | 'any';
-  targetFolderId: string;
+  priority: number;
+  stopOnMatch: boolean;
+  actionType: string;
+  targetFolderId: string | null;
   sortOrder: number;
   conditions: MailRuleCondition[];
+}
+
+export interface MessageBatchActionResult {
+  matchedCount: number;
+  changedCount: number;
+  skippedCount: number;
+}
+
+export interface MessageBatchPreview {
+  total: number;
+  readCount: number;
+  unreadCount: number;
+  starredCount: number;
+  spamCount: number;
+  deletedCount: number;
+  folderCounts: Array<{ folderId: string; name: string; count: number }>;
+}
+
+export interface AttachmentCenterItem extends MailAttachment {
+  accountId: string;
+  folderId: string | null;
+  messageSubject: string | null;
+  messageFrom: string | null;
+  messageTime: string | null;
+}
+
+export interface AttachmentCenterListData {
+  items: AttachmentCenterItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+export interface SyncJob {
+  id: string;
+  accountId: string;
+  triggerType: string;
+  status: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  newMessageCount: number;
+  errorMessage: string | null;
+}
+
+export interface SyncJobListData {
+  items: SyncJob[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+export interface SyncJobEvent {
+  id: string;
+  jobId: string;
+  level: 'info' | 'warn' | 'error' | string;
+  phase: string;
+  message: string;
+  detail: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface SyncJobEventListData {
+  items: SyncJobEvent[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+export interface RulePreviewData {
+  matchedCount: number;
+  samples: MailMessage[];
 }
 
 export const tokenStorageKey = 'mailnest.token';
@@ -267,6 +378,14 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
+export function isCanceledRequest(error: unknown): boolean {
+  return error instanceof Error && (
+    error.name === 'CanceledError' ||
+    error.message === 'canceled' ||
+    error.message === '请求已取消'
+  );
+}
+
 export async function requestEnvelope<T>(request: Promise<{ data: Envelope<T> }>): Promise<T> {
   try {
     const response = await request;
@@ -277,7 +396,15 @@ export async function requestEnvelope<T>(request: Promise<{ data: Envelope<T> }>
     return envelope.data;
   } catch (error) {
     if (error instanceof AxiosError) {
+      if (error.code === 'ERR_CANCELED') {
+        const canceledError = new Error('请求已取消');
+        canceledError.name = 'CanceledError';
+        throw canceledError;
+      }
       const envelope = error.response?.data as Envelope<unknown> | undefined;
+      if (error.code === 'ECONNABORTED') {
+        throw new Error('请求超时，请稍后重试');
+      }
       throw new Error(envelope?.message || error.message || '请求失败');
     }
     throw error;
@@ -372,13 +499,27 @@ export const messageApi = {
     dateFrom?: string;
     dateTo?: string;
     hasAttachments?: boolean;
+    isRead?: boolean;
+    starred?: boolean;
     page?: number;
     pageSize?: number;
   }) {
     return requestEnvelope<MessageListData>(apiClient.get('/messages', { params }));
   },
-  detail(id: string) {
-    return requestEnvelope<MailMessageDetail>(apiClient.get(`/messages/${id}`));
+  detail(id: string, options?: { signal?: AbortSignal }) {
+    return requestEnvelope<MailMessageDetail>(apiClient.get(`/messages/${id}`, {
+      signal: options?.signal,
+      timeout: 60000,
+    }));
+  },
+  composeContext(id: string, mode: Exclude<ComposeMode, 'new'>) {
+    return requestEnvelope<ComposeContext>(apiClient.get(`/messages/${id}/compose-context`, { params: { mode } }));
+  },
+  batchAction(payload: { messageIds: string[]; action: string; folderId?: string }) {
+    return requestEnvelope<MessageBatchActionResult>(apiClient.post('/messages/batch-actions', payload));
+  },
+  batchPreview(payload: { messageIds: string[] }) {
+    return requestEnvelope<MessageBatchPreview>(apiClient.post('/messages/batch-preview', payload));
   },
   send(payload: SendMessagePayload) {
     const form = new FormData();
@@ -389,6 +530,13 @@ export const messageApi = {
     form.append('subject', payload.subject);
     form.append('textBody', payload.textBody);
     form.append('htmlBody', payload.htmlBody);
+    form.append('composeMode', payload.composeMode || 'new');
+    if (payload.sourceMessageId) {
+      form.append('sourceMessageId', payload.sourceMessageId);
+    }
+    if (payload.forwardAttachmentIds?.length) {
+      form.append('forwardAttachmentIds', JSON.stringify(payload.forwardAttachmentIds));
+    }
     for (const file of payload.attachments || []) {
       form.append('attachments', file, file.name);
     }
@@ -404,12 +552,43 @@ export const messageApi = {
   },
 };
 
+export const attachmentApi = {
+  list(params?: {
+    keyword?: string;
+    contentType?: string;
+    accountId?: string;
+    folderId?: string;
+    inline?: boolean;
+    dateFrom?: string;
+    dateTo?: string;
+    page?: number;
+    pageSize?: number;
+  }) {
+    return requestEnvelope<AttachmentCenterListData>(apiClient.get('/attachments', { params }));
+  },
+};
+
+export const syncJobApi = {
+  list(params?: { accountId?: string; page?: number; pageSize?: number }) {
+    return requestEnvelope<SyncJobListData>(apiClient.get('/sync-jobs', { params }));
+  },
+  detail(id: string) {
+    return requestEnvelope<SyncJob>(apiClient.get(`/sync-jobs/${id}`));
+  },
+  events(id: string, params?: { level?: string; page?: number; pageSize?: number }) {
+    return requestEnvelope<SyncJobEventListData>(apiClient.get(`/sync-jobs/${id}/events`, { params }));
+  },
+};
+
 export const mailFolderApi = {
   list() {
     return requestEnvelope<MailFolderListData>(apiClient.get('/mail-folders'));
   },
   create(payload: { name: string; color?: string; sortOrder?: number }) {
     return requestEnvelope<MailFolder>(apiClient.post('/mail-folders', payload));
+  },
+  update(id: string, payload: { name: string; color?: string; sortOrder?: number }) {
+    return requestEnvelope<MailFolder>(apiClient.put(`/mail-folders/${id}`, payload));
   },
   remove(id: string) {
     return requestEnvelope<Record<string, never>>(apiClient.delete(`/mail-folders/${id}`));
@@ -444,7 +623,10 @@ export const mailRuleApi = {
   remove(id: string) {
     return requestEnvelope<Record<string, never>>(apiClient.delete(`/mail-rules/${id}`));
   },
-  apply(payload: { scope: 'unfiled' | 'all' }) {
+  apply(payload: { scope: 'unfiled' | 'all' | 'filtered' }) {
     return requestEnvelope<{ appliedCount: number }>(apiClient.post('/mail-rules/apply', payload));
+  },
+  preview(payload: MailRulePayload & { limit?: number }) {
+    return requestEnvelope<RulePreviewData>(apiClient.post('/mail-rules/preview', payload));
   },
 };

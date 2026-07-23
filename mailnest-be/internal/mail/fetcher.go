@@ -27,17 +27,21 @@ type FolderInfo struct {
 }
 
 type FetchedMessage struct {
-	UID         string
-	MessageID   string
-	Subject     string
-	From        string
-	To          []string
-	CC          []string
-	SentAt      string
-	TextBody    string
-	HTMLBody    string
-	RawContent  string
-	Attachments []FetchedAttachment
+	UID             string
+	MessageID       string
+	InReplyTo       string
+	References      string
+	SourceMessageID int64
+	ComposeMode     string
+	Subject         string
+	From            string
+	To              []string
+	CC              []string
+	SentAt          string
+	TextBody        string
+	HTMLBody        string
+	RawContent      string
+	Attachments     []FetchedAttachment
 }
 
 type FetchedAttachment struct {

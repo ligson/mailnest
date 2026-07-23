@@ -1,4 +1,6 @@
-FROM golang:1.26-bookworm AS build
+ARG GO_BASE=golang:1.26-bookworm
+ARG RUNTIME_BASE=debian:bookworm-slim
+FROM ${GO_BASE} AS build
 
 WORKDIR /src
 
@@ -8,7 +10,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o /out/mailnest ./cmd/mailnest
 
-FROM debian:bookworm-slim
+FROM ${RUNTIME_BASE}
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata \

@@ -119,7 +119,7 @@ GET /api/v1/messages
 | `pageSize` | number | 每页数量 |
 | `accountId` | string | 邮箱账号 ID |
 | `folderId` | string | 本地文件夹 ID |
-| `systemFolder` | string | 系统文件夹：`inbox`、`sent`、`all`、`attachments` |
+| `systemFolder` | string | 系统文件夹：`inbox`、`sent`、`all`、`starred`、`spam`、`trash`、`attachments` |
 | `keyword` | string | 关键词，匹配主题、发件人、收件人、抄送和正文索引 |
 | `from` | string | 发件人过滤 |
 | `subject` | string | 主题过滤 |
@@ -133,9 +133,9 @@ MVP 不引入全文搜索引擎，采用轻量索引字段：
 
 - 在 `mail_messages` 中增加 `body_preview` 或 `search_text` 字段。
 - 收取邮件时从纯文本正文或 HTML 去标签文本中提取前若干字符，写入该字段。
-- `keyword` 使用 SQLite `LIKE` 查询 `subject`、`from_addr`、`to_addrs`、`cc_addrs`、`search_text`。
+- `keyword` 使用当前数据库的 `LIKE` 查询 `subject`、`from_addr`、`to_addrs`、`cc_addrs`、`search_text`。
 
-后续如果邮件量变大，再考虑 SQLite FTS5。
+后续如果邮件量变大，再按数据库类型引入 SQLite FTS5、MySQL FULLTEXT 或 PostgreSQL 全文索引。
 
 ## 5. 文件夹设计
 
@@ -149,6 +149,8 @@ MVP 不引入全文搜索引擎，采用轻量索引字段：
 - `attachments`：`has_attachments = 1`。
 
 ### 5.2 自定义文件夹
+
+自定义文件夹是本地归档目标，不只是一个可手工新建的目录。它既可以被用户手动分配给邮件，也可以作为规则动作的目标文件夹；列表接口需要返回关联规则数量，用于删除保护、规则管理提示和后续配置入口。邮件页左侧文件夹导航保持简洁，只展示文件夹本身。
 
 新增表 `mail_folders`：
 
@@ -172,7 +174,9 @@ MVP 不引入全文搜索引擎，采用轻量索引字段：
 
 - 文件夹必须按 `user_id` 隔离。
 - 同一用户下文件夹名称不允许重复。
-- 删除文件夹时，将相关邮件的 `local_folder_id` 置空，不删除邮件。
+- 编辑文件夹时保持主键不变，已有邮件归属和规则目标继续有效。
+- 删除文件夹前必须确认没有规则引用；如果仍被规则引用，需要先调整或删除相关规则。
+- 删除无规则引用的文件夹时，将相关邮件的 `local_folder_id` 置空，不删除邮件。
 
 ## 6. 规则设计
 
@@ -213,6 +217,11 @@ MVP 支持：
 - `subject`：主题。
 - `body`：正文索引。
 - `has_attachments`：是否有附件。
+- `is_read`：是否已读。
+- `starred`：是否星标。
+- `attachment_filename`：附件名。
+- `attachment_content_type`：附件类型。
+- `attachment_size`：附件大小。
 
 ### 6.3 操作符
 
@@ -225,6 +234,8 @@ MVP 支持：
 - `domain_equals`：域名等于，仅用于 `from_domain`。
 - `is_true`：为真，仅用于 `has_attachments`。
 - `is_false`：为假，仅用于 `has_attachments`。
+- `greater_than`：大于，仅用于附件大小。
+- `less_than`：小于，仅用于附件大小。
 
 ### 6.4 执行策略
 
@@ -232,6 +243,7 @@ MVP 支持：
 - 规则按 `sort_order` 升序执行。
 - MVP 中一封邮件只归属一个本地文件夹。
 - 如果多个规则命中，采用第一条命中的规则。
+- 规则动作支持移动到本地文件夹、标记已读、加星、标记垃圾邮件。
 - 手动重新应用规则时，可以选择：
   - 只处理未归档邮件。
   - 重新处理全部邮件并覆盖现有本地文件夹。
@@ -248,6 +260,8 @@ POST /api/v1/mail-folders
 PUT /api/v1/mail-folders/{id}
 DELETE /api/v1/mail-folders/{id}
 ```
+
+文件夹列表返回 `ruleCount`，用于删除保护、规则管理提示和后续配置入口。删除仍有关联规则的文件夹应返回冲突错误，避免规则失去明确归档目标。
 
 创建请求：
 

@@ -32,15 +32,20 @@ type SMTPConfig struct {
 }
 
 type OutgoingMessage struct {
-	FromName    string
-	From        string
-	To          []string
-	CC          []string
-	BCC         []string
-	Subject     string
-	TextBody    string
-	HTMLBody    string
-	Attachments []OutgoingAttachment
+	FromName             string
+	From                 string
+	To                   []string
+	CC                   []string
+	BCC                  []string
+	Subject              string
+	TextBody             string
+	HTMLBody             string
+	InReplyTo            string
+	References           []string
+	ComposeMode          string
+	SourceMessageID      int64
+	ForwardAttachmentIDs []int64
+	Attachments          []OutgoingAttachment
 }
 
 type OutgoingAttachment struct {
@@ -144,6 +149,12 @@ func buildSMTPMessage(account SMTPConfig, message OutgoingMessage, messageID str
 	}
 	if len(cc) > 0 {
 		headers["Cc"] = joinAddresses(cc)
+	}
+	if strings.TrimSpace(message.InReplyTo) != "" {
+		headers["In-Reply-To"] = strings.TrimSpace(message.InReplyTo)
+	}
+	if refs := normalizedReferences(message.References); len(refs) > 0 {
+		headers["References"] = strings.Join(refs, " ")
 	}
 
 	alternativeBoundary := "mailnest-alt-" + randomHex(12)
@@ -272,12 +283,31 @@ func joinAddresses(addresses []*netmail.Address) string {
 }
 
 func writeHeaders(body *bytes.Buffer, headers map[string]string) {
-	for _, key := range []string{"From", "To", "Cc", "Subject", "Date", "Message-ID", "MIME-Version"} {
+	for _, key := range []string{"From", "To", "Cc", "Subject", "Date", "Message-ID", "In-Reply-To", "References", "MIME-Version"} {
 		value := strings.TrimSpace(headers[key])
 		if value != "" {
 			body.WriteString(key + ": " + value + "\r\n")
 		}
 	}
+}
+
+func normalizedReferences(values []string) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		for _, part := range strings.Fields(strings.TrimSpace(value)) {
+			if !strings.HasPrefix(part, "<") || !strings.HasSuffix(part, ">") {
+				continue
+			}
+			key := strings.ToLower(part)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func writeAlternativePart(body *bytes.Buffer, boundary, contentType, content string) {

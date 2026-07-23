@@ -13,7 +13,7 @@ mailnest-fe（Vue 3 / Vite / TypeScript / Ant Design Vue）
   ▼
 mailnest-be（Go API 服务）
   │
-  ├── SQLite：用户、邮箱账号、邮件元数据、任务状态
+  ├── 数据库：用户、邮箱账号、邮件元数据、任务状态
   └── 本地文件目录：邮件原文、正文缓存、附件文件
 ```
 
@@ -80,23 +80,36 @@ mailnest/
 
 用户登录密码只保存 `bcrypt` 哈希，不允许明文落库。登录后修改密码需要校验当前密码，修改成功后当前 JWT 暂时保持有效；如果后续需要“修改密码后踢掉所有设备”，再引入 token 版本号或黑名单机制。
 
-个人资料保存在 `users` 表中，包括昵称、头像路径和个人描述。头像文件保存到本地数据目录的用户资料目录，并通过受鉴权保护的接口读取；前端只拿到头像 URL，不直接接触本地文件路径。
+个人资料保存在 `users` 表中，包括昵称、头像路径、个人描述和界面主题偏好。头像文件保存到本地数据目录的用户资料目录，并通过受鉴权保护的接口读取；前端只拿到头像 URL，不直接接触本地文件路径。界面主题偏好使用枚举值保存，登录、当前用户和个人资料接口都会返回，前端据此设置全局主题变量和 Ant Design 主题 token。主题枚举包括常规办公配色和青花、朱砂、水墨、黛山等中国风配色；顶部栏和左侧导航统一使用框架主题色，避免主题切换后出现割裂。
 
 邮箱认证支持两种模式：
 
-- `password`：邮箱密码或应用专用密码，加密后存入 SQLite。
-- `oauth2`：Microsoft OAuth2 授权，access token 和 refresh token 加密后存入 SQLite，IMAP 登录时使用 OAuth bearer 方式。
+- `password`：邮箱密码或应用专用密码，加密后存入当前配置的数据库。
+- `oauth2`：Microsoft OAuth2 授权，access token 和 refresh token 加密后存入当前配置的数据库，IMAP 登录时使用 OAuth bearer 方式。
 
 ### 3.4 storage 模块
 
-负责 SQLite 连接、数据库迁移、事务和基础查询。
+负责数据库连接、数据库迁移、事务和基础查询。后端通过 `config.yaml` 的 `database.driver` 选择数据库类型：默认 `sqlite`，也支持 `mysql` 和 `postgres`。连接驱动选择、建表、补列和普通索引迁移由 GORM 统一处理。
 
-SQLite 连接使用 WAL、busy timeout 和受控连接池，降低后台同步写入与 Web 读取并发时的锁等待。邮件列表查询应只读取摘要字段；需要正文、附件、搜索索引等完整数据时由详情、规则或后台任务单独查询，避免列表页为每封邮件加载大字段。
+SQLite 连接使用 WAL、busy timeout 和受控连接池，降低后台同步写入与 Web 读取并发时的锁等待。MySQL/PostgreSQL 通过 DSN 连接。新增表和字段应优先补充 GORM model 标签并让 `AutoMigrate` 迁移；只有邮件列表排序这类表达式索引、插入忽略、联系人 upsert、定时同步到期判断和自增主键返回等数据库差异，才保留在 storage 层集中封装，避免业务查询写死某一种数据库。
 
-数据库默认放在本地数据目录，例如：
+邮件列表查询应只读取摘要字段；需要正文、附件、搜索索引等完整数据时由详情、规则或后台任务单独查询，避免列表页为每封邮件加载大字段。
+
+SQLite 数据库默认放在本地数据目录，例如：
 
 ```text
 data/mailnest.db
+```
+
+配置示例：
+
+```yaml
+database:
+  driver: "sqlite" # sqlite/mysql/postgres
+  path: "/data/mailnest.db" # sqlite 使用
+  dsn: "" # mysql/postgres 使用
+  maxOpenConns: 4
+  maxIdleConns: 4
 ```
 
 ### 3.5 mail 模块
@@ -113,7 +126,11 @@ data/mailnest.db
 
 邮件入库仍以 `account_id + folder + imap_uid` 去重，因此全量同步可以重复执行，不会重复写入同一封邮件。全量同步进度记录在邮箱账号上，包括状态、总数、已处理数、新增数、开始时间、结束时间和错误信息。
 
-用户从 Web 界面发送邮件时，后端先按当前用户校验邮箱账号归属，再使用账号的 SMTP 主机、端口、加密方式、用户名和加密凭据发信。SMTP 发送成功后，后端将生成的 RFC822 原文、纯文本正文、HTML 正文、附件文件和元数据写入本地数据目录，并在 `mail_messages` 中保存到账号配置的 `sent_folder`。当前发信支持普通附件和账号签名模板，暂不向 IMAP 服务器执行 append；后续可在同一发送服务上扩展服务器已发送追加、草稿和回复/转发链路。
+用户从 Web 界面发送邮件时，后端先按当前用户校验邮箱账号归属，再使用账号的 SMTP 主机、端口、加密方式、用户名和加密凭据发信。SMTP 发送成功后，后端将生成的 RFC822 原文、纯文本正文、HTML 正文、附件文件和元数据写入本地数据目录，并在 `mail_messages` 中保存到账号配置的 `sent_folder`。当前发信支持普通附件和账号签名模板，暂不向 IMAP 服务器执行 append；后续可在同一发送服务上扩展服务器已发送追加和草稿链路。
+
+邮件回复与转发复用同一套发信服务，但发送前应由后端基于来源邮件生成写信上下文。回复填写原发件人并生成 `In-Reply-To`、`References`；回复全部需要合并原发件人、收件人和抄送人，并排除当前用户自己的所有邮箱地址；转发默认不填收件人，正文中追加原邮件信息和引用内容。转发原附件时，前端只传附件 ID，后端按当前用户和来源邮件校验后从本地附件目录读取并重新组包，避免前端重复下载再上传。
+
+回复和转发发送成功后，应在本地已发送邮件中保存来源邮件 ID、回复/转发模式和线程头，方便后续扩展会话聚合、发信追踪和草稿箱。
 
 邮件保存成功或重复同步命中已有邮件时，后端会从发件人、收件人和抄送人中提取邮箱地址，写入 `contacts` 表。自动沉淀联系人按 `user_id + email_key` 去重，只补充空缺显示名并更新最近出现时间；如果用户已经手工维护过昵称、姓名、电话、公司或备注，自动同步不能覆盖这些字段。
 
@@ -162,6 +179,7 @@ data/mailnest.db
 - 展示用户名和邮箱。
 - 修改昵称和个人描述。
 - 上传头像并更新顶部用户区展示。
+- 选择个人界面主题，保存后立即应用，并在下次登录后自动恢复。
 
 ### 4.2 主界面
 
@@ -190,9 +208,12 @@ data/mailnest.db
 - 邮件列表。
 - 邮件详情。
 - 写邮件抽屉，可选择发件账号并填写收件人、抄送、密送、主题和正文。
+- 邮件详情动作区，支持回复、回复全部和转发。
 - 附件下载入口。
 
 邮件列表和详情需要基于邮箱地址匹配通讯录，显示优先级为：联系人昵称、联系人姓名、邮件头显示名、邮箱用户名部分。详情中的联系人标签使用点击弹出层展示真实邮箱地址、电话、公司和备注，既减少列表噪音，也保留可追溯的地址信息。
+
+回复、回复全部和转发应复用写邮件抽屉。前端只负责展示后端返回的写信上下文和收集用户编辑结果，不在浏览器里自行推导邮件线程头。阅读区宽度不足时，回复、回复全部和转发按钮应收进更多菜单，避免标题、联系人和按钮互相挤压。
 
 ### 4.5 联系人通讯录
 
@@ -223,6 +244,10 @@ data/mailnest.db
 - `username`
 - `email`
 - `password_hash`
+- `nickname`
+- `avatar_path`
+- `bio`
+- `ui_theme`
 - `created_at`
 - `updated_at`
 
@@ -282,10 +307,14 @@ data/mailnest.db
 - `html_body_path`
 - `raw_path`
 - `search_text`
+- `in_reply_to`
+- `references_header`
+- `source_message_id`
+- `compose_mode`
 - `created_at`
 - `updated_at`
 
-建议为 `account_id + folder + imap_uid` 建唯一约束，同时尽量保存 `message_id` 作为辅助去重依据。
+建议为 `account_id + folder + imap_uid` 建唯一约束，同时尽量保存 `message_id` 作为辅助去重依据。回复与转发阶段新增的线程字段必须使用兼容默认值迁移，避免影响已有邮件数据。
 
 ### 5.4 mail_attachments
 
@@ -336,6 +365,9 @@ data/mailnest.db
 - `name`
 - `enabled`
 - `match_mode`
+- `priority`
+- `stop_on_match`
+- `action_type`
 - `target_folder_id`
 - `sort_order`
 - `created_at`
@@ -361,6 +393,44 @@ data/mailnest.db
 - `new_message_count`
 - `error_message`
 
+### 5.10 mail_message_states
+
+- `id`
+- `user_id`
+- `message_id`
+- `is_read`
+- `read_at`
+- `starred`
+- `is_spam`
+- `spam_at`
+- `archived_at`
+- `deleted_at`
+- `created_at`
+- `updated_at`
+
+`mail_message_states` 保存 Mail Nest 本地阅读和整理状态，不回写远端 IMAP。建议对 `user_id + message_id` 建唯一约束，批量操作时使用 upsert 保证幂等。
+
+### 5.11 mail_sync_job_events
+
+- `id`
+- `job_id`
+- `level`
+- `phase`
+- `message`
+- `detail_json`
+- `created_at`
+
+同步事件日志用于排障，`phase` 建议覆盖连接、目录列表、拉取、解析、入库、规则执行和服务器清理等阶段。日志内容必须脱敏。
+
+### 5.12 附件中心索引
+
+附件中心复用 `mail_attachments` 表，不单独复制附件文件。建议增加以下索引：
+
+- `mail_attachments(user_id, filename)`
+- `mail_attachments(user_id, content_type)`
+- `mail_attachments(user_id, created_at)`
+- `mail_attachments(user_id, inline, id)`
+
 ## 6. 本地文件存储
 
 建议结构：
@@ -385,7 +455,7 @@ data/
 ## 7. 安全设计
 
 - 用户密码必须哈希保存。
-- 邮箱密码或授权码必须加密后存入 SQLite。
+- 邮箱密码或授权码必须加密后存入当前配置的数据库。
 - 邮箱凭据加密密钥通过 `config.yaml` 或环境变量提供，不应提交真实密钥到仓库。
 - 是否允许用户注册由 `config.yaml` 中的配置项控制。
 - 所有用户数据接口必须校验登录态。

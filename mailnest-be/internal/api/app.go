@@ -50,6 +50,7 @@ const userIDKey contextKey = "userID"
 var cidReferencePattern = regexp.MustCompile(`(?i)cid:(?:<[^>]+>|[^"'\s>]+)`)
 
 const inlineAttachmentURLTTL = time.Hour
+const maxInlineImageTransformBytes = 1 << 20
 
 const maxComposeAttachmentCount = 20
 const maxComposeAttachmentBytes = 25 << 20
@@ -63,7 +64,13 @@ func NewAppWithFetcher(cfg config.Config, fetcher mail.Fetcher) (*App, error) {
 }
 
 func NewAppWithDependencies(cfg config.Config, fetcher mail.Fetcher, exchanger oauth.MicrosoftExchanger) (*App, error) {
-	store, err := storage.Open(cfg.Database.Path)
+	store, err := storage.OpenWithOptions(storage.DatabaseOptions{
+		Driver:       cfg.Database.Driver,
+		DSN:          cfg.Database.DSN,
+		Path:         cfg.Database.Path,
+		MaxOpenConns: cfg.Database.MaxOpenConns,
+		MaxIdleConns: cfg.Database.MaxIdleConns,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -104,23 +111,32 @@ func (a *App) Routes() http.Handler {
 	mux.Handle("POST /api/v1/mail-accounts/{id}/full-sync/stop", a.authMiddleware(http.HandlerFunc(a.handleStopFullSyncMailAccount)))
 	mux.Handle("GET /api/v1/mail-accounts/{id}/sync-status", a.authMiddleware(http.HandlerFunc(a.handleMailAccountSyncStatus)))
 	mux.Handle("GET /api/v1/messages", a.authMiddleware(http.HandlerFunc(a.handleListMessages)))
+	mux.Handle("POST /api/v1/messages/batch-actions", a.authMiddleware(http.HandlerFunc(a.handleMessageBatchAction)))
+	mux.Handle("POST /api/v1/messages/batch-preview", a.authMiddleware(http.HandlerFunc(a.handleMessageBatchPreview)))
 	mux.Handle("POST /api/v1/messages/send", a.authMiddleware(http.HandlerFunc(a.handleSendMessage)))
+	mux.Handle("GET /api/v1/messages/{id}/compose-context", a.authMiddleware(http.HandlerFunc(a.handleMessageComposeContext)))
 	mux.Handle("GET /api/v1/messages/{id}", a.authMiddleware(http.HandlerFunc(a.handleMessageDetail)))
 	mux.Handle("POST /api/v1/messages/{id}/folder", a.authMiddleware(http.HandlerFunc(a.handleAssignMessageFolder)))
 	mux.Handle("GET /api/v1/messages/{id}/attachments/{attachmentId}/content", a.authMiddleware(http.HandlerFunc(a.handleAttachmentContent)))
 	mux.HandleFunc("GET /api/v1/messages/{id}/attachments/{attachmentId}/inline-content", a.handleInlineAttachmentContent)
+	mux.Handle("GET /api/v1/attachments", a.authMiddleware(http.HandlerFunc(a.handleListAttachments)))
+	mux.Handle("GET /api/v1/sync-jobs", a.authMiddleware(http.HandlerFunc(a.handleListSyncJobs)))
+	mux.Handle("GET /api/v1/sync-jobs/{id}", a.authMiddleware(http.HandlerFunc(a.handleSyncJobDetail)))
+	mux.Handle("GET /api/v1/sync-jobs/{id}/events", a.authMiddleware(http.HandlerFunc(a.handleSyncJobEvents)))
 	mux.Handle("GET /api/v1/contacts", a.authMiddleware(http.HandlerFunc(a.handleListContacts)))
 	mux.Handle("POST /api/v1/contacts", a.authMiddleware(http.HandlerFunc(a.handleCreateContact)))
 	mux.Handle("PUT /api/v1/contacts/{id}", a.authMiddleware(http.HandlerFunc(a.handleUpdateContact)))
 	mux.Handle("DELETE /api/v1/contacts/{id}", a.authMiddleware(http.HandlerFunc(a.handleDeleteContact)))
 	mux.Handle("GET /api/v1/mail-folders", a.authMiddleware(http.HandlerFunc(a.handleListMailFolders)))
 	mux.Handle("POST /api/v1/mail-folders", a.authMiddleware(http.HandlerFunc(a.handleCreateMailFolder)))
+	mux.Handle("PUT /api/v1/mail-folders/{id}", a.authMiddleware(http.HandlerFunc(a.handleUpdateMailFolder)))
 	mux.Handle("DELETE /api/v1/mail-folders/{id}", a.authMiddleware(http.HandlerFunc(a.handleDeleteMailFolder)))
 	mux.Handle("GET /api/v1/mail-rules", a.authMiddleware(http.HandlerFunc(a.handleListMailRules)))
 	mux.Handle("POST /api/v1/mail-rules", a.authMiddleware(http.HandlerFunc(a.handleCreateMailRule)))
 	mux.Handle("PUT /api/v1/mail-rules/{id}", a.authMiddleware(http.HandlerFunc(a.handleUpdateMailRule)))
 	mux.Handle("DELETE /api/v1/mail-rules/{id}", a.authMiddleware(http.HandlerFunc(a.handleDeleteMailRule)))
 	mux.Handle("POST /api/v1/mail-rules/apply", a.authMiddleware(http.HandlerFunc(a.handleApplyMailRules)))
+	mux.Handle("POST /api/v1/mail-rules/preview", a.authMiddleware(http.HandlerFunc(a.handlePreviewMailRule)))
 	mux.Handle("POST /api/v1/oauth/microsoft/start", a.authMiddleware(http.HandlerFunc(a.handleMicrosoftOAuthStart)))
 	mux.Handle("POST /api/v1/oauth/microsoft/complete", a.authMiddleware(http.HandlerFunc(a.handleMicrosoftOAuthComplete)))
 	return mux
@@ -159,6 +175,7 @@ type changePasswordRequest struct {
 type updateProfileRequest struct {
 	Nickname string `json:"nickname"`
 	Bio      string `json:"bio"`
+	UITheme  string `json:"uiTheme"`
 }
 
 type createMailAccountRequest struct {
@@ -209,19 +226,25 @@ type assignMessageFolderRequest struct {
 }
 
 type sendMessageRequest struct {
-	AccountID string   `json:"accountId"`
-	To        []string `json:"to"`
-	CC        []string `json:"cc"`
-	BCC       []string `json:"bcc"`
-	Subject   string   `json:"subject"`
-	TextBody  string   `json:"textBody"`
-	HTMLBody  string   `json:"htmlBody"`
+	AccountID            string   `json:"accountId"`
+	To                   []string `json:"to"`
+	CC                   []string `json:"cc"`
+	BCC                  []string `json:"bcc"`
+	Subject              string   `json:"subject"`
+	TextBody             string   `json:"textBody"`
+	HTMLBody             string   `json:"htmlBody"`
+	ComposeMode          string   `json:"composeMode"`
+	SourceMessageID      string   `json:"sourceMessageId"`
+	ForwardAttachmentIDs []string `json:"forwardAttachmentIds"`
 }
 
 type createMailRuleRequest struct {
 	Name           string                    `json:"name"`
 	Enabled        bool                      `json:"enabled"`
 	MatchMode      string                    `json:"matchMode"`
+	Priority       int                       `json:"priority"`
+	StopOnMatch    bool                      `json:"stopOnMatch"`
+	ActionType     string                    `json:"actionType"`
 	TargetFolderID string                    `json:"targetFolderId"`
 	SortOrder      int                       `json:"sortOrder"`
 	Conditions     []createMailRuleCondition `json:"conditions"`
@@ -235,6 +258,29 @@ type createMailRuleCondition struct {
 
 type applyMailRulesRequest struct {
 	Scope string `json:"scope"`
+}
+
+type previewMailRuleRequest struct {
+	Name           string                    `json:"name"`
+	Enabled        bool                      `json:"enabled"`
+	MatchMode      string                    `json:"matchMode"`
+	Priority       int                       `json:"priority"`
+	StopOnMatch    bool                      `json:"stopOnMatch"`
+	ActionType     string                    `json:"actionType"`
+	TargetFolderID string                    `json:"targetFolderId"`
+	SortOrder      int                       `json:"sortOrder"`
+	Conditions     []createMailRuleCondition `json:"conditions"`
+	Limit          int                       `json:"limit"`
+}
+
+type messageBatchActionRequest struct {
+	MessageIDs []string `json:"messageIds"`
+	Action     string   `json:"action"`
+	FolderID   string   `json:"folderId"`
+}
+
+type messageBatchPreviewRequest struct {
+	MessageIDs []string `json:"messageIds"`
 }
 
 func (a *App) handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -422,6 +468,7 @@ func (a *App) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Nickname = strings.TrimSpace(req.Nickname)
 	req.Bio = strings.TrimSpace(req.Bio)
+	req.UITheme = normalizeUITheme(req.UITheme)
 	if len([]rune(req.Nickname)) > 40 {
 		response.Error(w, http.StatusBadRequest, "昵称不能超过 40 个字符")
 		return
@@ -431,7 +478,7 @@ func (a *App) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := a.store.UpdateUserProfile(userID, req.Nickname, req.Bio)
+	user, err := a.store.UpdateUserProfile(userID, req.Nickname, req.Bio, req.UITheme)
 	if errors.Is(err, storage.ErrNotFound) {
 		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
 		return
@@ -923,6 +970,8 @@ func (a *App) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		DateFrom:       parseDateQuery(r.URL.Query().Get("dateFrom")),
 		DateTo:         parseDateQuery(r.URL.Query().Get("dateTo")),
 		HasAttachments: parseBoolQuery(r.URL.Query().Get("hasAttachments")),
+		IsRead:         parseBoolQuery(r.URL.Query().Get("isRead")),
+		Starred:        parseBoolQuery(r.URL.Query().Get("starred")),
 		Limit:          pageSize,
 		Offset:         offset,
 		SummaryOnly:    true,
@@ -945,6 +994,78 @@ func (a *App) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		"total":    total,
 	})
 	logSlowAPI("messages.list", started, "query="+queryDuration.String(), "items="+strconv.Itoa(len(items)), "total="+strconv.Itoa(total))
+}
+
+func (a *App) handleMessageBatchAction(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	var req messageBatchActionRequest
+	if err := decodeJSON(r, &req); err != nil {
+		response.Error(w, http.StatusBadRequest, "请求参数格式错误")
+		return
+	}
+	messageIDs, ok := parseIDStrings(req.MessageIDs)
+	if !ok || len(messageIDs) == 0 {
+		response.Error(w, http.StatusBadRequest, "请选择邮件")
+		return
+	}
+	folderID, ok := parseOptionalID(w, req.FolderID, "文件夹 ID")
+	if !ok {
+		return
+	}
+	result, err := a.store.BatchUpdateMailMessageStates(userID, messageIDs, strings.TrimSpace(req.Action), sqlNullInt64(folderID))
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "批量操作失败："+err.Error())
+		return
+	}
+	response.OK(w, "操作成功", map[string]any{
+		"matchedCount": result.MatchedCount,
+		"changedCount": result.ChangedCount,
+		"skippedCount": result.SkippedCount,
+	})
+}
+
+func (a *App) handleMessageBatchPreview(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	var req messageBatchPreviewRequest
+	if err := decodeJSON(r, &req); err != nil {
+		response.Error(w, http.StatusBadRequest, "请求参数格式错误")
+		return
+	}
+	messageIDs, ok := parseIDStrings(req.MessageIDs)
+	if !ok {
+		response.Error(w, http.StatusBadRequest, "邮件 ID 格式错误")
+		return
+	}
+	preview, err := a.store.PreviewMailMessageBatch(userID, messageIDs)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "获取批量预览失败")
+		return
+	}
+	folderCounts := make([]map[string]any, 0, len(preview.FolderCounts))
+	for _, item := range preview.FolderCounts {
+		folderCounts = append(folderCounts, map[string]any{
+			"folderId": strconv.FormatInt(item.FolderID, 10),
+			"name":     item.Name,
+			"count":    item.Count,
+		})
+	}
+	response.OK(w, "获取成功", map[string]any{
+		"total":        preview.Total,
+		"readCount":    preview.ReadCount,
+		"unreadCount":  preview.UnreadCount,
+		"starredCount": preview.StarredCount,
+		"spamCount":    preview.SpamCount,
+		"deletedCount": preview.DeletedCount,
+		"folderCounts": folderCounts,
+	})
 }
 
 func (a *App) handleSendMessage(w http.ResponseWriter, r *http.Request) {
@@ -990,15 +1111,26 @@ func (a *App) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, "邮件主题不能超过 500 个字符")
 		return
 	}
+	sourceMessageID, ok := parseOptionalID(w, req.SourceMessageID, "来源邮件 ID")
+	if !ok {
+		return
+	}
+	forwardAttachmentIDs, ok := parseOptionalIDs(w, req.ForwardAttachmentIDs, "转发附件 ID")
+	if !ok {
+		return
+	}
 
 	sent, err := a.mailService.SendMessage(userID, accountID, mail.OutgoingMessage{
-		To:          to,
-		CC:          cc,
-		BCC:         bcc,
-		Subject:     req.Subject,
-		TextBody:    req.TextBody,
-		HTMLBody:    req.HTMLBody,
-		Attachments: attachments,
+		To:                   to,
+		CC:                   cc,
+		BCC:                  bcc,
+		Subject:              req.Subject,
+		TextBody:             req.TextBody,
+		HTMLBody:             req.HTMLBody,
+		ComposeMode:          req.ComposeMode,
+		SourceMessageID:      sourceMessageID,
+		ForwardAttachmentIDs: forwardAttachmentIDs,
+		Attachments:          attachments,
 	})
 	if errors.Is(err, storage.ErrNotFound) {
 		response.Error(w, http.StatusNotFound, "邮箱账号不存在")
@@ -1009,6 +1141,29 @@ func (a *App) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.OK(w, "发送成功", messageListPayload(sent))
+}
+
+func (a *App) handleMessageComposeContext(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		response.Error(w, http.StatusBadRequest, "邮件 ID 格式错误")
+		return
+	}
+	ctx, err := a.mailService.GetComposeContext(userID, id, r.URL.Query().Get("mode"))
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusNotFound, "邮件不存在")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "获取写信上下文失败")
+		return
+	}
+	response.OK(w, "获取成功", composeContextPayload(ctx))
 }
 
 func (a *App) handleMessageDetail(w http.ResponseWriter, r *http.Request) {
@@ -1034,6 +1189,10 @@ func (a *App) handleMessageDetail(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "获取邮件详情失败")
 		return
+	}
+	if !message.IsRead {
+		message.IsRead = true
+		a.markMessageReadAsync(userID, id)
 	}
 	messageDuration := time.Since(segmentStarted)
 
@@ -1117,6 +1276,15 @@ func (a *App) handleAssignMessageFolder(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	response.OK(w, "更新成功", nil)
+}
+
+func (a *App) markMessageReadAsync(userID, messageID int64) {
+	go func() {
+		isRead := true
+		if err := a.store.UpsertMailMessageState(userID, messageID, &isRead, nil, nil, nil); err != nil {
+			log.Printf("mark message read failed userID=%d messageID=%d err=%v", userID, messageID, err)
+		}
+	}()
 }
 
 func (a *App) handleListContacts(w http.ResponseWriter, r *http.Request) {
@@ -1290,6 +1458,45 @@ func (a *App) handleCreateMailFolder(w http.ResponseWriter, r *http.Request) {
 	response.Created(w, "创建成功", mailFolderPayload(folder))
 }
 
+func (a *App) handleUpdateMailFolder(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	folderID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "文件夹 ID 格式错误")
+		return
+	}
+	var req createMailFolderRequest
+	if err := decodeJSON(r, &req); err != nil {
+		response.Error(w, http.StatusBadRequest, "请求参数格式错误")
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Color = strings.TrimSpace(req.Color)
+	if req.Name == "" {
+		response.Error(w, http.StatusBadRequest, "文件夹名称不能为空")
+		return
+	}
+	folder, err := a.store.UpdateMailFolder(userID, folderID, storage.CreateMailFolderParams{
+		UserID:    userID,
+		Name:      req.Name,
+		Color:     req.Color,
+		SortOrder: req.SortOrder,
+	})
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusNotFound, "文件夹不存在")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusConflict, "文件夹名称已存在或更新失败")
+		return
+	}
+	response.OK(w, "更新成功", mailFolderPayload(folder))
+}
+
 func (a *App) handleDeleteMailFolder(w http.ResponseWriter, r *http.Request) {
 	userID, ok := currentUserID(r)
 	if !ok {
@@ -1303,6 +1510,9 @@ func (a *App) handleDeleteMailFolder(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := a.store.DeleteMailFolder(userID, folderID); errors.Is(err, storage.ErrNotFound) {
 		response.Error(w, http.StatusNotFound, "文件夹不存在")
+		return
+	} else if errors.Is(err, storage.ErrMailFolderHasRules) {
+		response.Error(w, http.StatusConflict, "该文件夹已有规则关联，请先调整或删除相关规则")
 		return
 	} else if err != nil {
 		response.Error(w, http.StatusInternalServerError, "删除文件夹失败")
@@ -1390,17 +1600,30 @@ func (a *App) mailRuleParamsFromRequest(w http.ResponseWriter, userID int64, req
 		response.Error(w, http.StatusBadRequest, "规则名称不能为空")
 		return storage.CreateMailRuleParams{}, false
 	}
-	targetFolderID, err := strconv.ParseInt(req.TargetFolderID, 10, 64)
-	if err != nil {
-		response.Error(w, http.StatusBadRequest, "目标文件夹 ID 格式错误")
+	actionType := strings.ToLower(strings.TrimSpace(req.ActionType))
+	switch actionType {
+	case "mark_read", "star", "mark_spam":
+	case "move_folder", "":
+		actionType = "move_folder"
+	default:
+		response.Error(w, http.StatusBadRequest, "规则动作不支持")
 		return storage.CreateMailRuleParams{}, false
 	}
-	if _, err := a.store.FindMailFolderByID(userID, targetFolderID); errors.Is(err, storage.ErrNotFound) {
-		response.Error(w, http.StatusNotFound, "目标文件夹不存在")
-		return storage.CreateMailRuleParams{}, false
-	} else if err != nil {
-		response.Error(w, http.StatusInternalServerError, "获取目标文件夹失败")
-		return storage.CreateMailRuleParams{}, false
+	var targetFolderID int64
+	if actionType == "move_folder" {
+		var err error
+		targetFolderID, err = strconv.ParseInt(req.TargetFolderID, 10, 64)
+		if err != nil {
+			response.Error(w, http.StatusBadRequest, "目标文件夹 ID 格式错误")
+			return storage.CreateMailRuleParams{}, false
+		}
+		if _, err := a.store.FindMailFolderByID(userID, targetFolderID); errors.Is(err, storage.ErrNotFound) {
+			response.Error(w, http.StatusNotFound, "目标文件夹不存在")
+			return storage.CreateMailRuleParams{}, false
+		} else if err != nil {
+			response.Error(w, http.StatusInternalServerError, "获取目标文件夹失败")
+			return storage.CreateMailRuleParams{}, false
+		}
 	}
 	matchMode := strings.ToLower(strings.TrimSpace(req.MatchMode))
 	if matchMode != "any" {
@@ -1425,6 +1648,9 @@ func (a *App) mailRuleParamsFromRequest(w http.ResponseWriter, userID int64, req
 		Name:           req.Name,
 		Enabled:        req.Enabled,
 		MatchMode:      matchMode,
+		Priority:       req.Priority,
+		StopOnMatch:    req.StopOnMatch,
+		ActionType:     actionType,
 		TargetFolderID: targetFolderID,
 		SortOrder:      req.SortOrder,
 		Conditions:     conditions,
@@ -1464,7 +1690,7 @@ func (a *App) handleApplyMailRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scope := mail.RuleApplyScope(strings.ToLower(strings.TrimSpace(req.Scope)))
-	if scope != mail.RuleApplyScopeAll {
+	if scope != mail.RuleApplyScopeAll && scope != mail.RuleApplyScopeFiltered {
 		scope = mail.RuleApplyScopeUnfiled
 	}
 	count, err := a.mailService.ApplyRules(userID, scope)
@@ -1473,6 +1699,193 @@ func (a *App) handleApplyMailRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.OK(w, "应用完成", map[string]any{"appliedCount": count})
+}
+
+func (a *App) handlePreviewMailRule(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	var req previewMailRuleRequest
+	if err := decodeJSON(r, &req); err != nil {
+		response.Error(w, http.StatusBadRequest, "请求参数格式错误")
+		return
+	}
+	params, ok := a.mailRuleParamsFromRequest(w, userID, createMailRuleRequest{
+		Name:           valueOrFallback(req.Name, "规则预览"),
+		Enabled:        true,
+		MatchMode:      req.MatchMode,
+		Priority:       req.Priority,
+		StopOnMatch:    req.StopOnMatch,
+		ActionType:     req.ActionType,
+		TargetFolderID: req.TargetFolderID,
+		SortOrder:      req.SortOrder,
+		Conditions:     req.Conditions,
+	})
+	if !ok {
+		return
+	}
+	rule := storage.MailRule{
+		UserID:         userID,
+		Name:           params.Name,
+		Enabled:        true,
+		MatchMode:      params.MatchMode,
+		Priority:       params.Priority,
+		StopOnMatch:    params.StopOnMatch,
+		ActionType:     params.ActionType,
+		TargetFolderID: params.TargetFolderID,
+		SortOrder:      params.SortOrder,
+		Conditions:     make([]storage.MailRuleCondition, 0, len(params.Conditions)),
+	}
+	for _, condition := range params.Conditions {
+		rule.Conditions = append(rule.Conditions, storage.MailRuleCondition{
+			Field:    condition.Field,
+			Operator: condition.Operator,
+			Value:    condition.Value,
+		})
+	}
+	matchedCount, samples, err := a.mailService.PreviewRule(userID, rule, req.Limit)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "规则预览失败")
+		return
+	}
+	items := make([]map[string]any, 0, len(samples))
+	for _, sample := range samples {
+		items = append(items, messageListPayload(sample))
+	}
+	response.OK(w, "获取成功", map[string]any{
+		"matchedCount": matchedCount,
+		"samples":      items,
+	})
+}
+
+func (a *App) handleListAttachments(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	page := parsePositiveInt(r.URL.Query().Get("page"), 1)
+	pageSize := parsePositiveInt(r.URL.Query().Get("pageSize"), 20)
+	accountID, _ := strconv.ParseInt(r.URL.Query().Get("accountId"), 10, 64)
+	folderID, _ := strconv.ParseInt(r.URL.Query().Get("folderId"), 10, 64)
+	items, total, err := a.store.ListAttachments(storage.ListAttachmentsQuery{
+		UserID:      userID,
+		Keyword:     r.URL.Query().Get("keyword"),
+		ContentType: r.URL.Query().Get("contentType"),
+		AccountID:   accountID,
+		FolderID:    folderID,
+		Inline:      parseBoolQuery(r.URL.Query().Get("inline")),
+		DateFrom:    parseDateQuery(r.URL.Query().Get("dateFrom")),
+		DateTo:      parseDateQuery(r.URL.Query().Get("dateTo")),
+		Limit:       pageSize,
+		Offset:      (page - 1) * pageSize,
+	})
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "获取附件失败")
+		return
+	}
+	payloadItems := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		payloadItems = append(payloadItems, attachmentCenterPayload(item))
+	}
+	response.OK(w, "获取成功", map[string]any{
+		"items":    payloadItems,
+		"page":     page,
+		"pageSize": pageSize,
+		"total":    total,
+	})
+}
+
+func (a *App) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	page := parsePositiveInt(r.URL.Query().Get("page"), 1)
+	pageSize := parsePositiveInt(r.URL.Query().Get("pageSize"), 50)
+	accountID, _ := strconv.ParseInt(r.URL.Query().Get("accountId"), 10, 64)
+	jobs, total, err := a.store.ListSyncJobs(storage.ListSyncJobsQuery{
+		UserID:    userID,
+		AccountID: accountID,
+		Limit:     pageSize,
+		Offset:    (page - 1) * pageSize,
+	})
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "获取同步任务失败")
+		return
+	}
+	items := make([]map[string]any, 0, len(jobs))
+	for _, job := range jobs {
+		items = append(items, syncJobPayload(job))
+	}
+	response.OK(w, "获取成功", map[string]any{
+		"items":    items,
+		"page":     page,
+		"pageSize": pageSize,
+		"total":    total,
+	})
+}
+
+func (a *App) handleSyncJobDetail(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	jobID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || jobID <= 0 {
+		response.Error(w, http.StatusBadRequest, "同步任务 ID 格式错误")
+		return
+	}
+	job, err := a.store.FindSyncJobByID(userID, jobID)
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusNotFound, "同步任务不存在")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "获取同步任务失败")
+		return
+	}
+	response.OK(w, "获取成功", syncJobPayload(job))
+}
+
+func (a *App) handleSyncJobEvents(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	jobID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || jobID <= 0 {
+		response.Error(w, http.StatusBadRequest, "同步任务 ID 格式错误")
+		return
+	}
+	page := parsePositiveInt(r.URL.Query().Get("page"), 1)
+	pageSize := parsePositiveInt(r.URL.Query().Get("pageSize"), 100)
+	events, total, err := a.store.ListSyncJobEvents(storage.ListSyncJobEventsQuery{
+		UserID: userID,
+		JobID:  jobID,
+		Level:  r.URL.Query().Get("level"),
+		Limit:  pageSize,
+		Offset: (page - 1) * pageSize,
+	})
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "获取同步日志失败")
+		return
+	}
+	items := make([]map[string]any, 0, len(events))
+	for _, event := range events {
+		items = append(items, syncJobEventPayload(event))
+	}
+	response.OK(w, "获取成功", map[string]any{
+		"items":    items,
+		"page":     page,
+		"pageSize": pageSize,
+		"total":    total,
+	})
 }
 
 func (a *App) handleAttachmentContent(w http.ResponseWriter, r *http.Request) {
@@ -1660,19 +2073,36 @@ func decodeSendMessageRequest(r *http.Request) (sendMessageRequest, []mail.Outgo
 	}
 	form := r.MultipartForm
 	req := sendMessageRequest{
-		AccountID: strings.TrimSpace(formValue(form, "accountId")),
-		To:        formAddressValues(form, "to"),
-		CC:        formAddressValues(form, "cc"),
-		BCC:       formAddressValues(form, "bcc"),
-		Subject:   formValue(form, "subject"),
-		TextBody:  formValue(form, "textBody"),
-		HTMLBody:  formValue(form, "htmlBody"),
+		AccountID:            strings.TrimSpace(formValue(form, "accountId")),
+		To:                   formAddressValues(form, "to"),
+		CC:                   formAddressValues(form, "cc"),
+		BCC:                  formAddressValues(form, "bcc"),
+		Subject:              formValue(form, "subject"),
+		TextBody:             formValue(form, "textBody"),
+		HTMLBody:             formValue(form, "htmlBody"),
+		ComposeMode:          formValue(form, "composeMode"),
+		SourceMessageID:      formValue(form, "sourceMessageId"),
+		ForwardAttachmentIDs: formStringValues(form, "forwardAttachmentIds"),
 	}
 	attachments, err := readComposeAttachments(form)
 	if err != nil {
 		return sendMessageRequest{}, nil, err
 	}
 	return req, attachments, nil
+}
+
+func formStringValues(form *multipart.Form, key string) []string {
+	raw := strings.TrimSpace(formValue(form, key))
+	if raw == "" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err == nil {
+		return values
+	}
+	return strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '，' || r == '；'
+	})
 }
 
 func formValue(form *multipart.Form, key string) string {
@@ -1743,6 +2173,7 @@ func userPayload(user storage.User) map[string]any {
 		"email":     user.Email,
 		"nickname":  nullableString(user.Nickname),
 		"bio":       nullableString(user.Bio),
+		"uiTheme":   normalizeUITheme(user.UITheme),
 		"avatarUrl": profileAvatarURL(user),
 	}
 }
@@ -1771,6 +2202,33 @@ func accountRouteIDs(w http.ResponseWriter, r *http.Request) (int64, int64, bool
 		return 0, 0, false
 	}
 	return userID, accountID, true
+}
+
+func parseOptionalID(w http.ResponseWriter, value string, label string) (int64, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, true
+	}
+	id, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || id <= 0 {
+		response.Error(w, http.StatusBadRequest, label+"格式错误")
+		return 0, false
+	}
+	return id, true
+}
+
+func parseOptionalIDs(w http.ResponseWriter, values []string, label string) ([]int64, bool) {
+	ids := make([]int64, 0, len(values))
+	for _, value := range values {
+		id, ok := parseOptionalID(w, value, label)
+		if !ok {
+			return nil, false
+		}
+		if id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	return ids, true
 }
 
 func mailAccountPayload(account storage.MailAccount) map[string]any {
@@ -1838,6 +2296,31 @@ func fullSyncStatusPayload(status mail.FullSyncStatus) map[string]any {
 	}
 }
 
+func composeContextPayload(ctx mail.ComposeContext) map[string]any {
+	attachments := make([]map[string]any, 0, len(ctx.ForwardAttachments))
+	for _, attachment := range ctx.ForwardAttachments {
+		attachments = append(attachments, map[string]any{
+			"id":          strconv.FormatInt(attachment.ID, 10),
+			"filename":    attachment.Filename,
+			"contentType": attachment.ContentType,
+			"size":        attachment.Size,
+			"selected":    attachment.Selected,
+		})
+	}
+	return map[string]any{
+		"mode":               ctx.Mode,
+		"sourceMessageId":    strconv.FormatInt(ctx.SourceMessageID, 10),
+		"accountId":          strconv.FormatInt(ctx.AccountID, 10),
+		"to":                 ctx.To,
+		"cc":                 ctx.CC,
+		"bcc":                ctx.BCC,
+		"subject":            ctx.Subject,
+		"textBody":           ctx.TextBody,
+		"htmlBody":           ctx.HTMLBody,
+		"forwardAttachments": attachments,
+	}
+}
+
 func messageListPayload(message storage.MailMessage) map[string]any {
 	return map[string]any{
 		"id":             strconv.FormatInt(message.ID, 10),
@@ -1849,6 +2332,11 @@ func messageListPayload(message storage.MailMessage) map[string]any {
 		"sentAt":         nullableTime(message.SentAt),
 		"receivedAt":     nullableTime(message.ReceivedAt),
 		"hasAttachments": message.HasAttachments,
+		"isRead":         message.IsRead,
+		"starred":        message.Starred,
+		"isSpam":         message.IsSpam,
+		"spamAt":         nullableTime(message.SpamAt),
+		"deletedAt":      nullableTime(message.DeletedAt),
 	}
 }
 
@@ -1858,6 +2346,7 @@ func mailFolderPayload(folder storage.MailFolder) map[string]any {
 		"name":      folder.Name,
 		"color":     nullableString(folder.Color),
 		"sortOrder": folder.SortOrder,
+		"ruleCount": folder.RuleCount,
 	}
 }
 
@@ -1994,10 +2483,20 @@ func mailRulePayload(rule storage.MailRule) map[string]any {
 		"name":           rule.Name,
 		"enabled":        rule.Enabled,
 		"matchMode":      rule.MatchMode,
-		"targetFolderId": strconv.FormatInt(rule.TargetFolderID, 10),
+		"priority":       rule.Priority,
+		"stopOnMatch":    rule.StopOnMatch,
+		"actionType":     rule.ActionType,
+		"targetFolderId": nullableRuleTargetFolderID(rule.TargetFolderID),
 		"sortOrder":      rule.SortOrder,
 		"conditions":     conditions,
 	}
+}
+
+func nullableRuleTargetFolderID(id int64) any {
+	if id <= 0 {
+		return nil
+	}
+	return strconv.FormatInt(id, 10)
 }
 
 func attachmentPayloads(messageID int64, attachments []storage.MailAttachment, inlineContentIDs map[string]bool) []map[string]any {
@@ -2037,8 +2536,16 @@ func rewriteInlineCIDImages(htmlBody string, attachments []storage.MailAttachmen
 			replacements[normalizedContentID] = inlineAttachmentContentURL(secret, userID, messageID, attachment.ID)
 			continue
 		}
+		if attachment.Size > maxInlineImageTransformBytes {
+			replacements[normalizedContentID] = inlineImagePlaceholderDataURL("内嵌图片较大，请在附件中查看")
+			continue
+		}
 		data, err := os.ReadFile(attachment.FilePath)
 		if err != nil {
+			continue
+		}
+		if len(data) > maxInlineImageTransformBytes {
+			replacements[normalizedContentID] = inlineImagePlaceholderDataURL("内嵌图片较大，请在附件中查看")
 			continue
 		}
 		contentType, data = browserDisplayableInlineImage(contentType, attachment.FilePath, data)
@@ -2072,7 +2579,7 @@ func rewriteCIDReferences(htmlBody string, replacements map[string]string) strin
 		if replacement, ok := replacements[normalizedContentID]; ok {
 			return replacement
 		}
-		return missingInlineImagePlaceholderDataURL()
+		return inlineImagePlaceholderDataURL("内嵌图片缺失")
 	})
 }
 
@@ -2135,6 +2642,16 @@ func normalizeSentFolder(value string) string {
 	return value
 }
 
+func normalizeUITheme(value string) string {
+	value = strings.TrimSpace(value)
+	switch value {
+	case "sky", "grape", "ember", "graphite", "qinghua", "cinnabar", "ink", "daishan":
+		return value
+	default:
+		return "forest"
+	}
+}
+
 func browserDisplayableInlineImage(contentType string, filePath string, data []byte) (string, []byte) {
 	mediaType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
 	extension := strings.ToLower(filepath.Ext(filePath))
@@ -2170,8 +2687,24 @@ func browserCanDisplayImage(contentType string, filePath string) bool {
 }
 
 func missingInlineImagePlaceholderDataURL() string {
-	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="48" viewBox="0 0 220 48"><rect width="220" height="48" rx="6" fill="#f8fafc" stroke="#cbd5e1"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#64748b" font-size="14" font-family="Arial, sans-serif">内嵌图片缺失</text></svg>`
+	return inlineImagePlaceholderDataURL("内嵌图片缺失")
+}
+
+func inlineImagePlaceholderDataURL(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		text = "内嵌图片不可显示"
+	}
+	svg := fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="260" height="52" viewBox="0 0 260 52"><rect width="260" height="52" rx="6" fill="#f8fafc" stroke="#cbd5e1"/><text x="50%%" y="50%%" dominant-baseline="middle" text-anchor="middle" fill="#64748b" font-size="14" font-family="Arial, sans-serif">%s</text></svg>`, htmlEscapeText(text))
 	return "data:image/svg+xml;charset=utf-8," + url.PathEscape(svg)
+}
+
+func htmlEscapeText(value string) string {
+	value = strings.ReplaceAll(value, "&", "&amp;")
+	value = strings.ReplaceAll(value, "<", "&lt;")
+	value = strings.ReplaceAll(value, ">", "&gt;")
+	value = strings.ReplaceAll(value, `"`, "&quot;")
+	return value
 }
 
 func nullableStringValue(value sql.NullString) string {
@@ -2267,5 +2800,83 @@ func parseBoolQuery(value string) sql.NullBool {
 		return sql.NullBool{Bool: false, Valid: true}
 	default:
 		return sql.NullBool{}
+	}
+}
+
+func parseIDStrings(values []string) ([]int64, bool) {
+	ids := make([]int64, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		id, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || id <= 0 {
+			return nil, false
+		}
+		ids = append(ids, id)
+	}
+	return ids, true
+}
+
+func sqlNullInt64(value int64) sql.NullInt64 {
+	if value <= 0 {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: value, Valid: true}
+}
+
+func valueOrFallback(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func attachmentCenterPayload(item storage.AttachmentListItem) map[string]any {
+	return map[string]any{
+		"id":             strconv.FormatInt(item.Attachment.ID, 10),
+		"messageId":      strconv.FormatInt(item.Attachment.MessageID, 10),
+		"filename":       item.Attachment.Filename,
+		"contentType":    nullableString(item.Attachment.ContentType),
+		"contentId":      nullableString(item.Attachment.ContentID),
+		"inline":         item.Attachment.Inline,
+		"size":           item.Attachment.Size,
+		"downloadUrl":    fmt.Sprintf("/api/v1/messages/%d/attachments/%d/content", item.Attachment.MessageID, item.Attachment.ID),
+		"accountId":      strconv.FormatInt(item.AccountID, 10),
+		"folderId":       nullableInt64(item.LocalFolderID),
+		"messageSubject": nullableString(item.MessageSubject),
+		"messageFrom":    nullableString(item.MessageFrom),
+		"messageTime":    nullableTime(item.MessageTime),
+	}
+}
+
+func syncJobPayload(job storage.MailSyncJob) map[string]any {
+	return map[string]any{
+		"id":              strconv.FormatInt(job.ID, 10),
+		"accountId":       strconv.FormatInt(job.AccountID, 10),
+		"triggerType":     job.TriggerType,
+		"status":          job.Status,
+		"startedAt":       nullableTime(job.StartedAt),
+		"finishedAt":      nullableTime(job.FinishedAt),
+		"newMessageCount": job.NewMessageCount,
+		"errorMessage":    nullableString(job.ErrorMessage),
+	}
+}
+
+func syncJobEventPayload(event storage.MailSyncJobEvent) map[string]any {
+	var detail any
+	if event.DetailJSON.Valid && strings.TrimSpace(event.DetailJSON.String) != "" {
+		_ = json.Unmarshal([]byte(event.DetailJSON.String), &detail)
+	}
+	return map[string]any{
+		"id":        strconv.FormatInt(event.ID, 10),
+		"jobId":     strconv.FormatInt(event.JobID, 10),
+		"level":     event.Level,
+		"phase":     event.Phase,
+		"message":   event.Message,
+		"detail":    detail,
+		"createdAt": event.CreatedAt,
 	}
 }

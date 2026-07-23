@@ -28,7 +28,11 @@ type AppConfig struct {
 }
 
 type DatabaseConfig struct {
-	Path string `yaml:"path"`
+	Driver       string `yaml:"driver"`
+	DSN          string `yaml:"dsn"`
+	Path         string `yaml:"path"`
+	MaxOpenConns int    `yaml:"maxOpenConns"`
+	MaxIdleConns int    `yaml:"maxIdleConns"`
 }
 
 type OAuthConfig struct {
@@ -56,7 +60,8 @@ func Default() Config {
 			CredentialSecret:  "change-me-32-byte-secret-value",
 		},
 		Database: DatabaseConfig{
-			Path: "./data/mailnest.db",
+			Driver: "sqlite",
+			Path:   "./data/mailnest.db",
 		},
 		OAuth: OAuthConfig{
 			Microsoft: MicrosoftOAuthConfig{

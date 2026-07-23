@@ -10,7 +10,13 @@ app:
   credentialSecret: "change-me-32-byte-secret-value"
 
 database:
+  # driver 支持 sqlite、mysql、postgres；生产默认继续使用 sqlite，确保本地 data 持久化。
+  driver: "sqlite"
+  # sqlite 使用 path；mysql/postgres 使用 dsn。
   path: "/data/mailnest.db"
+  dsn: ""
+  maxOpenConns: 4
+  maxIdleConns: 4
 
 oauth:
   microsoft:

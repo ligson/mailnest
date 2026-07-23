@@ -1,6 +1,6 @@
 services:
   mailnest-be:
-    image: ligson/mailnest-be:${MAILNEST_IMAGE_TAG:-latest}
+    image: ligson/mailnest-be:${MAILNEST_BE_IMAGE_TAG:-${MAILNEST_IMAGE_TAG:-latest}}
     container_name: mailnest-be
     restart: always
     environment:
@@ -12,7 +12,7 @@ services:
       - mynetwork
 
   mailnest-fe:
-    image: ligson/mailnest-fe:${MAILNEST_IMAGE_TAG:-latest}
+    image: ligson/mailnest-fe:${MAILNEST_FE_IMAGE_TAG:-${MAILNEST_IMAGE_TAG:-latest}}
     container_name: mailnest-fe
     restart: always
     depends_on:

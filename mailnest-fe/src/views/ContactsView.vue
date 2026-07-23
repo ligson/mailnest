@@ -338,7 +338,7 @@ function queryValue(value: unknown) {
 }
 
 .contact-name-cell span {
-  color: #64748b;
+  color: var(--muted-color);
   font-size: 12px;
 }
 

@@ -249,6 +249,7 @@ func fetchedMessageFromIMAP(msg *imap.Message, section *imap.BodySectionName) Fe
 	}
 	if msg.Envelope != nil {
 		item.MessageID = msg.Envelope.MessageId
+		item.InReplyTo = strings.TrimSpace(msg.Envelope.InReplyTo)
 		item.Subject = decodeMIMEHeader(msg.Envelope.Subject)
 		item.From = addressList(msg.Envelope.From)
 		item.To = addressSlice(msg.Envelope.To)
@@ -273,6 +274,8 @@ func fetchedMessageFromRaw(raw []byte) FetchedMessage {
 	item := FetchedMessage{RawContent: string(raw)}
 	if message, err := stdmail.ReadMessage(bytes.NewReader(raw)); err == nil {
 		item.MessageID = strings.TrimSpace(message.Header.Get("Message-Id"))
+		item.InReplyTo = strings.TrimSpace(message.Header.Get("In-Reply-To"))
+		item.References = strings.TrimSpace(message.Header.Get("References"))
 		item.Subject = decodeMIMEHeader(message.Header.Get("Subject"))
 		item.From = parseAddressHeader(message.Header.Get("From"))
 		item.To = parseAddressListHeader(message.Header.Get("To"))

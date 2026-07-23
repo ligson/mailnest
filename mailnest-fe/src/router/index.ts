@@ -3,6 +3,7 @@ import { useAuthStore } from '../stores/auth';
 import LoginView from '../views/LoginView.vue';
 import RegisterView from '../views/RegisterView.vue';
 import DashboardView from '../views/DashboardView.vue';
+import AttachmentsView from '../views/AttachmentsView.vue';
 import MailAccountsView from '../views/MailAccountsView.vue';
 import MailRulesView from '../views/MailRulesView.vue';
 import ContactsView from '../views/ContactsView.vue';
@@ -17,6 +18,7 @@ export const router = createRouter({
     { path: '/register', component: RegisterView, meta: { public: true } },
     { path: '/oauth/microsoft/callback', component: MicrosoftOAuthCallbackView },
     { path: '/mail', component: DashboardView },
+    { path: '/attachments', component: AttachmentsView },
     { path: '/accounts', component: MailAccountsView },
     { path: '/contacts', component: ContactsView },
     { path: '/rules', component: MailRulesView },

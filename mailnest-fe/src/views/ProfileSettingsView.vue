@@ -46,6 +46,28 @@
               placeholder="写一句简单的个人说明"
             />
           </a-form-item>
+          <a-form-item label="界面主题" name="uiTheme">
+            <div class="theme-picker" role="radiogroup" aria-label="界面主题">
+              <button
+                v-for="theme in themeOptions"
+                :key="theme.key"
+                class="theme-choice"
+                :class="{ active: form.uiTheme === theme.key }"
+                type="button"
+                role="radio"
+                :aria-checked="form.uiTheme === theme.key"
+                @click="form.uiTheme = theme.key"
+              >
+                <span class="theme-choice-preview" :style="{ background: theme.preview }">
+                  <check-outlined v-if="form.uiTheme === theme.key" />
+                </span>
+                <span class="theme-choice-copy">
+                  <strong>{{ theme.name }}</strong>
+                  <span>{{ theme.description }}</span>
+                </span>
+              </button>
+            </div>
+          </a-form-item>
           <a-space>
             <a-button type="primary" html-type="submit" :loading="saving">保存资料</a-button>
             <a-button @click="resetForm">取消</a-button>
@@ -57,6 +79,7 @@
 </template>
 
 <script setup lang="ts">
+import { CheckOutlined } from '@ant-design/icons-vue';
 import { computed, onMounted, reactive, ref } from 'vue';
 import { message } from 'ant-design-vue';
 import { profileApi } from '../api/client';
@@ -69,7 +92,64 @@ const uploading = ref(false);
 const form = reactive({
   nickname: '',
   bio: '',
+  uiTheme: 'forest',
 });
+const themeOptions = [
+  {
+    key: 'forest',
+    name: '松林',
+    description: '沉稳绿调，适合长期阅读',
+    preview: 'linear-gradient(135deg, #0f3d3a 0%, #24776d 48%, #dfe9df 100%)',
+  },
+  {
+    key: 'sky',
+    name: '晴空',
+    description: '清爽蓝调，界面更轻快',
+    preview: 'linear-gradient(135deg, #153a66 0%, #2563b8 52%, #e2edf8 100%)',
+  },
+  {
+    key: 'grape',
+    name: '葡萄',
+    description: '柔和紫调，突出层次感',
+    preview: 'linear-gradient(135deg, #3d2a55 0%, #7c4d9f 50%, #eee7f3 100%)',
+  },
+  {
+    key: 'ember',
+    name: '暖木',
+    description: '温暖棕红，适合低刺激办公',
+    preview: 'linear-gradient(135deg, #56301f 0%, #b45325 48%, #f4e9dd 100%)',
+  },
+  {
+    key: 'graphite',
+    name: '石墨',
+    description: '中性灰蓝，更克制耐看',
+    preview: 'linear-gradient(135deg, #1f2937 0%, #42546b 48%, #e6edf2 100%)',
+  },
+  {
+    key: 'qinghua',
+    name: '青花',
+    description: '瓷白青蓝，清雅利落',
+    preview: 'linear-gradient(135deg, #122b3d 0%, #1f5f8b 50%, #edf3ee 100%)',
+  },
+  {
+    key: 'cinnabar',
+    name: '朱砂',
+    description: '朱红宣纸，稳重醒目',
+    preview: 'linear-gradient(135deg, #2e211f 0%, #b43b2d 50%, #f3e8de 100%)',
+  },
+  {
+    key: 'ink',
+    name: '水墨',
+    description: '墨灰米白，安静耐看',
+    preview: 'linear-gradient(135deg, #20262a 0%, #3f4b55 50%, #eee9dd 100%)',
+  },
+  {
+    key: 'daishan',
+    name: '黛山',
+    description: '青黛山色，温润清爽',
+    preview: 'linear-gradient(135deg, #182b2d 0%, #2f6f68 50%, #dfece5 100%)',
+  },
+];
 
 const avatarSrc = computed(() => auth.user?.avatarUrl || undefined);
 const displayName = computed(() => auth.user?.nickname || auth.user?.username || '用户');
@@ -80,6 +160,7 @@ onMounted(resetForm);
 function resetForm() {
   form.nickname = auth.user?.nickname || '';
   form.bio = auth.user?.bio || '';
+  form.uiTheme = normalizeTheme(auth.user?.uiTheme);
 }
 
 async function saveProfile() {
@@ -107,5 +188,9 @@ async function uploadAvatar(file: File) {
     uploading.value = false;
   }
   return false;
+}
+
+function normalizeTheme(value?: string | null) {
+  return themeOptions.some((theme) => theme.key === value) ? String(value) : 'forest';
 }
 </script>

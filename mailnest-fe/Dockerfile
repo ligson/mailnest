@@ -1,4 +1,6 @@
-FROM node:22-alpine AS build
+ARG NODE_BASE=node:22-alpine
+ARG NGINX_BASE=nginx:1.27-alpine
+FROM ${NODE_BASE} AS build
 
 WORKDIR /src
 
@@ -8,7 +10,7 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM nginx:1.27-alpine
+FROM ${NGINX_BASE}
 
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /src/dist /usr/share/nginx/html
