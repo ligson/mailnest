@@ -433,6 +433,11 @@ export interface SendMessageResult extends MailMessage {
   sendLog?: MailSendLog;
 }
 
+export interface ImportEMLResult {
+  inserted: boolean;
+  message: MailMessage;
+}
+
 export interface SaveDraftPayload {
   accountId: string;
   to: string[];
@@ -735,6 +740,15 @@ export const messageApi = {
     });
     return response.data;
   },
+  importEML(payload: { accountId: string; folder?: string; file: File }) {
+    const form = new FormData();
+    form.append('accountId', payload.accountId);
+    form.append('folder', payload.folder || 'INBOX');
+    form.append('file', payload.file, payload.file.name);
+    return requestEnvelope<ImportEMLResult>(apiClient.post('/messages/import-eml', form, {
+      timeout: 60000,
+    }));
+  },
 };
 
 export const threadApi = {
@@ -798,6 +812,13 @@ export const attachmentApi = {
     pageSize?: number;
   }) {
     return requestEnvelope<AttachmentCenterListData>(apiClient.get('/attachments', { params }));
+  },
+  async preview(id: string) {
+    const response = await apiClient.get<Blob>(`/attachments/${id}/preview`, {
+      responseType: 'blob',
+      timeout: 60000,
+    });
+    return response.data;
   },
 };
 

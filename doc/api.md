@@ -874,15 +874,49 @@ JSON 请求：
 }
 ```
 
-### 7.4 草稿箱接口
+### 7.4 导入 EML 邮件
 
-#### 7.4.1 草稿列表
+`POST /api/v1/messages/import-eml`
+
+请求类型：`multipart/form-data`
+
+- `accountId`：导入归属的邮箱账号 ID，必须属于当前登录用户。
+- `folder`：导入目录，默认 `INBOX`；也可以传账号配置的发件箱目录名。
+- `file`：`.eml` 文件，最大 50MB。
+
+说明：
+
+- 后端复用现有 MIME 解析、原文落盘、正文落盘、附件落盘、联系人沉淀、会话归并和规则引擎逻辑。
+- 导入去重使用稳定 UID：优先基于 `Message-ID`，没有 `Message-ID` 时基于 EML 原文哈希；重复导入同一封邮件不会重复写入。
+- 规则命中记录的触发来源为 `import`。
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "导入成功",
+  "httpCode": 200,
+  "data": {
+    "inserted": true,
+    "message": {
+      "id": "message-id",
+      "accountId": "account-id",
+      "subject": "Imported EML"
+    }
+  }
+}
+```
+
+### 7.5 草稿箱接口
+
+#### 7.5.1 草稿列表
 
 `GET /api/v1/drafts?page=1&pageSize=20`
 
 返回当前用户的草稿，按最近保存时间倒序排列。草稿只保存当前用户自己的写信状态。
 
-#### 7.4.2 创建或更新草稿
+#### 7.5.2 创建或更新草稿
 
 `POST /api/v1/drafts`
 
@@ -914,7 +948,7 @@ JSON 请求：
 - `forwardAttachmentIds` 用于保存转发原邮件附件选择。
 - `localAttachmentNames` 只保存本地附件文件名提示。浏览器刷新或重新打开草稿后，网页不能自动恢复本地文件内容，需要用户重新选择附件。
 
-#### 7.4.3 草稿详情、删除和发送
+#### 7.5.3 草稿详情、删除和发送
 
 - `GET /api/v1/drafts/{id}`
 - `DELETE /api/v1/drafts/{id}`
@@ -922,11 +956,11 @@ JSON 请求：
 
 `POST /api/v1/drafts/{id}/send` 会使用草稿中保存的地址、主题、正文和转发附件发送邮件，发送成功后删除草稿。若草稿包含 `localAttachmentNames`，接口会拒绝直接发送并提示先打开草稿重新选择附件，避免漏发本地附件。
 
-### 7.5 回复与转发接口
+### 7.6 回复与转发接口
 
 回复、回复全部和转发复用发信能力，但写信初始值和线程头应由后端生成，避免前端重复实现复杂邮件规则。
 
-#### 7.5.1 获取写信上下文
+#### 7.6.1 获取写信上下文
 
 `GET /api/v1/messages/{id}/compose-context?mode=reply|replyAll|forward`
 
@@ -968,7 +1002,7 @@ JSON 请求：
 }
 ```
 
-#### 7.4.2 扩展发送字段
+#### 7.6.2 扩展发送字段
 
 `POST /api/v1/messages/send`
 
@@ -980,7 +1014,7 @@ JSON 请求：
 
 后端发送时必须重新校验来源邮件、发件账号和附件均属于当前用户；回复和回复全部的 `In-Reply-To`、`References` 必须由后端根据来源邮件生成，不能信任前端传入。
 
-### 7.5 下载附件
+### 7.7 下载附件
 
 `GET /api/v1/messages/{messageId}/attachments/{attachmentId}/content`
 
@@ -992,7 +1026,7 @@ JSON 请求：
 
 该地址只用于 HTML 正文内嵌图片展示，不要求额外传 `Authorization` 请求头，但必须携带有效签名和未过期时间戳。普通附件下载仍使用受登录保护的 `content` 接口。
 
-### 7.6 邮件列表查询参数
+### 7.8 邮件列表查询参数
 
 `GET /api/v1/messages` 支持：
 
@@ -1006,7 +1040,7 @@ JSON 请求：
 - `systemFolder`：系统文件夹，支持 `inbox`、`sent`、`all`、`starred`、`spam`、`trash`、`attachments`。
 - 列表和详情中的 `threadId` 表示邮件所属会话，可能为空；新同步邮件和已重建历史邮件会自动写入。
 
-### 7.7 邮件放入本地文件夹
+### 7.9 邮件放入本地文件夹
 
 `POST /api/v1/messages/{id}/folder`
 
@@ -1020,7 +1054,7 @@ JSON 请求：
 
 `folderId` 为空字符串时表示移出本地文件夹。
 
-### 7.8 邮件批量操作
+### 7.10 邮件批量操作
 
 `POST /api/v1/messages/batch-actions`
 
@@ -1061,7 +1095,7 @@ JSON 请求：
 }
 ```
 
-### 7.9 批量操作预览
+### 7.11 批量操作预览
 
 `POST /api/v1/messages/batch-preview`
 
@@ -1090,9 +1124,9 @@ JSON 请求：
 }
 ```
 
-### 7.10 邮件会话
+### 7.12 邮件会话
 
-#### 7.10.1 会话列表
+#### 7.12.1 会话列表
 
 `GET /api/v1/threads`
 
@@ -1132,13 +1166,13 @@ JSON 请求：
 }
 ```
 
-#### 7.10.2 会话详情
+#### 7.12.2 会话详情
 
 `GET /api/v1/threads/{id}`
 
 返回会话基础信息和按时间升序排列的邮件摘要；邮件正文、附件详情仍通过 `GET /api/v1/messages/{id}` 按需加载。
 
-#### 7.10.3 重建会话
+#### 7.12.3 重建会话
 
 `POST /api/v1/threads/rebuild`
 
@@ -1170,9 +1204,9 @@ JSON 请求：
 }
 ```
 
-### 7.11 规则命中记录
+### 7.13 规则命中记录
 
-#### 7.11.1 全局规则日志
+#### 7.13.1 全局规则日志
 
 `GET /api/v1/rule-logs`
 
@@ -1185,7 +1219,7 @@ JSON 请求：
 - `page`
 - `pageSize`
 
-#### 7.11.2 单封邮件规则日志
+#### 7.13.2 单封邮件规则日志
 
 `GET /api/v1/messages/{id}/rule-logs`
 
@@ -1223,7 +1257,7 @@ JSON 请求：
 }
 ```
 
-### 7.12 附件中心列表
+### 7.14 附件中心列表
 
 `GET /api/v1/attachments`
 
@@ -1268,6 +1302,16 @@ JSON 请求：
   }
 }
 ```
+
+### 7.15 附件预览
+
+`GET /api/v1/attachments/{id}/preview`
+
+说明：
+
+- 需要登录，且附件必须属于当前用户。
+- 响应直接返回附件内容，`Content-Disposition` 为 `inline`。
+- 前端当前支持图片、PDF、文本、JSON、XML、HTML 以在线方式预览；Office 文档等浏览器无法直接渲染的类型保留下载入口。
 
 ## 8. 本地文件夹接口
 

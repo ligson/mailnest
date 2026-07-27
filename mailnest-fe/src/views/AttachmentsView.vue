@@ -69,6 +69,7 @@
           </template>
           <template v-if="column.key === 'actions'">
             <a-space>
+              <a-button type="link" size="small" @click="preview(record)">预览</a-button>
               <a-button type="link" size="small" @click="download(record)">下载</a-button>
               <a-button type="link" size="small" @click="openSource(record)">查看邮件</a-button>
             </a-space>
@@ -84,12 +85,36 @@
         class="attachment-pagination"
         @change="loadAttachments"
       />
+
+      <a-modal
+        v-model:open="previewOpen"
+        :title="previewTitle"
+        :width="920"
+        :footer="null"
+        destroy-on-close
+        class="attachment-preview-modal"
+        @cancel="closePreview"
+      >
+        <a-spin :spinning="previewLoading">
+          <div v-if="previewError" class="attachment-preview-empty">
+            <p>{{ previewError }}</p>
+            <a-button v-if="previewItem" type="primary" @click="download(previewItem)">下载附件</a-button>
+          </div>
+          <img v-else-if="previewKind === 'image' && previewUrl" class="attachment-preview-image" :src="previewUrl" :alt="previewItem?.filename || '附件预览'" />
+          <iframe v-else-if="previewKind === 'pdf' && previewUrl" class="attachment-preview-frame" :src="previewUrl" title="PDF 预览"></iframe>
+          <pre v-else-if="previewKind === 'text'" class="attachment-preview-text">{{ previewText }}</pre>
+          <div v-else class="attachment-preview-empty">
+            <p>这种附件暂不支持在线预览，可以先下载后用本地应用打开。</p>
+            <a-button v-if="previewItem" type="primary" @click="download(previewItem)">下载附件</a-button>
+          </div>
+        </a-spin>
+      </a-modal>
     </section>
   </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import type { Dayjs } from 'dayjs';
 import { useRouter } from 'vue-router';
 import { message, type TableColumnsType } from 'ant-design-vue';
@@ -107,6 +132,13 @@ import AppLayout from '../components/AppLayout.vue';
 
 const router = useRouter();
 const loading = ref(false);
+const previewOpen = ref(false);
+const previewLoading = ref(false);
+const previewUrl = ref('');
+const previewText = ref('');
+const previewError = ref('');
+const previewKind = ref<'image' | 'pdf' | 'text' | 'unsupported'>('unsupported');
+const previewItem = ref<AttachmentCenterItem | null>(null);
 const attachments = ref<AttachmentCenterItem[]>([]);
 const accounts = ref<MailAccount[]>([]);
 const folders = ref<MailFolder[]>([]);
@@ -129,11 +161,16 @@ const columns: TableColumnsType<AttachmentCenterItem> = [
   { title: '账号', key: 'account', width: 150 },
   { title: '文件夹', key: 'folder', width: 130 },
   { title: '邮件时间', key: 'messageTime', width: 170 },
-  { title: '操作', key: 'actions', width: 140 },
+  { title: '操作', key: 'actions', width: 190 },
 ];
+const previewTitle = computed(() => previewItem.value?.filename ? `预览：${previewItem.value.filename}` : '附件预览');
 
 onMounted(async () => {
   await Promise.all([loadMeta(), loadAttachments()]);
+});
+
+onBeforeUnmount(() => {
+  closePreview();
 });
 
 async function loadMeta() {
@@ -192,6 +229,54 @@ async function download(item: AttachmentCenterItem) {
   } catch (error) {
     message.error(error instanceof Error ? error.message : '下载附件失败');
   }
+}
+
+async function preview(item: AttachmentCenterItem) {
+  closePreview();
+  previewItem.value = item;
+  previewKind.value = previewKindFor(item);
+  previewOpen.value = true;
+  if (previewKind.value === 'unsupported') {
+    return;
+  }
+  previewLoading.value = true;
+  try {
+    const blob = await attachmentApi.preview(item.id);
+    if (previewKind.value === 'text') {
+      previewText.value = await blob.text();
+      return;
+    }
+    previewUrl.value = URL.createObjectURL(blob);
+  } catch (error) {
+    previewError.value = error instanceof Error ? error.message : '预览附件失败';
+  } finally {
+    previewLoading.value = false;
+  }
+}
+
+function closePreview() {
+  if (previewUrl.value) {
+    URL.revokeObjectURL(previewUrl.value);
+  }
+  previewUrl.value = '';
+  previewText.value = '';
+  previewError.value = '';
+  previewKind.value = 'unsupported';
+}
+
+function previewKindFor(item: AttachmentCenterItem): 'image' | 'pdf' | 'text' | 'unsupported' {
+  const contentType = (item.contentType || '').toLowerCase();
+  const filename = (item.filename || '').toLowerCase();
+  if (contentType.startsWith('image/')) {
+    return 'image';
+  }
+  if (contentType === 'application/pdf' || filename.endsWith('.pdf')) {
+    return 'pdf';
+  }
+  if (contentType.startsWith('text/') || contentType.includes('json') || contentType.includes('xml') || /\.(txt|csv|log|json|xml|md|html?)$/.test(filename)) {
+    return 'text';
+  }
+  return 'unsupported';
 }
 
 async function openSource(item: AttachmentCenterItem) {
@@ -263,6 +348,53 @@ function formatTime(value: string | null) {
 
 .attachment-pagination {
   align-self: flex-end;
+}
+
+.attachment-preview-modal :deep(.ant-modal-body) {
+  min-height: 360px;
+}
+
+.attachment-preview-image {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  margin: 0 auto;
+  object-fit: contain;
+}
+
+.attachment-preview-frame {
+  width: 100%;
+  height: 70vh;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.attachment-preview-text {
+  min-height: 360px;
+  max-height: 70vh;
+  padding: 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  margin: 0;
+  overflow: auto;
+  background: var(--surface-muted);
+  color: var(--text-color);
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.attachment-preview-empty {
+  display: grid;
+  min-height: 300px;
+  place-items: center;
+  align-content: center;
+  gap: 14px;
+  color: var(--muted-color);
+  text-align: center;
 }
 
 @media (max-width: 1100px) {

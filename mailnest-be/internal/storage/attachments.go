@@ -172,6 +172,17 @@ func (s *Store) FindMailAttachmentByID(userID, messageID, id int64) (MailAttachm
 	return scanMailAttachment(row)
 }
 
+func (s *Store) FindMailAttachmentByAttachmentID(userID, id int64) (MailAttachment, error) {
+	row := s.db.QueryRow(
+		`SELECT id, user_id, message_id, filename, content_type, content_id, inline, size, file_path, created_at
+		FROM mail_attachments
+		WHERE user_id = ? AND id = ?`,
+		userID,
+		id,
+	)
+	return scanMailAttachment(row)
+}
+
 func scanMailAttachment(scanner interface {
 	Scan(dest ...any) error
 }) (MailAttachment, error) {

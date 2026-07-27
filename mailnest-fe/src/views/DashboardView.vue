@@ -101,6 +101,10 @@
               <template #icon><send-outlined /></template>
               写邮件
             </a-button>
+            <a-button @click="openImportEML">
+              <template #icon><upload-outlined /></template>
+              导入 EML
+            </a-button>
             <a-button @click="refreshAll">
               <template #icon><reload-outlined /></template>
               刷新
@@ -520,6 +524,36 @@
       </a-modal>
 
       <a-modal
+        v-model:open="importEMLOpen"
+        title="导入 EML 邮件"
+        ok-text="导入"
+        cancel-text="取消"
+        :confirm-loading="importingEML"
+        @ok="submitImportEML"
+        @cancel="resetImportEML"
+      >
+        <a-form layout="vertical" class="import-eml-form">
+          <a-form-item label="导入到邮箱账号">
+            <a-select v-model:value="importEMLForm.accountId" placeholder="选择邮箱账号">
+              <a-select-option v-for="account in visibleAccounts" :key="account.id" :value="account.id">
+                {{ account.displayName }} &lt;{{ account.email }}&gt;
+              </a-select-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item label="导入目录">
+            <a-select v-model:value="importEMLForm.folder">
+              <a-select-option value="INBOX">收件箱</a-select-option>
+              <a-select-option v-if="selectedImportAccount?.sentFolder" :value="selectedImportAccount.sentFolder">发件箱</a-select-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item label="EML 文件">
+            <input ref="importEMLFileInput" class="import-eml-file" type="file" accept=".eml,message/rfc822" @change="onImportEMLFileSelected" />
+            <div v-if="importEMLForm.file" class="import-eml-file-name">{{ importEMLForm.file.name }}</div>
+          </a-form-item>
+        </a-form>
+      </a-modal>
+
+      <a-modal
         v-model:open="composeOpen"
         :title="composeDrawerTitle"
         :width="1040"
@@ -870,6 +904,7 @@ import {
   StrikethroughOutlined,
   UnderlineOutlined,
   UnorderedListOutlined,
+  UploadOutlined,
 } from '@ant-design/icons-vue';
 import { Modal, message } from 'ant-design-vue';
 import type { Dayjs } from 'dayjs';
@@ -952,12 +987,15 @@ const ruleLogOpen = ref(false);
 const ruleLogLoading = ref(false);
 const ruleLogs = ref<MailRuleLog[]>([]);
 const editingFolderId = ref<string | null>(null);
+const importEMLOpen = ref(false);
+const importingEML = ref(false);
 const composeOpen = ref(false);
 const composeMode = ref<ComposeMode>('new');
 const composeSourceMessageId = ref('');
 const composeLoading = ref(false);
 const sending = ref(false);
 const batching = ref(false);
+const importEMLFileInput = ref<HTMLInputElement | null>(null);
 const composeEditor = ref<HTMLElement | null>(null);
 const composeAttachmentInput = ref<HTMLInputElement | null>(null);
 const composeImageInput = ref<HTMLInputElement | null>(null);
@@ -991,6 +1029,11 @@ const folderForm = reactive({
   name: '',
   color: '#1f66d1',
   sortOrder: 10,
+});
+const importEMLForm = reactive({
+  accountId: '',
+  folder: 'INBOX',
+  file: null as File | null,
 });
 const composeForm = reactive({
   accountId: '',
@@ -1043,6 +1086,7 @@ const filters = reactive({
 
 const normalAttachments = computed(() => (detail.value?.attachments || []).filter((item) => !item.inline));
 const visibleAccounts = computed(() => accounts.value.filter((account) => account.enabled));
+const selectedImportAccount = computed(() => visibleAccounts.value.find((account) => account.id === importEMLForm.accountId));
 const selectedComposeAccount = computed(() => visibleAccounts.value.find((account) => account.id === composeForm.accountId));
 const detailFromAddress = computed(() => parseContactAddress(detail.value?.from || ''));
 const detailToAddresses = computed(() => parseContactAddresses(detail.value?.to || []));
@@ -1610,6 +1654,65 @@ function openFolderEdit(folder: MailFolder) {
   folderForm.color = folder.color || '#1f66d1';
   folderForm.sortOrder = folder.sortOrder;
   folderModalOpen.value = true;
+}
+
+function openImportEML() {
+  const enabledAccounts = visibleAccounts.value;
+  if (enabledAccounts.length === 0) {
+    message.warning(accounts.value.length === 0 ? '请先新增邮箱账号' : '请先启用一个邮箱账号');
+    return;
+  }
+  importEMLForm.accountId = filters.accountId && enabledAccounts.some((account) => account.id === filters.accountId)
+    ? filters.accountId
+    : enabledAccounts[0].id;
+  importEMLForm.folder = 'INBOX';
+  importEMLForm.file = null;
+  importEMLOpen.value = true;
+}
+
+function onImportEMLFileSelected(event: Event) {
+  const input = event.target as HTMLInputElement;
+  importEMLForm.file = input.files?.[0] || null;
+}
+
+async function submitImportEML() {
+  if (!importEMLForm.accountId) {
+    message.warning('请选择导入邮箱账号');
+    return;
+  }
+  if (!importEMLForm.file) {
+    message.warning('请选择 EML 文件');
+    return;
+  }
+  importingEML.value = true;
+  try {
+    const result = await messageApi.importEML({
+      accountId: importEMLForm.accountId,
+      folder: importEMLForm.folder,
+      file: importEMLForm.file,
+    });
+    message.success(result.inserted ? 'EML 邮件已导入' : '这封邮件已存在，已打开已有邮件');
+    resetImportEML();
+    activeSystemFolder.value = importEMLForm.folder === 'INBOX' ? 'inbox' : 'sent';
+    activeLocalFolderId.value = null;
+    filters.accountId = importEMLForm.accountId;
+    mailViewMode.value = 'messages';
+    page.value = 1;
+    await loadMessages();
+    await openDetail(result.message.id);
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '导入 EML 失败');
+  } finally {
+    importingEML.value = false;
+  }
+}
+
+function resetImportEML() {
+  importEMLOpen.value = false;
+  importEMLForm.file = null;
+  if (importEMLFileInput.value) {
+    importEMLFileInput.value.value = '';
+  }
 }
 
 function openCompose() {
@@ -4154,6 +4257,26 @@ function looksLikeEmail(value: string) {
 .compose-restored-attachments {
   display: grid;
   gap: 6px;
+}
+
+.import-eml-form {
+  display: grid;
+  gap: 4px;
+}
+
+.import-eml-file {
+  width: 100%;
+}
+
+.import-eml-file-name {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--muted-color);
+  overflow-wrap: anywhere;
+  font-size: 13px;
 }
 
 .compose-forward-list :deep(.ant-checkbox-wrapper) {

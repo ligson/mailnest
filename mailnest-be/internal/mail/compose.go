@@ -281,15 +281,31 @@ func (s *Service) forwardedAttachments(userID, sourceMessageID int64, ids []int6
 
 func recipientsSnapshot(message OutgoingMessage) string {
 	payload := map[string][]string{
-		"to":  nonEmptyStrings(message.To),
-		"cc":  nonEmptyStrings(message.CC),
-		"bcc": nonEmptyStrings(message.BCC),
+		"to":  normalizeRecipientSnapshots(message.To),
+		"cc":  normalizeRecipientSnapshots(message.CC),
+		"bcc": normalizeRecipientSnapshots(message.BCC),
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return `{"to":[],"cc":[],"bcc":[]}`
 	}
 	return string(data)
+}
+
+func normalizeRecipientSnapshots(values []string) []string {
+	values = nonEmptyStrings(values)
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(decodeMIMEHeader(value))
+		if value == "" {
+			continue
+		}
+		if address, err := netmail.ParseAddress(value); err == nil {
+			value = displayAddress(address)
+		}
+		result = append(result, value)
+	}
+	return result
 }
 
 func sanitizeSendError(err error) string {

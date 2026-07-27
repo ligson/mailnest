@@ -151,7 +151,7 @@ func messageListPayload(message storage.MailMessage) map[string]any {
 		"threadId":       nullableInt64(message.ThreadID),
 		"localFolderId":  nullableInt64(message.LocalFolderID),
 		"subject":        nullableString(message.Subject),
-		"from":           nullableString(message.FromAddr),
+		"from":           nullableDecodedString(message.FromAddr),
 		"to":             splitAddressField(message.ToAddrs),
 		"sentAt":         nullableTime(message.SentAt),
 		"receivedAt":     nullableTime(message.ReceivedAt),
@@ -237,7 +237,7 @@ func mailThreadPayload(item storage.MailThreadListItem) map[string]any {
 		"unreadCount":    item.Thread.UnreadCount,
 		"hasAttachments": item.Thread.HasAttachments,
 		"lastMessageAt":  nullableTime(item.Thread.LastMessageAt),
-		"participants":   item.Participants,
+		"participants":   decodeAddressDisplayList(item.Participants),
 		"latestMessage":  messageListPayload(item.LatestMessage),
 	}
 }
@@ -283,14 +283,6 @@ func mailRuleLogPayload(item storage.MailRuleLog) map[string]any {
 }
 
 func mailSendLogPayload(item storage.MailSendLog) map[string]any {
-	var recipients any = map[string]any{
-		"to":  []any{},
-		"cc":  []any{},
-		"bcc": []any{},
-	}
-	if strings.TrimSpace(item.RecipientsJSON) != "" {
-		_ = json.Unmarshal([]byte(item.RecipientsJSON), &recipients)
-	}
 	return map[string]any{
 		"id":              strconv.FormatInt(item.ID, 10),
 		"accountId":       strconv.FormatInt(item.AccountID, 10),
@@ -301,7 +293,7 @@ func mailSendLogPayload(item storage.MailSendLog) map[string]any {
 		"sourceMessageId": nullableInt64(item.SourceMessageID),
 		"composeMode":     item.ComposeMode,
 		"smtpMessageId":   nullableString(item.SMTPMessageID),
-		"recipients":      recipients,
+		"recipients":      mailSendRecipientsPayload(item.RecipientsJSON),
 		"subject":         item.Subject,
 		"attachmentCount": item.AttachmentCount,
 		"status":          item.Status,
@@ -315,6 +307,25 @@ func mailSendLogPayload(item storage.MailSendLog) map[string]any {
 	}
 }
 
+func mailSendRecipientsPayload(raw string) map[string][]string {
+	recipients := map[string][]string{
+		"to":  []string{},
+		"cc":  []string{},
+		"bcc": []string{},
+	}
+	if strings.TrimSpace(raw) == "" {
+		return recipients
+	}
+	var decoded map[string][]string
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return recipients
+	}
+	for _, key := range []string{"to", "cc", "bcc"} {
+		recipients[key] = decodeAddressDisplayList(decoded[key])
+	}
+	return recipients
+}
+
 func nullableRuleTargetFolderID(id int64) any {
 	if id <= 0 {
 		return nil
@@ -325,6 +336,13 @@ func nullableRuleTargetFolderID(id int64) any {
 func nullableString(value sql.NullString) any {
 	if value.Valid {
 		return value.String
+	}
+	return nil
+}
+
+func nullableDecodedString(value sql.NullString) any {
+	if value.Valid {
+		return decodeAddressDisplayValue(value.String)
 	}
 	return nil
 }
@@ -347,15 +365,7 @@ func splitAddressField(value sql.NullString) []string {
 	if !value.Valid || strings.TrimSpace(value.String) == "" {
 		return []string{}
 	}
-	parts := strings.Split(value.String, ",")
-	result := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			result = append(result, part)
-		}
-	}
-	return result
+	return splitDecodedAddressField(value.String)
 }
 
 func attachmentCenterPayload(item storage.AttachmentListItem) map[string]any {

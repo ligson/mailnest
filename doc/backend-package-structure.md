@@ -20,13 +20,14 @@ API 包负责 HTTP 路由、参数校验、权限上下文、调用业务服务�
 - `profile_handlers.go`：个人资料、头像上传和头像读取。
 - `account_handlers.go`：邮箱账号增删改查、连接测试、目录读取、手动同步和全量同步状态。
 - `message_handlers.go`：邮件列表、邮件详情、批量操作、移动文件夹、写信上下文和发送入口。
-- `attachment_handlers.go`：附件中心列表、附件下载和内嵌附件读取。
+- `import_handlers.go`：EML 文件上传导入入口。
+- `attachment_handlers.go`：附件中心列表、附件下载、附件预览和内嵌附件读取。
 - `contact_handlers.go`：联系人通讯录维护。
 - `folder_rule_handlers.go`：本地文件夹和邮件规则维护、预览、应用。
 - `sync_handlers.go`：同步任务和同步事件日志查询。
 - `oauth_handlers.go`：Microsoft OAuth 授权入口和回调完成。
 - `middleware.go`：鉴权中间件、JWT 签发和当前用户读取。
-- `request_decode.go`：JSON、multipart 写信请求和附件读取。
+- `request_decode.go`：JSON、multipart 写信请求、EML 导入请求和附件读取。
 - `presenters.go`：面向前端的响应 DTO 组装。
 - `inline_images.go`：邮件详情中 CID 内嵌图片重写和图片兼容处理。
 - `contacts_presenter_helpers.go`：联系人请求参数归一化。

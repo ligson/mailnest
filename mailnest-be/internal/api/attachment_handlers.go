@@ -95,6 +95,36 @@ func (a *App) handleAttachmentContent(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, attachment.FilePath)
 }
 
+func (a *App) handleAttachmentPreview(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	attachmentID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || attachmentID <= 0 {
+		response.Error(w, http.StatusBadRequest, "附件 ID 格式错误")
+		return
+	}
+	attachment, err := a.store.FindMailAttachmentByAttachmentID(userID, attachmentID)
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, http.StatusNotFound, "附件不存在")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "获取附件失败")
+		return
+	}
+	contentType := "application/octet-stream"
+	if attachment.ContentType.Valid && strings.TrimSpace(attachment.ContentType.String) != "" {
+		contentType = attachment.ContentType.String
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": attachment.Filename}))
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeFile(w, r, attachment.FilePath)
+}
+
 func (a *App) handleInlineAttachmentContent(w http.ResponseWriter, r *http.Request) {
 	messageID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {

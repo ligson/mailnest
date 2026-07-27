@@ -16,6 +16,10 @@ import (
 
 // saveMessage 是邮件入库的统一入口：先把原文/正文/附件落盘，再写入数据库元数据。
 func (s *Service) saveMessage(userID, accountID int64, folder string, fetched FetchedMessage) (bool, error) {
+	return s.saveMessageWithTrigger(userID, accountID, folder, fetched, "sync")
+}
+
+func (s *Service) saveMessageWithTrigger(userID, accountID int64, folder string, fetched FetchedMessage, triggerType string) (bool, error) {
 	folder = normalizeFolderName(folder)
 	uid := strings.TrimSpace(fetched.UID)
 	if uid == "" {
@@ -117,7 +121,7 @@ func (s *Service) saveMessage(userID, accountID int64, folder string, fetched Fe
 		return false, err
 	}
 	message.ThreadID = sql.NullInt64{Int64: thread.ID, Valid: true}
-	if _, err := s.ApplyRulesToMessageWithTrigger(userID, message, false, "sync"); err != nil {
+	if _, err := s.ApplyRulesToMessageWithTrigger(userID, message, false, triggerType); err != nil {
 		return false, err
 	}
 	return inserted, nil

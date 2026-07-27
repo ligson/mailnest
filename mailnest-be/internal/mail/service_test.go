@@ -1,6 +1,7 @@
 package mail
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -128,6 +129,27 @@ func TestSendMessageUsesSMTPAndSavesSentMessage(t *testing.T) {
 	}
 	if sendLogs[0].Status != "success" || !sendLogs[0].MessageID.Valid || sendLogs[0].MessageID.Int64 != message.ID || !sendLogs[0].SMTPMessageID.Valid {
 		t.Fatalf("expected successful send log linked to message, got %#v", sendLogs[0])
+	}
+}
+
+func TestRecipientsSnapshotDecodesEncodedWords(t *testing.T) {
+	raw := recipientsSnapshot(OutgoingMessage{
+		To:  []string{"=?utf-8?q?=E6=B2=99=E8=88=9F=E7=8B=BC?= <ligson@aliyun.com>"},
+		CC:  []string{"=?utf-8?b?5rWL6K+V?= <copy@example.com>"},
+		BCC: []string{"hidden@example.com"},
+	})
+	var payload map[string][]string
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("unmarshal recipients snapshot: %v", err)
+	}
+	if got := payload["to"][0]; got != "沙舟狼 <ligson@aliyun.com>" {
+		t.Fatalf("expected decoded to recipient, got %q", got)
+	}
+	if got := payload["cc"][0]; got != "测试 <copy@example.com>" {
+		t.Fatalf("expected decoded cc recipient, got %q", got)
+	}
+	if got := payload["bcc"][0]; got != "hidden@example.com" {
+		t.Fatalf("expected plain bcc recipient, got %q", got)
 	}
 }
 

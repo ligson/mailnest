@@ -17,6 +17,8 @@ const maxComposeAttachmentCount = 20
 
 const maxComposeAttachmentBytes = 25 << 20
 
+const maxImportEMLBytes = 50 << 20
+
 func decodeJSON(r *http.Request, dst any) error {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -132,4 +134,36 @@ func readComposeAttachments(form *multipart.Form) ([]mail.OutgoingAttachment, er
 		})
 	}
 	return attachments, nil
+}
+
+func readImportEMLFile(r *http.Request) ([]byte, string, error) {
+	if err := r.ParseMultipartForm(maxImportEMLBytes + 1<<20); err != nil {
+		return nil, "", errors.New("读取 EML 表单失败")
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		file, header, err = r.FormFile("eml")
+	}
+	if err != nil {
+		return nil, "", errors.New("请选择 EML 文件")
+	}
+	defer file.Close()
+	filename := filepath.Base(strings.TrimSpace(header.Filename))
+	if filename == "" {
+		filename = "import.eml"
+	}
+	if !strings.EqualFold(filepath.Ext(filename), ".eml") {
+		return nil, "", errors.New("只支持导入 .eml 文件")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxImportEMLBytes+1))
+	if err != nil {
+		return nil, "", errors.New("读取 EML 文件失败")
+	}
+	if len(data) == 0 {
+		return nil, "", errors.New("EML 文件为空")
+	}
+	if len(data) > maxImportEMLBytes {
+		return nil, "", fmt.Errorf("EML 文件不能超过 %d MB", maxImportEMLBytes>>20)
+	}
+	return data, filename, nil
 }
