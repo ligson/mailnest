@@ -592,6 +592,9 @@ export async function requestEnvelope<T>(request: Promise<{ data: Envelope<T> }>
       if (error.code === 'ECONNABORTED') {
         throw new Error('请求超时，请稍后重试');
       }
+      if (error.response?.status === 413) {
+        throw new Error('上传内容过大，请减少文件数量或分批上传');
+      }
       throw new Error(envelope?.message || error.message || '请求失败');
     }
     throw error;

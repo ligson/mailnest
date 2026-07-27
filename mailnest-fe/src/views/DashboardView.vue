@@ -591,7 +591,7 @@
                 <template #icon><upload-outlined /></template>
                 选择 EML 文件
               </a-button>
-              <span class="upload-picker-hint">可同时选择多个 .eml 文件，单个最大 50MB</span>
+              <span class="upload-picker-hint">最多 100 个，单个最大 50MB，总大小最大 200MB</span>
             </div>
             <div v-if="importEMLForm.files.length" class="import-eml-file-list">
               <div v-for="(file, index) in importEMLForm.files" :key="`${file.name}-${file.size}-${index}`" class="import-eml-file-item">
@@ -1071,6 +1071,9 @@ const resizeConstraints = {
   minReader: 320,
   resizers: 12,
 };
+const importEMLMaxFileCount = 100;
+const importEMLMaxFileBytes = 50 * 1024 * 1024;
+const importEMLMaxBatchBytes = 200 * 1024 * 1024;
 let composeSignatureInserted = false;
 let composeContextRequestId = 0;
 let draftSaveTimer: number | undefined;
@@ -1903,6 +1906,12 @@ function onImportEMLFileSelected(event: Event) {
   if (files.length < selectedFiles.length) {
     message.warning('已忽略非 .eml 文件');
   }
+  const validationMessage = validateImportEMLFiles(files);
+  if (validationMessage) {
+    message.warning(validationMessage);
+    input.value = '';
+    return;
+  }
   importEMLForm.files = files;
   input.value = '';
 }
@@ -1924,11 +1933,18 @@ async function submitImportEML() {
     message.warning('请选择 EML 文件');
     return;
   }
+  const validationMessage = validateImportEMLFiles(importEMLForm.files);
+  if (validationMessage) {
+    message.warning(validationMessage);
+    return;
+  }
+  const targetAccountId = importEMLForm.accountId;
+  const targetFolder = importEMLForm.folder;
   importingEML.value = true;
   try {
     const result = await messageApi.importEML({
-      accountId: importEMLForm.accountId,
-      folder: importEMLForm.folder,
+      accountId: targetAccountId,
+      folder: targetFolder,
       files: importEMLForm.files,
     });
     const importSummary = [
@@ -1946,9 +1962,9 @@ async function submitImportEML() {
       message.success(importSummary);
     }
     resetImportEML();
-    activeSystemFolder.value = importEMLForm.folder === 'INBOX' ? 'inbox' : 'sent';
+    activeSystemFolder.value = targetFolder === 'INBOX' ? 'inbox' : 'sent';
     activeLocalFolderId.value = null;
-    filters.accountId = importEMLForm.accountId;
+    filters.accountId = targetAccountId;
     mailViewMode.value = 'messages';
     page.value = 1;
     await loadMessages();
@@ -1969,6 +1985,21 @@ function resetImportEML() {
   if (importEMLFileInput.value) {
     importEMLFileInput.value.value = '';
   }
+}
+
+function validateImportEMLFiles(files: File[]) {
+  if (files.length > importEMLMaxFileCount) {
+    return `一次最多导入 ${importEMLMaxFileCount} 个 EML 文件，请分批选择`;
+  }
+  const oversized = files.find((file) => file.size > importEMLMaxFileBytes);
+  if (oversized) {
+    return `${oversized.name} 超过 ${formatSize(importEMLMaxFileBytes)}，请单独处理或拆分后导入`;
+  }
+  const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+  if (totalSize > importEMLMaxBatchBytes) {
+    return `本次选择总大小 ${formatSize(totalSize)}，超过 ${formatSize(importEMLMaxBatchBytes)}，请分批导入`;
+  }
+  return '';
 }
 
 function openCompose() {
