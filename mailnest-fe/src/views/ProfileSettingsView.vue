@@ -19,7 +19,10 @@
               :before-upload="uploadAvatar"
               :show-upload-list="false"
             >
-              <a-button :loading="uploading">上传头像</a-button>
+              <a-button :loading="uploading">
+                <template #icon><upload-outlined /></template>
+                上传头像
+              </a-button>
             </a-upload>
             <span class="profile-avatar-hint">支持 PNG、JPG、WEBP、GIF，最大 2MB</span>
           </div>
@@ -79,7 +82,7 @@
 </template>
 
 <script setup lang="ts">
-import { CheckOutlined } from '@ant-design/icons-vue';
+import { CheckOutlined, UploadOutlined } from '@ant-design/icons-vue';
 import { computed, onMounted, reactive, ref } from 'vue';
 import { message } from 'ant-design-vue';
 import { profileApi } from '../api/client';

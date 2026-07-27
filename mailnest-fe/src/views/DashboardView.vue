@@ -444,7 +444,15 @@
               </div>
             </div>
           </div>
-          <div v-if="detail.htmlBody" class="mail-body" v-html="detail.htmlBody"></div>
+          <div v-if="detail.htmlBody" class="mail-body">
+            <iframe
+              class="mail-body-frame"
+              :srcdoc="mailBodySrcdoc"
+              sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"
+              title="邮件正文"
+              @load="resizeMailBodyFrame"
+            ></iframe>
+          </div>
           <pre v-else class="mail-text-body">{{ detail.textBody || '没有正文内容' }}</pre>
           <section v-if="normalAttachments.length" class="attachments-panel">
             <h4 class="attachments-title">附件</h4>
@@ -569,8 +577,32 @@
             </a-select>
           </a-form-item>
           <a-form-item label="EML 文件">
-            <input ref="importEMLFileInput" class="import-eml-file" type="file" accept=".eml,message/rfc822" @change="onImportEMLFileSelected" />
-            <div v-if="importEMLForm.file" class="import-eml-file-name">{{ importEMLForm.file.name }}</div>
+            <input
+              ref="importEMLFileInput"
+              class="upload-hidden-input"
+              hidden
+              type="file"
+              accept=".eml,message/rfc822"
+              multiple
+              @change="onImportEMLFileSelected"
+            />
+            <div class="upload-picker">
+              <a-button @click="chooseImportEMLFiles">
+                <template #icon><upload-outlined /></template>
+                选择 EML 文件
+              </a-button>
+              <span class="upload-picker-hint">可同时选择多个 .eml 文件，单个最大 50MB</span>
+            </div>
+            <div v-if="importEMLForm.files.length" class="import-eml-file-list">
+              <div v-for="(file, index) in importEMLForm.files" :key="`${file.name}-${file.size}-${index}`" class="import-eml-file-item">
+                <paper-clip-outlined />
+                <span>{{ file.name }}</span>
+                <small>{{ formatSize(file.size) }}</small>
+                <a-button type="text" size="small" danger aria-label="移除文件" @click="removeImportEMLFile(index)">
+                  <template #icon><delete-outlined /></template>
+                </a-button>
+              </div>
+            </div>
           </a-form-item>
         </a-form>
       </a-modal>
@@ -1057,7 +1089,7 @@ const folderForm = reactive({
 const importEMLForm = reactive({
   accountId: '',
   folder: 'INBOX',
-  file: null as File | null,
+  files: [] as File[],
 });
 const composeForm = reactive({
   accountId: '',
@@ -1151,6 +1183,7 @@ const readerStatusBadges = computed(() => {
   }
   return badges.length ? badges : [{ label: '普通邮件', tone: 'neutral', icon: markRaw(MailOutlined) }];
 });
+const mailBodySrcdoc = computed(() => buildMailBodySrcdoc(detail.value?.htmlBody || ''));
 const contactByEmail = computed(() => {
   const map = new Map<string, Contact>();
   for (const contact of contacts.value) {
@@ -1739,6 +1772,95 @@ function accountDisplayName(account: MailAccount) {
   return account.displayName || account.email;
 }
 
+function buildMailBodySrcdoc(html: string) {
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <base target="_blank" />
+    <style>
+      html,
+      body {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow-x: hidden !important;
+        background: transparent !important;
+      }
+      body {
+        box-sizing: border-box;
+        color: #1f2937;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 14px;
+        line-height: 1.7;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        max-width: 100%;
+      }
+      img,
+      video,
+      canvas,
+      svg {
+        max-width: 100% !important;
+        height: auto !important;
+      }
+      table {
+        max-width: 100% !important;
+        width: auto;
+        border-collapse: collapse;
+      }
+      td,
+      th {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      pre,
+      code {
+        white-space: pre-wrap !important;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    ${html}
+  </body>
+</html>`;
+}
+
+function resizeMailBodyFrame(event: Event) {
+  const frame = event.target instanceof HTMLIFrameElement ? event.target : null;
+  if (!frame) {
+    return;
+  }
+  const resize = () => {
+    try {
+      const doc = frame.contentDocument;
+      if (!doc) {
+        return;
+      }
+      const height = Math.max(
+        doc.body?.scrollHeight || 0,
+        doc.documentElement?.scrollHeight || 0,
+        180,
+      );
+      frame.style.height = `${height}px`;
+    } catch {
+      frame.style.height = '520px';
+    }
+  };
+  frame.style.height = '0px';
+  resize();
+  window.setTimeout(resize, 120);
+  window.setTimeout(resize, 600);
+}
+
 function openFolderCreate() {
   editingFolderId.value = null;
   folderForm.name = '';
@@ -1765,13 +1887,32 @@ function openImportEML() {
     ? filters.accountId
     : enabledAccounts[0].id;
   importEMLForm.folder = 'INBOX';
-  importEMLForm.file = null;
+  importEMLForm.files = [];
   importEMLOpen.value = true;
 }
 
 function onImportEMLFileSelected(event: Event) {
   const input = event.target as HTMLInputElement;
-  importEMLForm.file = input.files?.[0] || null;
+  const selectedFiles = Array.from(input.files || []);
+  const files = selectedFiles.filter((file) => /\.eml$/i.test(file.name));
+  if (files.length === 0) {
+    message.warning('请选择 .eml 文件');
+    input.value = '';
+    return;
+  }
+  if (files.length < selectedFiles.length) {
+    message.warning('已忽略非 .eml 文件');
+  }
+  importEMLForm.files = files;
+  input.value = '';
+}
+
+function chooseImportEMLFiles() {
+  importEMLFileInput.value?.click();
+}
+
+function removeImportEMLFile(index: number) {
+  importEMLForm.files.splice(index, 1);
 }
 
 async function submitImportEML() {
@@ -1779,7 +1920,7 @@ async function submitImportEML() {
     message.warning('请选择导入邮箱账号');
     return;
   }
-  if (!importEMLForm.file) {
+  if (importEMLForm.files.length === 0) {
     message.warning('请选择 EML 文件');
     return;
   }
@@ -1788,9 +1929,22 @@ async function submitImportEML() {
     const result = await messageApi.importEML({
       accountId: importEMLForm.accountId,
       folder: importEMLForm.folder,
-      file: importEMLForm.file,
+      files: importEMLForm.files,
     });
-    message.success(result.inserted ? 'EML 邮件已导入' : '这封邮件已存在，已打开已有邮件');
+    const importSummary = [
+      `共 ${result.total} 个`,
+      `成功 ${result.successCount} 个`,
+      `新增 ${result.insertedCount} 个`,
+      `重复 ${result.duplicateCount} 个`,
+      `失败 ${result.failedCount} 个`,
+    ].join('，');
+    if (result.failedCount === result.total) {
+      message.error(importSummary);
+    } else if (result.failedCount > 0) {
+      message.warning(importSummary);
+    } else {
+      message.success(importSummary);
+    }
     resetImportEML();
     activeSystemFolder.value = importEMLForm.folder === 'INBOX' ? 'inbox' : 'sent';
     activeLocalFolderId.value = null;
@@ -1798,7 +1952,10 @@ async function submitImportEML() {
     mailViewMode.value = 'messages';
     page.value = 1;
     await loadMessages();
-    await openDetail(result.message.id);
+    const firstMessage = result.items.find((item) => item.message?.id)?.message || result.message;
+    if (firstMessage?.id) {
+      await openDetail(firstMessage.id);
+    }
   } catch (error) {
     message.error(error instanceof Error ? error.message : '导入 EML 失败');
   } finally {
@@ -1808,7 +1965,7 @@ async function submitImportEML() {
 
 function resetImportEML() {
   importEMLOpen.value = false;
-  importEMLForm.file = null;
+  importEMLForm.files = [];
   if (importEMLFileInput.value) {
     importEMLFileInput.value.value = '';
   }
@@ -3619,13 +3776,17 @@ function looksLikeEmail(value: string) {
 }
 
 .mail-reader {
+  width: min(100%, 1080px);
   min-width: 0;
-  max-width: 880px;
+  max-width: 100%;
+  margin: 0 auto;
 }
 
 .reader-skeleton {
   display: grid;
-  max-width: 880px;
+  width: min(100%, 1080px);
+  max-width: 100%;
+  margin: 0 auto;
   gap: 24px;
 }
 
@@ -3943,20 +4104,21 @@ function looksLikeEmail(value: string) {
 }
 
 .mail-body {
+  width: 100%;
   max-width: 100%;
-  overflow-x: auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-color);
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
 
-.mail-body :deep(img) {
-  max-width: 100%;
-  height: auto;
-}
-
-.mail-body :deep(table) {
-  max-width: 100%;
+.mail-body-frame {
+  display: block;
+  width: 100%;
+  min-height: 180px;
+  border: 0;
+  background: transparent;
 }
 
 .mail-text-body {
@@ -4408,18 +4570,52 @@ function looksLikeEmail(value: string) {
   gap: 4px;
 }
 
-.import-eml-file {
-  width: 100%;
+.upload-hidden-input {
+  display: none;
 }
 
-.import-eml-file-name {
-  margin-top: 8px;
+.upload-picker {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.upload-picker-hint {
+  min-width: 0;
+  color: var(--muted-color);
+  font-size: 12px;
+}
+
+.import-eml-file-list {
+  display: grid;
+  max-height: 220px;
+  gap: 8px;
+  margin-top: 10px;
+  overflow: auto;
+}
+
+.import-eml-file-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
   padding: 8px 10px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--surface-muted);
   color: var(--muted-color);
+  font-size: 13px;
+}
+
+.import-eml-file-item span {
   overflow-wrap: anywhere;
+  color: var(--heading-color);
+}
+
+.import-eml-file-item small {
+  white-space: nowrap;
   font-size: 13px;
 }
 

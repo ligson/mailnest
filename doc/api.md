@@ -882,11 +882,12 @@ JSON 请求：
 
 - `accountId`：导入归属的邮箱账号 ID，必须属于当前登录用户。
 - `folder`：导入目录，默认 `INBOX`；也可以传账号配置的发件箱目录名。
-- `file`：`.eml` 文件，最大 50MB。
+- `file`：`.eml` 文件，可重复传多个同名字段实现批量导入；单个文件最大 50MB，一次最多 100 个文件，总大小最多 200MB。历史兼容字段名 `eml` 仍可使用。
 
 说明：
 
 - 后端复用现有 MIME 解析、原文落盘、正文落盘、附件落盘、联系人沉淀、会话归并和规则引擎逻辑。
+- 批量导入时单个文件失败不会影响其他文件继续导入，响应中会给出每个文件的导入结果。
 - 导入去重使用稳定 UID：优先基于 `Message-ID`，没有 `Message-ID` 时基于 EML 原文哈希；重复导入同一封邮件不会重复写入。
 - 规则命中记录的触发来源为 `import`。
 
@@ -895,15 +896,34 @@ JSON 请求：
 ```json
 {
   "success": true,
-  "message": "导入成功",
+  "message": "导入完成",
   "httpCode": 200,
   "data": {
+    "total": 2,
+    "successCount": 2,
+    "insertedCount": 1,
+    "duplicateCount": 1,
+    "failedCount": 0,
+    "items": [
+      {
+        "filename": "first.eml",
+        "success": true,
+        "inserted": true,
+        "message": {
+          "id": "message-id",
+          "accountId": "account-id",
+          "subject": "Imported EML"
+        },
+        "error": null
+      }
+    ],
     "inserted": true,
     "message": {
       "id": "message-id",
       "accountId": "account-id",
       "subject": "Imported EML"
-    }
+    },
+    "batch": true
   }
 }
 ```

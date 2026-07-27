@@ -17,7 +17,7 @@ func (a *App) handleImportEMLMessage(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
 		return
 	}
-	raw, filename, err := readImportEMLFile(r)
+	files, err := readImportEMLFiles(r)
 	if err != nil {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
@@ -31,18 +31,82 @@ func (a *App) handleImportEMLMessage(w http.ResponseWriter, r *http.Request) {
 	if folder == "" {
 		folder = "INBOX"
 	}
-	result, err := a.mailService.ImportEML(userID, accountID, folder, raw)
-	if errors.Is(err, storage.ErrNotFound) {
+	payload := importEMLBatchPayload(userID, accountID, folder, files, a)
+	if payload.accountNotFound {
 		response.Error(w, http.StatusNotFound, "邮箱账号不存在")
 		return
 	}
-	if err != nil {
-		response.Error(w, http.StatusBadRequest, "导入 EML 失败："+err.Error())
-		return
+	log.Printf("EML 邮件批量导入完成 userID=%d accountID=%d total=%d inserted=%d duplicated=%d failed=%d", userID, accountID, payload.total, payload.inserted, payload.duplicated, payload.failed)
+	response.OK(w, "导入完成", payload.data)
+}
+
+type importEMLBatchResult struct {
+	data            map[string]any
+	total           int
+	inserted        int
+	duplicated      int
+	failed          int
+	accountNotFound bool
+}
+
+func importEMLBatchPayload(userID, accountID int64, folder string, files []importEMLUpload, a *App) importEMLBatchResult {
+	items := make([]map[string]any, 0, len(files))
+	var firstMessage any
+	var firstInserted any
+	result := importEMLBatchResult{total: len(files)}
+	for _, file := range files {
+		item := map[string]any{
+			"filename": file.Filename,
+			"success":  false,
+			"inserted": false,
+			"message":  nil,
+			"error":    nil,
+		}
+		if file.Error != "" {
+			item["error"] = file.Error
+			result.failed++
+			items = append(items, item)
+			continue
+		}
+		imported, err := a.mailService.ImportEML(userID, accountID, folder, file.Data)
+		if errors.Is(err, storage.ErrNotFound) {
+			result.accountNotFound = true
+			return result
+		}
+		if err != nil {
+			item["error"] = err.Error()
+			result.failed++
+			items = append(items, item)
+			continue
+		}
+		messagePayload := messageListPayload(imported.Message)
+		item["success"] = true
+		item["inserted"] = imported.Inserted
+		item["message"] = messagePayload
+		if imported.Inserted {
+			result.inserted++
+		} else {
+			result.duplicated++
+		}
+		if firstMessage == nil {
+			firstMessage = messagePayload
+			firstInserted = imported.Inserted
+		}
+		items = append(items, item)
 	}
-	log.Printf("EML 邮件导入完成 userID=%d accountID=%d messageID=%d inserted=%t filename=%s", userID, accountID, result.Message.ID, result.Inserted, filename)
-	response.OK(w, "导入成功", map[string]any{
-		"inserted": result.Inserted,
-		"message":  messageListPayload(result.Message),
-	})
+	result.data = map[string]any{
+		"total":          result.total,
+		"successCount":   result.inserted + result.duplicated,
+		"insertedCount":  result.inserted,
+		"duplicateCount": result.duplicated,
+		"failedCount":    result.failed,
+		"items":          items,
+		"inserted":       firstInserted,
+		"message":        firstMessage,
+		"batch":          result.total > 1,
+		"maxFileSizeMB":  maxImportEMLBytes >> 20,
+		"maxBatchCount":  maxImportEMLBatchCount,
+		"maxBatchSizeMB": maxImportEMLBatchBytes >> 20,
+	}
+	return result
 }

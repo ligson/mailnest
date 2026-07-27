@@ -155,7 +155,49 @@ func TestImportEMLMessageCreatesMessageAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestImportEMLMessageBatchContinuesWhenOneFileFails(t *testing.T) {
+	router := newTestRouter(t, true)
+	token := registerTestUser(t, router, "eml-batch", "eml-batch@example.com")
+	accountID := createTestAccount(t, router, token)
+	first := []byte("From: Sender <sender@example.com>\r\nTo: Reader <reader@example.com>\r\nSubject: Batch One\r\nMessage-ID: <batch-one@example.com>\r\nDate: Mon, 27 Jul 2026 10:00:00 +0800\r\n\r\nOne.")
+	second := []byte("From: Sender <sender@example.com>\r\nTo: Reader <reader@example.com>\r\nSubject: Batch Two\r\nMessage-ID: <batch-two@example.com>\r\nDate: Mon, 27 Jul 2026 10:01:00 +0800\r\n\r\nTwo.")
+
+	resp := performEMLImportFiles(t, router, token, accountID, []emlImportFile{
+		{Name: "one.eml", Data: first},
+		{Name: "bad.txt", Data: []byte("not eml")},
+		{Name: "two.eml", Data: second},
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected batch import status 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	data := decodeEnvelope(t, resp.Body.Bytes())["data"].(map[string]any)
+	if data["total"] != float64(3) || data["successCount"] != float64(2) || data["insertedCount"] != float64(2) || data["failedCount"] != float64(1) {
+		t.Fatalf("expected batch summary, got %#v", data)
+	}
+	items := data["items"].([]any)
+	if len(items) != 3 {
+		t.Fatalf("expected three item results, got %#v", items)
+	}
+	failed := items[1].(map[string]any)
+	if failed["success"] != false || failed["error"] == nil {
+		t.Fatalf("expected second item to fail only itself, got %#v", failed)
+	}
+	listResp := performRequest(router, http.MethodGet, "/api/v1/messages", "", token)
+	if listResp.Code != http.StatusOK || listItemCount(t, listResp.Body.Bytes()) != 2 {
+		t.Fatalf("expected two imported messages, got %d %s", listResp.Code, listResp.Body.String())
+	}
+}
+
+type emlImportFile struct {
+	Name string
+	Data []byte
+}
+
 func performEMLImport(t *testing.T, router http.Handler, token, accountID string, raw []byte) *httptest.ResponseRecorder {
+	return performEMLImportFiles(t, router, token, accountID, []emlImportFile{{Name: "import.eml", Data: raw}})
+}
+
+func performEMLImportFiles(t *testing.T, router http.Handler, token, accountID string, files []emlImportFile) *httptest.ResponseRecorder {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -165,12 +207,14 @@ func performEMLImport(t *testing.T, router http.Handler, token, accountID string
 	if err := writer.WriteField("folder", "INBOX"); err != nil {
 		t.Fatalf("write folder: %v", err)
 	}
-	file, err := writer.CreateFormFile("file", "import.eml")
-	if err != nil {
-		t.Fatalf("create eml form file: %v", err)
-	}
-	if _, err := file.Write(raw); err != nil {
-		t.Fatalf("write eml file: %v", err)
+	for _, item := range files {
+		file, err := writer.CreateFormFile("file", item.Name)
+		if err != nil {
+			t.Fatalf("create eml form file: %v", err)
+		}
+		if _, err := file.Write(item.Data); err != nil {
+			t.Fatalf("write eml file: %v", err)
+		}
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close multipart writer: %v", err)

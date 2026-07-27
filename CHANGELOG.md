@@ -8,6 +8,7 @@
 
 - 附件中心新增在线预览能力：图片、PDF、文本、JSON、XML、HTML 等浏览器可直接处理的附件可在弹窗内预览，Office 等复杂文档保留下载入口。
 - 邮件页新增 EML 导入能力：可选择邮箱账号和目录上传 `.eml` 文件，后端复用现有 MIME 解析、原文/正文/附件落盘、联系人沉淀、会话归并、规则引擎和去重逻辑。
+- EML 导入升级为批量导入：前端支持一次选择多个 `.eml` 文件，后端同一接口支持多个 `file` 表单字段，并返回总数、成功数、新增数、重复数、失败数和逐文件结果。
 - 邮件页头部新增手动收取入口，支持按当前账号或全部启用账号收取邮件，并在按钮上显示收取中状态；原“刷新”改为“刷新列表”，只重新加载本地列表数据。
 
 ### 优化
@@ -19,7 +20,9 @@
 - 修复发送记录、邮件列表、邮件详情和会话参与人展示地址时可能直接显示 RFC 2047 编码词的问题，历史记录读取时会统一转为可读的 `姓名 <邮箱>` 格式。
 - 新发邮件保存发送记录收件人快照时，会先解码常见邮件头编码，避免新的发送记录继续写入乱码地址。
 - 修复邮件页外层工作区重复 padding、边框、圆角导致三栏邮箱界面四周出现浅色留白的问题，邮件页改为贴边工作台布局。
+- 修复 HTML 邮件正文中的全局 CSS 可能污染外层页面、导致邮件页边缘出现异常留白或横向撑宽的问题，邮件正文改为 iframe 隔离渲染并约束图片、表格和长文本宽度。
 - 修复部分附件以 `application/octet-stream` 保存时无法按 PDF、图片或文本正确预览的问题，后端会按文件扩展名补充可信 MIME 类型，前端预览时也会为 Blob 设置匹配的类型；同时修复 Office 文档 MIME 中包含 `openxmlformats` 被误判为 XML 文本导致乱码的问题，Office 类型改为仅提示下载。
+- 统一上传入口样式：EML 导入改为隐藏原生文件选择框，使用带上传图标的按钮和文件列表；头像上传按钮补充上传图标，避免不同页面上传按钮风格不一致。
 - 补充 `.gitignore` 忽略 `output/` 临时构建产物目录，避免本地镜像包误提交到仓库。
 
 ### 文档
@@ -29,16 +32,18 @@
 ### 测试
 
 - 新增后端测试覆盖附件预览鉴权和内容返回、EML 导入、重复导入去重和导入后详情读取。
+- 新增后端测试覆盖批量导入 EML 时单个文件失败不影响其他文件继续导入。
 - 新增后端测试覆盖 PDF 附件预览从文件名推断 `application/pdf` 响应类型。
 - 新增后端测试覆盖发送记录收件人、邮件地址展示和发送记录快照的编码词解码行为。
 - 前端 `rtk npm run build` 通过，覆盖邮件页手动收取入口、刷新列表文案和贴边工作区布局。
 - 前端 `rtk npm run build` 通过，覆盖邮件页顶部工具栏紧凑布局和图标按钮改造。
+- 前端 `rtk npm run build` 通过，覆盖 HTML 邮件正文 iframe 隔离渲染和阅读区宽度约束。
 - 后端 `rtk go test ./...` 通过，前端 `rtk npm run build` 通过。
 
 ### 部署
 
 - 将前端版本 `20260727144740-97af7cb-mail-toolbar` 部署到生产环境的 Mail Nest Docker Compose 服务，后端继续使用 `20260727142753-7745c3a-attachment-preview`；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727144740-mail-toolbar.tgz`；线上健康检查、`/mail` 静态页面、前后端容器镜像标签和新工具栏静态资源验证通过。
-- 将前后端版本 `20260727142753-7745c3a-attachment-preview` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727142753-attachment-preview.tgz`；线上健康检查、`/mail` 静态页面、附件预览接口未登录拦截、前后端容器镜像标签和后端启动日志验证通过。
+- 将前后端版本 `20260727142753-7745c3a-attachment-preview` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727142753-attachment-preview.tgz`，本次复核另备份到 `backups/pre-20260727143030-attachpreview.tgz`；线上健康检查、`/mail` 静态页面、附件预览接口未登录拦截、前后端容器镜像标签、附件中心新静态资源、Office/PDF 预览类型判断资源和后端启动日志验证通过。
 - 将前端版本 `20260727141811-802e031-mail-shell` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727141811-mail-shell.tgz`；线上健康检查、`/mail` 静态页面、前后端容器镜像标签、线上 CSS 贴边规则和新前端文案资源验证通过。
 - 将前后端版本 `20260727135309-a97d75e-preview-eml` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727135309-preview-eml.tgz`；线上健康检查、`/mail` 静态页面、前后端容器镜像标签、附件预览接口未登录拦截、EML 导入接口未登录拦截和后端启动日志验证通过。
 

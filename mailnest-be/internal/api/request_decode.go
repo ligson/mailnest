@@ -19,6 +19,16 @@ const maxComposeAttachmentBytes = 25 << 20
 
 const maxImportEMLBytes = 50 << 20
 
+const maxImportEMLBatchBytes = 200 << 20
+
+const maxImportEMLBatchCount = 100
+
+type importEMLUpload struct {
+	Filename string
+	Data     []byte
+	Error    string
+}
+
 func decodeJSON(r *http.Request, dst any) error {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -136,34 +146,82 @@ func readComposeAttachments(form *multipart.Form) ([]mail.OutgoingAttachment, er
 	return attachments, nil
 }
 
-func readImportEMLFile(r *http.Request) ([]byte, string, error) {
-	if err := r.ParseMultipartForm(maxImportEMLBytes + 1<<20); err != nil {
-		return nil, "", errors.New("读取 EML 表单失败")
+func readImportEMLFiles(r *http.Request) ([]importEMLUpload, error) {
+	if err := r.ParseMultipartForm(maxImportEMLBatchBytes + 1<<20); err != nil {
+		return nil, errors.New("读取 EML 表单失败")
 	}
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		file, header, err = r.FormFile("eml")
+	headers := importEMLFileHeaders(r.MultipartForm)
+	if len(headers) == 0 {
+		return nil, errors.New("请选择 EML 文件")
 	}
-	if err != nil {
-		return nil, "", errors.New("请选择 EML 文件")
+	if len(headers) > maxImportEMLBatchCount {
+		return nil, fmt.Errorf("一次最多导入 %d 个 EML 文件", maxImportEMLBatchCount)
 	}
-	defer file.Close()
-	filename := filepath.Base(strings.TrimSpace(header.Filename))
+	items := make([]importEMLUpload, 0, len(headers))
+	var total int64
+	for _, header := range headers {
+		item := importEMLUpload{Filename: importEMLFilename(header)}
+		data, err := readImportEMLPart(header)
+		if err != nil {
+			item.Error = err.Error()
+			items = append(items, item)
+			continue
+		}
+		total += int64(len(data))
+		if total > maxImportEMLBatchBytes {
+			item.Error = fmt.Sprintf("本次导入文件总大小不能超过 %d MB", maxImportEMLBatchBytes>>20)
+			items = append(items, item)
+			continue
+		}
+		item.Data = data
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func importEMLFileHeaders(form *multipart.Form) []*multipart.FileHeader {
+	if form == nil {
+		return nil
+	}
+	headers := make([]*multipart.FileHeader, 0, len(form.File["file"])+len(form.File["eml"]))
+	headers = append(headers, form.File["file"]...)
+	headers = append(headers, form.File["eml"]...)
+	return headers
+}
+
+func readImportEMLPart(header *multipart.FileHeader) ([]byte, error) {
+	filename := importEMLFilename(header)
 	if filename == "" {
-		filename = "import.eml"
+		return nil, errors.New("EML 文件名为空")
 	}
 	if !strings.EqualFold(filepath.Ext(filename), ".eml") {
-		return nil, "", errors.New("只支持导入 .eml 文件")
+		return nil, errors.New("只支持导入 .eml 文件")
 	}
+	file, err := header.Open()
+	if err != nil {
+		return nil, errors.New("读取 EML 文件失败")
+	}
+	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, maxImportEMLBytes+1))
 	if err != nil {
-		return nil, "", errors.New("读取 EML 文件失败")
+		return nil, errors.New("读取 EML 文件失败")
 	}
 	if len(data) == 0 {
-		return nil, "", errors.New("EML 文件为空")
+		return nil, errors.New("EML 文件为空")
 	}
 	if len(data) > maxImportEMLBytes {
-		return nil, "", fmt.Errorf("EML 文件不能超过 %d MB", maxImportEMLBytes>>20)
+		return nil, fmt.Errorf("EML 文件不能超过 %d MB", maxImportEMLBytes>>20)
 	}
-	return data, filename, nil
+	return data, nil
+}
+
+func importEMLFilename(header *multipart.FileHeader) string {
+	if header == nil {
+		return "import.eml"
+	}
+	filename := filepath.Base(strings.TrimSpace(header.Filename))
+	if filename == "" {
+		return "import.eml"
+	}
+	return filename
 }

@@ -434,8 +434,23 @@ export interface SendMessageResult extends MailMessage {
 }
 
 export interface ImportEMLResult {
+  total: number;
+  successCount: number;
+  insertedCount: number;
+  duplicateCount: number;
+  failedCount: number;
+  items: ImportEMLItem[];
+  batch: boolean;
+  inserted?: boolean;
+  message?: MailMessage | null;
+}
+
+export interface ImportEMLItem {
+  filename: string;
+  success: boolean;
   inserted: boolean;
-  message: MailMessage;
+  message: MailMessage | null;
+  error: string | null;
 }
 
 export interface SaveDraftPayload {
@@ -740,13 +755,13 @@ export const messageApi = {
     });
     return response.data;
   },
-  importEML(payload: { accountId: string; folder?: string; file: File }) {
+  importEML(payload: { accountId: string; folder?: string; files: File[] }) {
     const form = new FormData();
     form.append('accountId', payload.accountId);
     form.append('folder', payload.folder || 'INBOX');
-    form.append('file', payload.file, payload.file.name);
+    payload.files.forEach((file) => form.append('file', file, file.name));
     return requestEnvelope<ImportEMLResult>(apiClient.post('/messages/import-eml', form, {
-      timeout: 60000,
+      timeout: Math.max(60000, Math.min(300000, payload.files.length * 30000)),
     }));
   },
 };
