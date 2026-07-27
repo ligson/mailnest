@@ -25,11 +25,12 @@
 
 - 新增后端测试覆盖附件预览鉴权和内容返回、EML 导入、重复导入去重和导入后详情读取。
 - 新增后端测试覆盖发送记录收件人、邮件地址展示和发送记录快照的编码词解码行为。
+- 前端 `rtk npm run build` 通过，覆盖邮件页手动收取入口、刷新列表文案和贴边工作区布局。
 - 后端 `rtk go test ./...` 通过，前端 `rtk npm run build` 通过。
 
 ### 部署
 
-- 将前端版本 `20260727141811-802e031-mail-shell` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727141811-mail-shell.tgz`；线上 `/mail` 静态页面、后端健康检查、前端容器镜像标签和线上 CSS 贴边规则验证通过。
+- 将前端版本 `20260727141811-802e031-mail-shell` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727141811-mail-shell.tgz`；线上健康检查、`/mail` 静态页面、前后端容器镜像标签、线上 CSS 贴边规则和新前端文案资源验证通过。
 - 将前后端版本 `20260727135309-a97d75e-preview-eml` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727135309-preview-eml.tgz`；线上健康检查、`/mail` 静态页面、前后端容器镜像标签、附件预览接口未登录拦截、EML 导入接口未登录拦截和后端启动日志验证通过。
 
 ## 2026-07-23
