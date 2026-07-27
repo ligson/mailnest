@@ -24,6 +24,10 @@
 - 新增后端测试覆盖发送记录收件人、邮件地址展示和发送记录快照的编码词解码行为。
 - 后端 `rtk go test ./...` 通过，前端 `rtk npm run build` 通过。
 
+### 部署
+
+- 将前后端版本 `20260727135309-a97d75e-preview-eml` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727135309-preview-eml.tgz`；线上健康检查、`/mail` 静态页面、前后端容器镜像标签、附件预览接口未登录拦截、EML 导入接口未登录拦截和后端启动日志验证通过。
+
 ## 2026-07-23
 
 ### 新增
