@@ -23,6 +23,9 @@ func (a *App) handleImportEMLMessage(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
 	accountID, err := strconv.ParseInt(strings.TrimSpace(r.FormValue("accountId")), 10, 64)
 	if err != nil || accountID <= 0 {
 		response.Error(w, http.StatusBadRequest, "请选择导入邮箱账号")
@@ -69,7 +72,15 @@ func importEMLBatchPayload(userID, accountID int64, folder string, files []impor
 			items = append(items, item)
 			continue
 		}
-		imported, err := a.mailService.ImportEML(userID, accountID, folder, file.Data)
+		data, err := readImportEMLPart(file.Header)
+		if err != nil {
+			item["error"] = err.Error()
+			result.failed++
+			items = append(items, item)
+			continue
+		}
+		imported, err := a.mailService.ImportEML(userID, accountID, folder, data)
+		data = nil
 		if errors.Is(err, storage.ErrNotFound) {
 			result.accountNotFound = true
 			return result
