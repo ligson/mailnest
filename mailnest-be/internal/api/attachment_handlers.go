@@ -4,6 +4,7 @@ import (
 	"errors"
 	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -86,11 +87,9 @@ func (a *App) handleAttachmentContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	contentType := "application/octet-stream"
-	if attachment.ContentType.Valid && strings.TrimSpace(attachment.ContentType.String) != "" {
-		contentType = attachment.ContentType.String
-	}
+	contentType := attachmentContentType(attachment)
 	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": attachment.Filename}))
 	http.ServeFile(w, r, attachment.FilePath)
 }
@@ -115,11 +114,9 @@ func (a *App) handleAttachmentPreview(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusInternalServerError, "获取附件失败")
 		return
 	}
-	contentType := "application/octet-stream"
-	if attachment.ContentType.Valid && strings.TrimSpace(attachment.ContentType.String) != "" {
-		contentType = attachment.ContentType.String
-	}
+	contentType := attachmentContentType(attachment)
 	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": attachment.Filename}))
 	w.Header().Set("Cache-Control", "private, max-age=300")
 	http.ServeFile(w, r, attachment.FilePath)
@@ -162,12 +159,33 @@ func (a *App) handleInlineAttachmentContent(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	contentType := "application/octet-stream"
-	if attachment.ContentType.Valid && strings.TrimSpace(attachment.ContentType.String) != "" {
-		contentType = attachment.ContentType.String
-	}
+	contentType := attachmentContentType(attachment)
 	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": attachment.Filename}))
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	http.ServeFile(w, r, attachment.FilePath)
+}
+
+func attachmentContentType(attachment storage.MailAttachment) string {
+	contentType := ""
+	if attachment.ContentType.Valid {
+		contentType = strings.TrimSpace(attachment.ContentType.String)
+	}
+	if shouldInferAttachmentContentType(contentType) {
+		if inferred := mime.TypeByExtension(strings.ToLower(filepath.Ext(attachment.Filename))); inferred != "" {
+			contentType = inferred
+		}
+	}
+	if contentType == "" {
+		return "application/octet-stream"
+	}
+	return contentType
+}
+
+func shouldInferAttachmentContentType(contentType string) bool {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	return mediaType == "" ||
+		mediaType == "application/octet-stream" ||
+		mediaType == "binary/octet-stream"
 }

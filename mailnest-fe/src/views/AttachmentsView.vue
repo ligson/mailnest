@@ -137,7 +137,9 @@ const previewLoading = ref(false);
 const previewUrl = ref('');
 const previewText = ref('');
 const previewError = ref('');
-const previewKind = ref<'image' | 'pdf' | 'text' | 'unsupported'>('unsupported');
+type PreviewKind = 'image' | 'pdf' | 'text' | 'unsupported';
+
+const previewKind = ref<PreviewKind>('unsupported');
 const previewItem = ref<AttachmentCenterItem | null>(null);
 const attachments = ref<AttachmentCenterItem[]>([]);
 const accounts = ref<MailAccount[]>([]);
@@ -246,7 +248,7 @@ async function preview(item: AttachmentCenterItem) {
       previewText.value = await blob.text();
       return;
     }
-    previewUrl.value = URL.createObjectURL(blob);
+    previewUrl.value = URL.createObjectURL(blobWithPreviewType(blob, item, previewKind.value));
   } catch (error) {
     previewError.value = error instanceof Error ? error.message : '预览附件失败';
   } finally {
@@ -264,19 +266,77 @@ function closePreview() {
   previewKind.value = 'unsupported';
 }
 
-function previewKindFor(item: AttachmentCenterItem): 'image' | 'pdf' | 'text' | 'unsupported' {
-  const contentType = (item.contentType || '').toLowerCase();
+function previewKindFor(item: AttachmentCenterItem): PreviewKind {
+  const contentType = normalizedContentType(item.contentType);
   const filename = (item.filename || '').toLowerCase();
+  if (isOfficeLikeAttachment(contentType, filename)) {
+    return 'unsupported';
+  }
   if (contentType.startsWith('image/')) {
     return 'image';
   }
   if (contentType === 'application/pdf' || filename.endsWith('.pdf')) {
     return 'pdf';
   }
-  if (contentType.startsWith('text/') || contentType.includes('json') || contentType.includes('xml') || /\.(txt|csv|log|json|xml|md|html?)$/.test(filename)) {
+  if (isTextPreviewType(contentType) || /\.(txt|csv|log|json|xml|md|html?)$/.test(filename)) {
     return 'text';
   }
   return 'unsupported';
+}
+
+function normalizedContentType(value: string | null | undefined) {
+  return (value || '').split(';', 1)[0].trim().toLowerCase();
+}
+
+function isTextPreviewType(contentType: string) {
+  return contentType.startsWith('text/') ||
+    contentType === 'application/json' ||
+    contentType === 'application/xml' ||
+    contentType === 'application/xhtml+xml' ||
+    contentType.endsWith('+json') ||
+    contentType.endsWith('+xml');
+}
+
+function isOfficeLikeAttachment(contentType: string, filename: string) {
+  return contentType.includes('officedocument') ||
+    contentType.includes('msword') ||
+    contentType.includes('ms-excel') ||
+    contentType.includes('ms-powerpoint') ||
+    /\.(docx?|xlsx?|pptx?)$/.test(filename);
+}
+
+function blobWithPreviewType(blob: Blob, item: AttachmentCenterItem, kind: PreviewKind) {
+  const type = previewMimeType(item, kind);
+  if (!type || blob.type === type) {
+    return blob;
+  }
+  return new Blob([blob], { type });
+}
+
+function previewMimeType(item: AttachmentCenterItem, kind: PreviewKind) {
+  const contentType = normalizedContentType(item.contentType);
+  const filename = (item.filename || '').toLowerCase();
+  if (kind === 'pdf') {
+    return 'application/pdf';
+  }
+  if (kind === 'image') {
+    if (contentType.startsWith('image/')) {
+      return contentType;
+    }
+    if (filename.endsWith('.png')) {
+      return 'image/png';
+    }
+    if (/\.(jpe?g|jfif)$/.test(filename)) {
+      return 'image/jpeg';
+    }
+    if (filename.endsWith('.gif')) {
+      return 'image/gif';
+    }
+    if (filename.endsWith('.webp')) {
+      return 'image/webp';
+    }
+  }
+  return contentType;
 }
 
 async function openSource(item: AttachmentCenterItem) {

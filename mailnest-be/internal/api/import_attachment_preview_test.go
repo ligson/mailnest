@@ -64,6 +64,54 @@ func TestAttachmentPreviewServesInlineContentAndIsIsolated(t *testing.T) {
 	}
 }
 
+func TestAttachmentPreviewInfersPDFContentTypeFromFilename(t *testing.T) {
+	fetcher := &mail.FakeFetcher{
+		Messages: []mail.FetchedMessage{
+			{
+				UID:        "preview-pdf-attachment",
+				MessageID:  "<preview-pdf-attachment@example.com>",
+				Subject:    "PDF 预览附件邮件",
+				From:       "sender@example.com",
+				To:         []string{"reader@example.com"},
+				SentAt:     "2026-07-27T11:00:00+08:00",
+				TextBody:   "PDF 附件预览测试",
+				RawContent: "Subject: PDF 预览附件邮件\r\n\r\nPDF 附件预览测试",
+				Attachments: []mail.FetchedAttachment{
+					{
+						Filename:    "report.pdf",
+						ContentType: "application/octet-stream",
+						Data:        []byte("%PDF-1.7"),
+					},
+				},
+			},
+		},
+	}
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	token := registerTestUser(t, router, "preview-pdf", "preview-pdf@example.com")
+	accountID := createTestAccount(t, router, token)
+
+	syncResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/sync", "", token)
+	if syncResp.Code != http.StatusOK {
+		t.Fatalf("expected sync status 200, got %d: %s", syncResp.Code, syncResp.Body.String())
+	}
+	attachmentResp := performRequest(router, http.MethodGet, "/api/v1/attachments", "", token)
+	if attachmentResp.Code != http.StatusOK {
+		t.Fatalf("expected attachments status 200, got %d: %s", attachmentResp.Code, attachmentResp.Body.String())
+	}
+	attachmentID := firstListItemID(t, attachmentResp.Body.Bytes())
+
+	previewResp := performRequest(router, http.MethodGet, "/api/v1/attachments/"+attachmentID+"/preview", "", token)
+	if previewResp.Code != http.StatusOK {
+		t.Fatalf("expected preview status 200, got %d: %s", previewResp.Code, previewResp.Body.String())
+	}
+	if got := previewResp.Header().Get("Content-Type"); got != "application/pdf" {
+		t.Fatalf("expected inferred PDF content type, got %q", got)
+	}
+	if disposition := previewResp.Header().Get("Content-Disposition"); disposition == "" || !bytes.Contains([]byte(disposition), []byte("inline")) {
+		t.Fatalf("expected inline content disposition, got %q", disposition)
+	}
+}
+
 func TestImportEMLMessageCreatesMessageAndDeduplicates(t *testing.T) {
 	router := newTestRouter(t, true)
 	token := registerTestUser(t, router, "eml-import", "eml-import@example.com")
