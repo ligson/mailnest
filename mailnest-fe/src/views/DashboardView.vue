@@ -83,27 +83,26 @@
 
       <main class="mail-list-pane">
         <div class="mail-list-header">
-          <div class="mail-list-heading">
-            <h2 class="mail-page-title">{{ activeFolderLabel }}</h2>
-            <p class="mail-count">{{ mailCountText }}</p>
-          </div>
-          <a-space class="mail-list-actions" wrap>
+          <div class="mail-list-title-row">
+            <div class="mail-list-heading">
+              <h2 class="mail-page-title">{{ activeFolderLabel }}</h2>
+              <p class="mail-count">{{ mailCountText }}</p>
+            </div>
             <a-radio-group
               v-if="activeSystemFolder !== 'drafts'"
               v-model:value="mailViewMode"
+              class="mail-view-switch"
               size="small"
               @change="onViewModeChanged"
             >
               <a-radio-button value="messages">邮件</a-radio-button>
               <a-radio-button value="threads">会话</a-radio-button>
             </a-radio-group>
+          </div>
+          <div class="mail-list-actions">
             <a-button type="primary" @click="openCompose">
               <template #icon><send-outlined /></template>
               写邮件
-            </a-button>
-            <a-button @click="openImportEML">
-              <template #icon><upload-outlined /></template>
-              导入 EML
             </a-button>
             <a-space-compact>
               <a-button :loading="receivingMail" :disabled="!visibleAccounts.length" @click="receiveDefaultMail">
@@ -122,11 +121,17 @@
                 </template>
               </a-dropdown>
             </a-space-compact>
-            <a-button @click="refreshAll">
-              <template #icon><reload-outlined /></template>
-              刷新列表
-            </a-button>
-          </a-space>
+            <a-tooltip title="刷新列表">
+              <a-button class="mail-toolbar-icon-button" aria-label="刷新列表" @click="refreshAll">
+                <template #icon><reload-outlined /></template>
+              </a-button>
+            </a-tooltip>
+            <a-tooltip title="导入 EML">
+              <a-button class="mail-toolbar-icon-button" aria-label="导入 EML" @click="openImportEML">
+                <template #icon><upload-outlined /></template>
+              </a-button>
+            </a-tooltip>
+          </div>
         </div>
 
         <div class="mail-filter-bar">
@@ -3072,61 +3077,97 @@ function looksLikeEmail(value: string) {
 }
 
 .mail-list-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px 14px;
+  display: grid;
+  gap: 10px;
   min-width: 0;
   flex: none;
-  padding: 18px 18px 12px;
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--surface-bg) 88%, var(--surface-muted));
+}
+
+.mail-list-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .mail-list-heading {
-  display: grid;
-  flex: 1 1 180px;
+  display: flex;
+  flex: 1 1 auto;
   min-width: min(100%, 160px);
   max-width: 100%;
-  gap: 2px;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .mail-list-actions {
-  flex: 0 1 auto;
-  margin-left: auto;
-  justify-content: flex-end;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-.mail-list-actions :deep(.ant-space-item) {
-  max-width: 100%;
+.mail-list-actions :deep(.ant-btn) {
+  height: 34px;
+  border-radius: 7px;
+  font-weight: 600;
 }
 
 .mail-page-title {
+  min-width: 0;
   margin: 0;
   color: var(--heading-color);
-  font-size: 20px;
+  font-size: 22px;
+  line-height: 1.15;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .mail-count {
-  margin: 4px 0 0;
+  flex: none;
+  margin: 0;
   color: var(--muted-color);
+  font-size: 13px;
   white-space: nowrap;
+}
+
+.mail-view-switch {
+  flex: none;
+}
+
+.mail-view-switch :deep(.ant-radio-button-wrapper) {
+  height: 30px;
+  padding: 0 10px;
+  line-height: 28px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.mail-toolbar-icon-button {
+  width: 34px;
+  padding: 0;
 }
 
 .mail-filter-bar {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   flex: none;
-  padding: 0 18px 10px;
+  padding: 10px 14px 8px;
   overflow: hidden;
+  background: var(--surface-bg);
 }
 
 .mail-search-box {
   display: grid;
-  grid-template-columns: 92px minmax(0, 1fr) 42px;
+  grid-template-columns: 82px minmax(0, 1fr) 38px;
   min-width: 0;
   width: 100%;
 }
@@ -3142,17 +3183,17 @@ function looksLikeEmail(value: string) {
 }
 
 .mail-search-box :deep(.ant-select-selector) {
-  height: 38px !important;
+  height: 34px !important;
   border-start-end-radius: 0 !important;
   border-end-end-radius: 0 !important;
 }
 
 .mail-search-box :deep(.ant-select-selection-item) {
-  line-height: 36px !important;
+  line-height: 32px !important;
 }
 
 .search-keyword-input {
-  height: 38px;
+  height: 34px;
   border-radius: 0;
   margin-left: -1px;
 }
@@ -3164,8 +3205,8 @@ function looksLikeEmail(value: string) {
 }
 
 .search-submit-button {
-  width: 42px;
-  height: 38px;
+  width: 38px;
+  height: 34px;
   border-start-start-radius: 0;
   border-end-start-radius: 0;
   margin-left: -1px;
@@ -3185,15 +3226,15 @@ function looksLikeEmail(value: string) {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  min-height: 28px;
+  min-height: 24px;
 }
 
 .advanced-filter-toggle {
   display: inline-flex;
-  height: 28px;
+  height: 24px;
   align-items: center;
   gap: 5px;
-  padding: 0 8px;
+  padding: 0 6px;
   color: var(--muted-color);
   font-size: 12px;
 }
@@ -3313,7 +3354,16 @@ function looksLikeEmail(value: string) {
 
 @media (max-width: 1280px) {
   .mail-search-box {
-    grid-template-columns: 88px minmax(0, 1fr) 42px;
+    grid-template-columns: 76px minmax(0, 1fr) 38px;
+  }
+
+  .mail-list-heading {
+    display: grid;
+    gap: 2px;
+  }
+
+  .mail-page-title {
+    font-size: 21px;
   }
 }
 
