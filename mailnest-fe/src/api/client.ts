@@ -593,7 +593,7 @@ export async function requestEnvelope<T>(request: Promise<{ data: Envelope<T> }>
         throw new Error('请求超时，请稍后重试');
       }
       if (error.response?.status === 413) {
-        throw new Error('上传内容过大，请减少文件数量或分批上传');
+        throw new Error('上传内容过大，单次导入总大小不能超过 2GB，请分批上传');
       }
       throw new Error(envelope?.message || error.message || '请求失败');
     }
@@ -764,7 +764,7 @@ export const messageApi = {
     form.append('folder', payload.folder || 'INBOX');
     payload.files.forEach((file) => form.append('file', file, file.name));
     return requestEnvelope<ImportEMLResult>(apiClient.post('/messages/import-eml', form, {
-      timeout: Math.max(60000, Math.min(300000, payload.files.length * 30000)),
+      timeout: 0,
     }));
   },
 };

@@ -591,7 +591,7 @@
                 <template #icon><upload-outlined /></template>
                 选择 EML 文件
               </a-button>
-              <span class="upload-picker-hint">最多 100 个，单个最大 50MB，总大小最大 200MB</span>
+              <span class="upload-picker-hint">可批量选择，单个最大 2GB，总大小最大 2GB</span>
             </div>
             <div v-if="importEMLForm.files.length" class="import-eml-file-list">
               <div v-for="(file, index) in importEMLForm.files" :key="`${file.name}-${file.size}-${index}`" class="import-eml-file-item">
@@ -1071,9 +1071,8 @@ const resizeConstraints = {
   minReader: 320,
   resizers: 12,
 };
-const importEMLMaxFileCount = 100;
-const importEMLMaxFileBytes = 50 * 1024 * 1024;
-const importEMLMaxBatchBytes = 200 * 1024 * 1024;
+const importEMLMaxFileBytes = 2 * 1024 * 1024 * 1024;
+const importEMLMaxBatchBytes = 2 * 1024 * 1024 * 1024;
 let composeSignatureInserted = false;
 let composeContextRequestId = 0;
 let draftSaveTimer: number | undefined;
@@ -1988,9 +1987,6 @@ function resetImportEML() {
 }
 
 function validateImportEMLFiles(files: File[]) {
-  if (files.length > importEMLMaxFileCount) {
-    return `一次最多导入 ${importEMLMaxFileCount} 个 EML 文件，请分批选择`;
-  }
   const oversized = files.find((file) => file.size > importEMLMaxFileBytes);
   if (oversized) {
     return `${oversized.name} 超过 ${formatSize(importEMLMaxFileBytes)}，请单独处理或拆分后导入`;

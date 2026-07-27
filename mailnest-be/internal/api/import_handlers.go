@@ -17,6 +17,7 @@ func (a *App) handleImportEMLMessage(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxImportEMLBatchBytes+maxImportEMLMultipartOverhead)
 	files, err := readImportEMLFiles(r)
 	if err != nil {
 		response.Error(w, http.StatusBadRequest, err.Error())
@@ -105,7 +106,7 @@ func importEMLBatchPayload(userID, accountID int64, folder string, files []impor
 		"message":        firstMessage,
 		"batch":          result.total > 1,
 		"maxFileSizeMB":  maxImportEMLBytes >> 20,
-		"maxBatchCount":  maxImportEMLBatchCount,
+		"maxBatchCount":  nil,
 		"maxBatchSizeMB": maxImportEMLBatchBytes >> 20,
 	}
 	return result

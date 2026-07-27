@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -185,6 +186,26 @@ func TestImportEMLMessageBatchContinuesWhenOneFileFails(t *testing.T) {
 	listResp := performRequest(router, http.MethodGet, "/api/v1/messages", "", token)
 	if listResp.Code != http.StatusOK || listItemCount(t, listResp.Body.Bytes()) != 2 {
 		t.Fatalf("expected two imported messages, got %d %s", listResp.Code, listResp.Body.String())
+	}
+}
+
+func TestImportEMLMessageBatchDoesNotLimitFileCount(t *testing.T) {
+	router := newTestRouter(t, true)
+	token := registerTestUser(t, router, "eml-many", "eml-many@example.com")
+	accountID := createTestAccount(t, router, token)
+	files := make([]emlImportFile, 0, 101)
+	for i := 0; i < 101; i++ {
+		raw := []byte(fmt.Sprintf("From: Sender <sender@example.com>\r\nTo: Reader <reader@example.com>\r\nSubject: Batch Many %03d\r\nMessage-ID: <batch-many-%03d@example.com>\r\nDate: Mon, 27 Jul 2026 10:00:00 +0800\r\n\r\nMany %03d.", i, i, i))
+		files = append(files, emlImportFile{Name: fmt.Sprintf("many-%03d.eml", i), Data: raw})
+	}
+
+	resp := performEMLImportFiles(t, router, token, accountID, files)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected many-file import status 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	data := decodeEnvelope(t, resp.Body.Bytes())["data"].(map[string]any)
+	if data["total"] != float64(101) || data["successCount"] != float64(101) || data["insertedCount"] != float64(101) || data["failedCount"] != float64(0) {
+		t.Fatalf("expected all 101 EML files to import, got %#v", data)
 	}
 }
 
