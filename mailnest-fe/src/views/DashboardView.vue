@@ -1,5 +1,5 @@
 <template>
-  <AppLayout selected-key="/mail">
+  <AppLayout selected-key="/mail" content-class="mail-shell-content">
     <section
       ref="workspaceEl"
       class="mail-workspace"
@@ -105,9 +105,26 @@
               <template #icon><upload-outlined /></template>
               导入 EML
             </a-button>
+            <a-space-compact>
+              <a-button :loading="receivingMail" :disabled="!visibleAccounts.length" @click="receiveDefaultMail">
+                <template #icon><download-outlined /></template>
+                {{ receiveButtonText }}
+              </a-button>
+              <a-dropdown :trigger="['click']" :disabled="receivingMail || !visibleAccounts.length">
+                <a-button aria-label="选择收取范围">
+                  <template #icon><down-outlined /></template>
+                </a-button>
+                <template #overlay>
+                  <a-menu @click="handleReceiveMenuClick">
+                    <a-menu-item key="current" :disabled="!filters.accountId">收取当前账号</a-menu-item>
+                    <a-menu-item key="all">收取全部启用账号</a-menu-item>
+                  </a-menu>
+                </template>
+              </a-dropdown>
+            </a-space-compact>
             <a-button @click="refreshAll">
               <template #icon><reload-outlined /></template>
-              刷新
+              刷新列表
             </a-button>
           </a-space>
         </div>
@@ -218,7 +235,7 @@
               <p class="mail-empty-copy">{{ mailEmptyDescription }}</p>
               <a-button v-if="!accounts.length" type="primary" @click="router.push('/accounts')">配置邮箱账号</a-button>
               <a-button v-else-if="mailViewMode === 'threads' && activeSystemFolder !== 'drafts'" type="primary" @click="rebuildThreads('empty')">补齐会话</a-button>
-              <a-button v-else @click="refreshAll">刷新邮件</a-button>
+              <a-button v-else @click="receiveDefaultMail">收取邮件</a-button>
             </a-empty>
           </div>
           <div v-else-if="mailViewMode === 'threads'" class="mail-list">
@@ -879,6 +896,7 @@ import {
   CheckOutlined,
   ClearOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   DownOutlined,
   EditOutlined,
   FilterOutlined,
@@ -995,6 +1013,7 @@ const composeSourceMessageId = ref('');
 const composeLoading = ref(false);
 const sending = ref(false);
 const batching = ref(false);
+const receivingMail = ref(false);
 const importEMLFileInput = ref<HTMLInputElement | null>(null);
 const composeEditor = ref<HTMLElement | null>(null);
 const composeAttachmentInput = ref<HTMLInputElement | null>(null);
@@ -1238,6 +1257,12 @@ const currentListEmpty = computed(() => (
 ));
 const folderModalTitle = computed(() => (editingFolderId.value ? '编辑文件夹' : '新增文件夹'));
 const folderModalOkText = computed(() => (editingFolderId.value ? '保存' : '创建'));
+const receiveButtonText = computed(() => {
+  if (receivingMail.value) {
+    return '收取中';
+  }
+  return filters.accountId ? '收取当前' : '收取全部';
+});
 const selectedMessageIds = computed(() => Array.from(selectedMessageSet.value));
 const pageSelectableIds = computed(() => messages.value.filter((item) => !item.isDraft).map((item) => item.id));
 const pageSelectedCount = computed(() => pageSelectableIds.value.filter((id) => selectedMessageSet.value.has(id)).length);
@@ -1638,6 +1663,75 @@ async function openMessageRuleLogs(messageId: string) {
   } finally {
     ruleLogLoading.value = false;
   }
+}
+
+function handleReceiveMenuClick(event: { key: string | number }) {
+  void receiveMail(event.key === 'all' ? 'all' : 'current');
+}
+
+function receiveDefaultMail() {
+  void receiveMail(filters.accountId ? 'current' : 'all');
+}
+
+async function receiveMail(scope: 'current' | 'all') {
+  if (receivingMail.value) {
+    return;
+  }
+  const targets = receiveTargetAccounts(scope);
+  if (!targets.length) {
+    message.warning(scope === 'current' ? '请先在左侧选择一个邮箱账号' : '暂无启用邮箱账号可收取');
+    return;
+  }
+  receivingMail.value = true;
+  try {
+    const results: Array<{ account: MailAccount; newCount: number; warnings: string[] }> = [];
+    const failures: Array<{ account: MailAccount; error: string }> = [];
+    for (const account of targets) {
+      try {
+        const result = await mailAccountApi.sync(account.id);
+        results.push({ account, newCount: result.newMessageCount, warnings: result.warnings || [] });
+      } catch (error) {
+        failures.push({
+          account,
+          error: error instanceof Error ? error.message : '收取失败',
+        });
+      }
+    }
+    showReceiveResult(results, failures);
+    await refreshAll();
+  } finally {
+    receivingMail.value = false;
+  }
+}
+
+function receiveTargetAccounts(scope: 'current' | 'all') {
+  if (scope === 'current') {
+    return filters.accountId
+      ? visibleAccounts.value.filter((account) => account.id === filters.accountId)
+      : [];
+  }
+  return visibleAccounts.value;
+}
+
+function showReceiveResult(
+  results: Array<{ account: MailAccount; newCount: number; warnings: string[] }>,
+  failures: Array<{ account: MailAccount; error: string }>,
+) {
+  const newTotal = results.reduce((sum, item) => sum + item.newCount, 0);
+  const warnings = results.flatMap((item) => item.warnings.map((warning) => `${accountDisplayName(item.account)}：${warning}`));
+  if (failures.length) {
+    message.error(`收取完成，新增 ${newTotal} 封，${failures.length} 个账号失败：${failures.map((item) => accountDisplayName(item.account)).join('、')}`);
+    return;
+  }
+  if (warnings.length) {
+    message.warning(`收取完成，新增 ${newTotal} 封；${warnings.join('；')}`);
+    return;
+  }
+  message.success(`收取完成，新增 ${newTotal} 封邮件`);
+}
+
+function accountDisplayName(account: MailAccount) {
+  return account.displayName || account.email;
 }
 
 function openFolderCreate() {
@@ -2776,11 +2870,11 @@ function looksLikeEmail(value: string) {
   min-width: 0;
   height: 100%;
   min-height: 0;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border: 0;
+  border-radius: 0;
   overflow: hidden;
   background: var(--surface-bg);
-  box-shadow: var(--shadow-soft);
+  box-shadow: none;
 }
 
 .mail-resizer {

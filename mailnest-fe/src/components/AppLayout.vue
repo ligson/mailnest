@@ -93,7 +93,7 @@
           </template>
         </a-dropdown>
       </a-layout-header>
-      <a-layout-content class="shell-content">
+      <a-layout-content class="shell-content" :class="contentClass">
         <slot />
       </a-layout-content>
     </a-layout>
@@ -144,6 +144,7 @@ import { useAuthStore } from '../stores/auth';
 
 defineProps<{
   selectedKey: string;
+  contentClass?: string;
 }>();
 
 const router = useRouter();
