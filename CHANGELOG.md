@@ -37,6 +37,7 @@
 
 ### 部署
 
+- 将前端版本 `20260727144740-97af7cb-mail-toolbar` 部署到生产环境的 Mail Nest Docker Compose 服务，后端继续使用 `20260727142753-7745c3a-attachment-preview`；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727144740-mail-toolbar.tgz`；线上健康检查、`/mail` 静态页面、前后端容器镜像标签和新工具栏静态资源验证通过。
 - 将前后端版本 `20260727142753-7745c3a-attachment-preview` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727142753-attachment-preview.tgz`；线上健康检查、`/mail` 静态页面、附件预览接口未登录拦截、前后端容器镜像标签和后端启动日志验证通过。
 - 将前端版本 `20260727141811-802e031-mail-shell` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727141811-mail-shell.tgz`；线上健康检查、`/mail` 静态页面、前后端容器镜像标签、线上 CSS 贴边规则和新前端文案资源验证通过。
 - 将前后端版本 `20260727135309-a97d75e-preview-eml` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727135309-preview-eml.tgz`；线上健康检查、`/mail` 静态页面、前后端容器镜像标签、附件预览接口未登录拦截、EML 导入接口未登录拦截和后端启动日志验证通过。
