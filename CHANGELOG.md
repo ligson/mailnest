@@ -15,7 +15,7 @@
 - 修复发送记录、邮件列表、邮件详情和会话参与人展示地址时可能直接显示 RFC 2047 编码词的问题，历史记录读取时会统一转为可读的 `姓名 <邮箱>` 格式。
 - 新发邮件保存发送记录收件人快照时，会先解码常见邮件头编码，避免新的发送记录继续写入乱码地址。
 - 修复邮件页外层工作区重复 padding、边框、圆角导致三栏邮箱界面四周出现浅色留白的问题，邮件页改为贴边工作台布局。
-- 修复部分附件以 `application/octet-stream` 保存时无法按 PDF、图片或文本正确预览的问题，后端会按文件扩展名补充可信 MIME 类型，前端预览时也会为 Blob 设置匹配的类型。
+- 修复部分附件以 `application/octet-stream` 保存时无法按 PDF、图片或文本正确预览的问题，后端会按文件扩展名补充可信 MIME 类型，前端预览时也会为 Blob 设置匹配的类型；同时修复 Office 文档 MIME 中包含 `openxmlformats` 被误判为 XML 文本导致乱码的问题，Office 类型改为仅提示下载。
 - 补充 `.gitignore` 忽略 `output/` 临时构建产物目录，避免本地镜像包误提交到仓库。
 
 ### 文档
@@ -25,12 +25,14 @@
 ### 测试
 
 - 新增后端测试覆盖附件预览鉴权和内容返回、EML 导入、重复导入去重和导入后详情读取。
+- 新增后端测试覆盖 PDF 附件预览从文件名推断 `application/pdf` 响应类型。
 - 新增后端测试覆盖发送记录收件人、邮件地址展示和发送记录快照的编码词解码行为。
 - 前端 `rtk npm run build` 通过，覆盖邮件页手动收取入口、刷新列表文案和贴边工作区布局。
 - 后端 `rtk go test ./...` 通过，前端 `rtk npm run build` 通过。
 
 ### 部署
 
+- 将前后端版本 `20260727142753-7745c3a-attachment-preview` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727142753-attachment-preview.tgz`；线上健康检查、`/mail` 静态页面、附件预览接口未登录拦截、前后端容器镜像标签和后端启动日志验证通过。
 - 将前端版本 `20260727141811-802e031-mail-shell` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727141811-mail-shell.tgz`；线上健康检查、`/mail` 静态页面、前后端容器镜像标签、线上 CSS 贴边规则和新前端文案资源验证通过。
 - 将前后端版本 `20260727135309-a97d75e-preview-eml` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727135309-preview-eml.tgz`；线上健康检查、`/mail` 静态页面、前后端容器镜像标签、附件预览接口未登录拦截、EML 导入接口未登录拦截和后端启动日志验证通过。
 

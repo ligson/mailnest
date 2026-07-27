@@ -1311,7 +1311,8 @@ JSON 请求：
 
 - 需要登录，且附件必须属于当前用户。
 - 响应直接返回附件内容，`Content-Disposition` 为 `inline`。
-- 前端当前支持图片、PDF、文本、JSON、XML、HTML 以在线方式预览；Office 文档等浏览器无法直接渲染的类型保留下载入口。
+- 前端当前支持图片、PDF、文本、JSON、XML、HTML 以在线方式预览；Office 文档等浏览器无法直接渲染的类型保留下载入口，不能因为 Office MIME 中包含 `openxmlformats` 而按 XML 文本读取。
+- 当历史附件只记录了空类型或 `application/octet-stream` 时，后端会按文件扩展名推断预览响应类型，例如 `.pdf` 返回 `application/pdf`，避免浏览器把 PDF 预览当作普通下载。
 
 ## 8. 本地文件夹接口
 
