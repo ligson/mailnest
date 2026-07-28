@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -289,32 +290,55 @@ func TestFullSyncFetchesAllInboxMessagesAndReportsProgress(t *testing.T) {
 }
 
 func TestFullSyncCleanupDeletesOnlySyncedOldServerMessagesWhenEnabled(t *testing.T) {
-	fetcher := &mail.FakeFetcher{Messages: []mail.FetchedMessage{
-		{
-			UID:        "1001",
-			MessageID:  "<old@example.com>",
-			Subject:    "旧邮件",
-			From:       "archive@example.com",
-			To:         []string{"first@example.com"},
-			SentAt:     "2026-05-01T10:00:00+08:00",
-			TextBody:   "旧邮件正文",
-			RawContent: "Subject: 旧邮件\r\n\r\n旧邮件正文",
+	fetcher := &mail.FakeFetcher{FolderMessages: map[string][]mail.FetchedMessage{
+		"INBOX": {
+			{
+				UID:        "1001",
+				MessageID:  "<old@example.com>",
+				Subject:    "旧邮件",
+				From:       "archive@example.com",
+				To:         []string{"first@example.com"},
+				SentAt:     "2026-05-01T10:00:00+08:00",
+				TextBody:   "旧邮件正文",
+				RawContent: "Subject: 旧邮件\r\n\r\n旧邮件正文",
+			},
+			{
+				UID:       "1002",
+				MessageID: "<old-missing-raw@example.com>",
+				Subject:   "旧邮件无原文",
+				From:      "archive@example.com",
+				To:        []string{"first@example.com"},
+				SentAt:    "2026-05-02T10:00:00+08:00",
+				TextBody:  "旧邮件正文",
+			},
+			{
+				UID:        "1003",
+				MessageID:  "<new@example.com>",
+				Subject:    "新邮件",
+				From:       "archive@example.com",
+				To:         []string{"first@example.com"},
+				SentAt:     time.Now().Format(time.RFC3339),
+				TextBody:   "新邮件正文",
+				RawContent: "Subject: 新邮件\r\n\r\n新邮件正文",
+			},
 		},
-		{
-			UID:        "1002",
-			MessageID:  "<new@example.com>",
-			Subject:    "新邮件",
-			From:       "archive@example.com",
-			To:         []string{"first@example.com"},
-			SentAt:     time.Now().Format(time.RFC3339),
-			TextBody:   "新邮件正文",
-			RawContent: "Subject: 新邮件\r\n\r\n新邮件正文",
+		"Sent": {
+			{
+				UID:        "2001",
+				MessageID:  "<old-sent@example.com>",
+				Subject:    "旧发件",
+				From:       "cleanup@example.com",
+				To:         []string{"first@example.com"},
+				SentAt:     "2026-05-01T10:00:00+08:00",
+				TextBody:   "旧发件正文",
+				RawContent: "Subject: 旧发件\r\n\r\n旧发件正文",
+			},
 		},
 	}}
 	router := newTestRouterWithFetcher(t, true, fetcher)
 	token := registerTestUser(t, router, "cleanup-user", "cleanup-user@example.com")
 
-	createBody := `{"displayName":"清理邮箱","email":"cleanup@example.com","imapHost":"imap.example.com","imapPort":993,"imapTls":true,"imapUsername":"cleanup@example.com","imapPassword":"mail-password","pollIntervalMinutes":10,"enabled":true,"cleanupEnabled":true,"cleanupRetentionDays":30}`
+	createBody := `{"displayName":"清理邮箱","email":"cleanup@example.com","imapHost":"imap.example.com","imapPort":993,"imapTls":true,"imapUsername":"cleanup@example.com","imapPassword":"mail-password","sentFolder":"Sent","pollIntervalMinutes":10,"enabled":true,"cleanupEnabled":true,"cleanupRetentionDays":30}`
 	createResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts", createBody, token)
 	if createResp.Code != http.StatusCreated {
 		t.Fatalf("create account failed: %d %s", createResp.Code, createResp.Body.String())
@@ -328,7 +352,79 @@ func TestFullSyncCleanupDeletesOnlySyncedOldServerMessagesWhenEnabled(t *testing
 	waitForFullSyncStatus(t, router, token, accountID, "success")
 
 	if got := fmt.Sprint(fetcher.DeletedUIDs); got != "[1001]" {
-		t.Fatalf("expected only old synced UID 1001 to be deleted from server, got %s", got)
+		t.Fatalf("expected only old synced INBOX UID with local raw file to be deleted from server, got %s", got)
+	}
+
+	deletedResp := performRequest(router, http.MethodGet, "/api/v1/server-delete-logs?accountId="+accountID+"&status=deleted", "", token)
+	if deletedResp.Code != http.StatusOK {
+		t.Fatalf("expected delete logs status 200, got %d: %s", deletedResp.Code, deletedResp.Body.String())
+	}
+	if listItemCount(t, deletedResp.Body.Bytes()) != 1 {
+		t.Fatalf("expected one deleted log, got %s", deletedResp.Body.String())
+	}
+	deletedLog := firstListItem(t, deletedResp.Body.Bytes())
+	if deletedLog["imapUid"] != "1001" || deletedLog["rawExists"] != true {
+		t.Fatalf("expected deleted UID 1001 with rawExists=true, got %#v", deletedLog)
+	}
+
+	skippedResp := performRequest(router, http.MethodGet, "/api/v1/server-delete-logs?accountId="+accountID+"&status=skipped", "", token)
+	if skippedResp.Code != http.StatusOK {
+		t.Fatalf("expected skipped logs status 200, got %d: %s", skippedResp.Code, skippedResp.Body.String())
+	}
+	if listItemCount(t, skippedResp.Body.Bytes()) != 1 {
+		t.Fatalf("expected one skipped log, got %s", skippedResp.Body.String())
+	}
+	skippedLog := firstListItem(t, skippedResp.Body.Bytes())
+	if skippedLog["imapUid"] != "1002" || skippedLog["reason"] != "raw_file_missing" {
+		t.Fatalf("expected UID 1002 to be skipped because raw file is missing, got %#v", skippedLog)
+	}
+}
+
+func TestFullSyncCleanupLogsDeleteFailure(t *testing.T) {
+	fetcher := &mail.FakeFetcher{
+		DeleteErr: errors.New("imap delete refused"),
+		Messages: []mail.FetchedMessage{
+			{
+				UID:        "9001",
+				MessageID:  "<delete-failed@example.com>",
+				Subject:    "删除失败邮件",
+				From:       "archive@example.com",
+				To:         []string{"first@example.com"},
+				SentAt:     "2026-05-01T10:00:00+08:00",
+				TextBody:   "删除失败正文",
+				RawContent: "Subject: 删除失败邮件\r\n\r\n删除失败正文",
+			},
+		},
+	}
+	router := newTestRouterWithFetcher(t, true, fetcher)
+	token := registerTestUser(t, router, "cleanup-failure-user", "cleanup-failure-user@example.com")
+
+	createBody := `{"displayName":"清理失败邮箱","email":"cleanup-failure@example.com","imapHost":"imap.example.com","imapPort":993,"imapTls":true,"imapUsername":"cleanup-failure@example.com","imapPassword":"mail-password","pollIntervalMinutes":10,"enabled":true,"cleanupEnabled":true,"cleanupRetentionDays":30}`
+	createResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts", createBody, token)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create account failed: %d %s", createResp.Code, createResp.Body.String())
+	}
+	accountID := nestedString(t, decodeEnvelope(t, createResp.Body.Bytes()), "data", "id")
+
+	startResp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts/"+accountID+"/full-sync/start", "", token)
+	if startResp.Code != http.StatusAccepted {
+		t.Fatalf("expected full sync start status 202, got %d: %s", startResp.Code, startResp.Body.String())
+	}
+	waitForFullSyncStatus(t, router, token, accountID, "failed")
+
+	failedResp := performRequest(router, http.MethodGet, "/api/v1/server-delete-logs?accountId="+accountID+"&status=failed", "", token)
+	if failedResp.Code != http.StatusOK {
+		t.Fatalf("expected failed logs status 200, got %d: %s", failedResp.Code, failedResp.Body.String())
+	}
+	if listItemCount(t, failedResp.Body.Bytes()) != 1 {
+		t.Fatalf("expected one failed delete log, got %s", failedResp.Body.String())
+	}
+	failedLog := firstListItem(t, failedResp.Body.Bytes())
+	if failedLog["imapUid"] != "9001" || failedLog["reason"] != "imap_delete_failed" {
+		t.Fatalf("expected failed UID 9001 with imap_delete_failed reason, got %#v", failedLog)
+	}
+	if failedLog["errorMessage"] != "imap delete refused" {
+		t.Fatalf("expected IMAP failure message, got %#v", failedLog)
 	}
 }
 

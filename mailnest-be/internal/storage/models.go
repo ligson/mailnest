@@ -498,6 +498,82 @@ type ListMailSendLogsQuery struct {
 	Offset      int
 }
 
+type MailServerDeleteCandidate struct {
+	MessageID  int64
+	UserID     int64
+	AccountID  int64
+	Folder     string
+	IMAPUID    string
+	Subject    sql.NullString
+	FromAddr   sql.NullString
+	SentAt     sql.NullTime
+	ReceivedAt sql.NullTime
+	RawPath    sql.NullString
+}
+
+type MailServerDeleteLog struct {
+	ID           int64
+	UserID       int64
+	AccountID    int64
+	AccountEmail sql.NullString
+	SyncJobID    sql.NullInt64
+	MessageID    sql.NullInt64
+	Folder       string
+	IMAPUID      string
+	Subject      sql.NullString
+	FromAddr     sql.NullString
+	SentAt       sql.NullTime
+	ReceivedAt   sql.NullTime
+	RawPath      sql.NullString
+	RawExists    bool
+	Status       string
+	Reason       string
+	ErrorMessage sql.NullString
+	TriggerType  string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+type CreateMailServerDeleteLogParams struct {
+	UserID       int64
+	AccountID    int64
+	SyncJobID    sql.NullInt64
+	MessageID    int64
+	Folder       string
+	IMAPUID      string
+	Subject      sql.NullString
+	FromAddr     sql.NullString
+	SentAt       sql.NullTime
+	ReceivedAt   sql.NullTime
+	RawPath      sql.NullString
+	RawExists    bool
+	Status       string
+	Reason       string
+	ErrorMessage string
+	TriggerType  string
+}
+
+type UpdateMailServerDeleteLogStatusParams struct {
+	UserID       int64
+	ID           int64
+	Status       string
+	Reason       string
+	ErrorMessage string
+}
+
+type ListMailServerDeleteLogsQuery struct {
+	UserID    int64
+	AccountID int64
+	MessageID int64
+	SyncJobID int64
+	Status    string
+	Keyword   string
+	DateFrom  sql.NullTime
+	DateTo    sql.NullTime
+	Limit     int
+	Offset    int
+}
+
 type MessageBatchActionParams struct {
 	UserID     int64
 	MessageIDs []int64

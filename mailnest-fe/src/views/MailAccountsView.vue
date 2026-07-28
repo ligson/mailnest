@@ -88,6 +88,7 @@
                     <a-menu-item key="edit">编辑</a-menu-item>
                     <a-menu-item key="test" :disabled="testingId === record.id">测试连接</a-menu-item>
                     <a-menu-item key="sync-log">同步日志</a-menu-item>
+                    <a-menu-item key="delete-log">删除日志</a-menu-item>
                     <a-menu-divider />
                     <a-menu-item key="delete" danger>删除账号</a-menu-item>
                   </a-menu>
@@ -316,6 +317,72 @@
           </a-col>
         </a-row>
       </a-drawer>
+
+      <a-drawer v-model:open="deleteLogOpen" title="服务器删除日志" width="1080" :destroy-on-close="false">
+        <div v-if="deleteLogAccount" class="delete-log-header">
+          <div>
+            <strong>{{ deleteLogAccount.displayName }}</strong>
+            <div class="sync-log-subtitle">{{ deleteLogAccount.email }}</div>
+          </div>
+          <a-space>
+            <a-select v-model:value="deleteLogStatus" style="width: 140px" @change="loadServerDeleteLogs">
+              <a-select-option value="">全部状态</a-select-option>
+              <a-select-option value="deleted">已删除</a-select-option>
+              <a-select-option value="skipped">已跳过</a-select-option>
+              <a-select-option value="failed">失败</a-select-option>
+              <a-select-option value="pending">待确认</a-select-option>
+            </a-select>
+            <a-input-search
+              v-model:value="deleteLogKeyword"
+              allow-clear
+              placeholder="主题 / 发件人 / UID"
+              style="width: 240px"
+              @search="loadServerDeleteLogs"
+            />
+            <a-button @click="loadServerDeleteLogs">刷新</a-button>
+          </a-space>
+        </div>
+        <a-table
+          row-key="id"
+          size="small"
+          :columns="deleteLogColumns"
+          :data-source="serverDeleteLogs"
+          :loading="serverDeleteLogsLoading"
+          :pagination="false"
+        >
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'status'">
+              <a-tag :color="serverDeleteStatusColor(record.status)">
+                {{ serverDeleteStatusText(record.status) }}
+              </a-tag>
+            </template>
+            <template v-if="column.key === 'subject'">
+              <div class="delete-log-subject">
+                <span>{{ record.subject || '无主题' }}</span>
+                <small>UID {{ record.imapUid }}</small>
+              </div>
+            </template>
+            <template v-if="column.key === 'rawExists'">
+              <a-tag :color="record.rawExists ? 'green' : 'orange'">
+                {{ record.rawExists ? '已确认' : '未确认' }}
+              </a-tag>
+            </template>
+            <template v-if="column.key === 'sentAt'">
+              {{ formatTime(record.sentAt || record.receivedAt) }}
+            </template>
+            <template v-if="column.key === 'createdAt'">
+              {{ formatTime(record.createdAt) }}
+            </template>
+            <template v-if="column.key === 'reason'">
+              <span>{{ serverDeleteReasonText(record.reason) }}</span>
+              <div v-if="record.errorMessage" class="account-sync-error">{{ record.errorMessage }}</div>
+            </template>
+          </template>
+        </a-table>
+        <div class="delete-log-footer">
+          共 {{ serverDeleteLogTotal }} 条
+        </div>
+      </a-drawer>
     </section>
   </AppLayout>
 </template>
@@ -328,10 +395,12 @@ import type { MenuInfo } from 'ant-design-vue/es/menu/src/interface';
 import {
   mailAccountApi,
   oauthApi,
+  serverDeleteLogApi,
   syncJobApi,
   type CreateMailAccountPayload,
   type MailAccount,
   type MailAccountFolder,
+  type MailServerDeleteLog,
   type SyncJob,
   type SyncJobEvent,
   type UpdateMailAccountPayload,
@@ -361,6 +430,13 @@ const syncJobsLoading = ref(false);
 const selectedSyncJob = ref<SyncJob | null>(null);
 const syncJobEvents = ref<SyncJobEvent[]>([]);
 const syncJobEventsLoading = ref(false);
+const deleteLogOpen = ref(false);
+const deleteLogAccount = ref<MailAccount | null>(null);
+const deleteLogStatus = ref('');
+const deleteLogKeyword = ref('');
+const serverDeleteLogs = ref<MailServerDeleteLog[]>([]);
+const serverDeleteLogsLoading = ref(false);
+const serverDeleteLogTotal = ref(0);
 let statusTimer: number | undefined;
 const columns: TableColumnsType<MailAccount> = [
   { title: '名称', dataIndex: 'displayName', key: 'displayName' },
@@ -377,6 +453,15 @@ const jobColumns: TableColumnsType<SyncJob> = [
   { title: '状态', key: 'status', width: 90 },
   { title: '触发', dataIndex: 'triggerType', key: 'triggerType', width: 90 },
   { title: '开始时间', key: 'startedAt' },
+];
+const deleteLogColumns: TableColumnsType<MailServerDeleteLog> = [
+  { title: '状态', key: 'status', width: 90 },
+  { title: '邮件', key: 'subject', ellipsis: true },
+  { title: '发件人', dataIndex: 'from', key: 'from', width: 180, ellipsis: true },
+  { title: '本地原文', key: 'rawExists', width: 100 },
+  { title: '邮件时间', key: 'sentAt', width: 170 },
+  { title: '处理时间', key: 'createdAt', width: 170 },
+  { title: '原因', key: 'reason', width: 190 },
 ];
 const form = reactive<CreateMailAccountPayload>({
   displayName: '',
@@ -620,6 +705,9 @@ async function handleAccountAction(account: MailAccount, info: MenuInfo) {
     case 'sync-log':
       await openSyncLogCenter(account);
       break;
+    case 'delete-log':
+      await openServerDeleteLog(account);
+      break;
     case 'delete':
       confirmRemoveAccount(account.id);
       break;
@@ -855,6 +943,35 @@ async function selectSyncJob(record: SyncJob) {
   }
 }
 
+async function openServerDeleteLog(account: MailAccount) {
+  deleteLogAccount.value = account;
+  deleteLogStatus.value = '';
+  deleteLogKeyword.value = '';
+  deleteLogOpen.value = true;
+  await loadServerDeleteLogs();
+}
+
+async function loadServerDeleteLogs() {
+  if (!deleteLogAccount.value) {
+    return;
+  }
+  serverDeleteLogsLoading.value = true;
+  try {
+    const data = await serverDeleteLogApi.list({
+      accountId: deleteLogAccount.value.id,
+      status: deleteLogStatus.value || undefined,
+      keyword: deleteLogKeyword.value || undefined,
+      pageSize: 100,
+    });
+    serverDeleteLogs.value = data.items;
+    serverDeleteLogTotal.value = data.total;
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '获取服务器删除日志失败');
+  } finally {
+    serverDeleteLogsLoading.value = false;
+  }
+}
+
 function syncJobCustomRow(record: SyncJob) {
   return {
     class: selectedSyncJob.value?.id === record.id ? 'sync-job-row active' : 'sync-job-row',
@@ -862,6 +979,36 @@ function syncJobCustomRow(record: SyncJob) {
       void selectSyncJob(record);
     },
   };
+}
+
+function serverDeleteStatusText(status: string) {
+  const map: Record<string, string> = {
+    pending: '待确认',
+    deleted: '已删除',
+    skipped: '已跳过',
+    failed: '失败',
+  };
+  return map[status] || status;
+}
+
+function serverDeleteStatusColor(status: string) {
+  const map: Record<string, string> = {
+    pending: 'processing',
+    deleted: 'green',
+    skipped: 'orange',
+    failed: 'red',
+  };
+  return map[status] || 'default';
+}
+
+function serverDeleteReasonText(reason: string) {
+  const map: Record<string, string> = {
+    local_raw_verified: '原文已保存',
+    raw_file_missing: '原文缺失，跳过',
+    imap_delete_success: 'IMAP 删除成功',
+    imap_delete_failed: 'IMAP 删除失败',
+  };
+  return map[reason] || reason || '暂无';
 }
 
 function syncJobTagColor(status: string) {
@@ -955,6 +1102,44 @@ async function startMicrosoftOAuth() {
   align-items: center;
   gap: 8px;
   white-space: nowrap;
+}
+
+.sync-log-header,
+.delete-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.sync-log-subtitle {
+  margin-top: 4px;
+  color: var(--muted-color);
+  font-size: 12px;
+}
+
+.delete-log-subject {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.delete-log-subject span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delete-log-subject small,
+.delete-log-footer {
+  color: var(--muted-color);
+  font-size: 12px;
+}
+
+.delete-log-footer {
+  margin-top: 12px;
+  text-align: right;
 }
 
 .account-modal :deep(.ant-modal-body) {

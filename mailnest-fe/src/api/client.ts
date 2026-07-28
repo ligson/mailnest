@@ -545,6 +545,35 @@ export interface SyncJobEventListData {
   total: number;
 }
 
+export interface MailServerDeleteLog {
+  id: string;
+  accountId: string;
+  accountEmail: string | null;
+  syncJobId: string | null;
+  messageId: string | null;
+  folder: string;
+  imapUid: string;
+  subject: string | null;
+  from: string | null;
+  sentAt: string | null;
+  receivedAt: string | null;
+  rawPath: string | null;
+  rawExists: boolean;
+  status: 'pending' | 'deleted' | 'skipped' | 'failed' | string;
+  reason: string;
+  errorMessage: string | null;
+  triggerType: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MailServerDeleteLogListData {
+  items: MailServerDeleteLog[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
 export interface RulePreviewData {
   matchedCount: number;
   samples: MailMessage[];
@@ -850,6 +879,22 @@ export const syncJobApi = {
   },
   events(id: string, params?: { level?: string; page?: number; pageSize?: number }) {
     return requestEnvelope<SyncJobEventListData>(apiClient.get(`/sync-jobs/${id}/events`, { params }));
+  },
+};
+
+export const serverDeleteLogApi = {
+  list(params?: {
+    accountId?: string;
+    messageId?: string;
+    syncJobId?: string;
+    status?: string;
+    keyword?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    page?: number;
+    pageSize?: number;
+  }) {
+    return requestEnvelope<MailServerDeleteLogListData>(apiClient.get('/server-delete-logs', { params }));
   },
 };
 

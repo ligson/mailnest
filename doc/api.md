@@ -734,7 +734,61 @@ JSON 请求：
 - `cleanupEnabled`：是否在全量同步成功后清理服务器旧邮件，默认 `false`。
 - `cleanupRetentionDays`：服务器保留天数，默认 `90`。
 
-清理只在全量同步成功后执行，只删除已经保存到本地数据库、位于 `INBOX`、并且早于保留天数的邮件 UID。普通手动收取和定时增量收取不会触发服务器删除。该动作会通过 IMAP 标记 `\Deleted` 并执行 `EXPUNGE`，属于真实删除，前端必须给出明确风险提示。
+清理只在全量同步成功后执行，只删除已经保存到本地数据库、位于 `INBOX`、早于保留天数、并且本地 `raw.eml` 原文文件真实存在的邮件 UID。普通手动收取和定时增量收取不会触发服务器删除。该动作会通过 IMAP 标记 `\Deleted` 并执行 `EXPUNGE`，属于真实删除，前端必须给出明确风险提示。
+
+如果候选邮件缺少本地原文文件，后端必须跳过删除并写入服务器删除日志，避免远端邮件还没确认落盘就被删除。
+
+### 6.12 服务器删除日志
+
+`GET /api/v1/server-delete-logs`
+
+查询参数：
+
+- `accountId`：可选，按邮箱账号过滤。
+- `messageId`：可选，按本地邮件 ID 过滤。
+- `syncJobId`：可选，按同步任务 ID 过滤。
+- `status`：可选，`pending` / `deleted` / `skipped` / `failed`。
+- `keyword`：可选，按主题、发件人、UID、原因或错误信息搜索。
+- `dateFrom` / `dateTo`：可选，按日志创建日期过滤。
+- `page` / `pageSize`：分页参数。
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "获取成功",
+  "httpCode": 200,
+  "data": {
+    "items": [
+      {
+        "id": "1",
+        "accountId": "2",
+        "accountEmail": "demo@example.com",
+        "syncJobId": "10",
+        "messageId": "100",
+        "folder": "INBOX",
+        "imapUid": "12345",
+        "subject": "历史邮件",
+        "from": "sender@example.com",
+        "sentAt": "2026-05-01T10:00:00+08:00",
+        "receivedAt": "2026-07-01T10:00:00+08:00",
+        "rawPath": "/data/users/1/accounts/2/messages/INBOX/12345/raw.eml",
+        "rawExists": true,
+        "status": "deleted",
+        "reason": "imap_delete_success",
+        "errorMessage": null,
+        "triggerType": "full_sync_cleanup",
+        "createdAt": "2026-07-28T10:00:00+08:00",
+        "updatedAt": "2026-07-28T10:00:01+08:00"
+      }
+    ],
+    "page": 1,
+    "pageSize": 50,
+    "total": 1
+  }
+}
+```
 
 ## 7. 邮件接口
 

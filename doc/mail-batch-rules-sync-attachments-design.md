@@ -198,12 +198,25 @@ POST /api/v1/mail-rules/preview
 - 单个任务日志默认保留最近 200 条，避免无限增长。
 - 结构化详情里不要写敏感账号信息。
 
+### 5.2.1 服务器删除审计
+
+全量同步后的服务器旧邮件清理需要单独记录到 `mail_server_delete_logs`，因为它会真实修改远端邮箱状态，排障粒度必须到单封邮件。
+
+执行原则：
+
+- 只处理 `INBOX`，不清理已发送目录或其它 IMAP 文件夹。
+- 删除前必须确认本地数据库已有邮件记录，并且 `raw_path` 指向的原文文件在 NAS 数据目录中真实存在。
+- 原文缺失、UID 缺失或其它校验不通过时写入 `skipped`，不得调用 IMAP 删除。
+- IMAP 删除成功后写入 `deleted`，失败后写入 `failed` 和错误原因。
+- 日志字段包含账号、同步任务、邮件 ID、目录、UID、主题、发件人、邮件时间、本地原文路径、确认结果、状态和原因。
+
 ### 5.3 API 设计
 
 ```text
 GET /api/v1/mail-accounts/{id}/sync-jobs
 GET /api/v1/mail-sync-jobs/{jobId}
 GET /api/v1/mail-sync-jobs/{jobId}/events
+GET /api/v1/server-delete-logs
 ```
 
 返回内容建议包含：

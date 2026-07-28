@@ -43,6 +43,23 @@ func normalizeRuleActionType(value string) string {
 	}
 }
 
+func normalizeServerDeleteStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "pending", "deleted", "skipped", "failed":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "pending"
+	}
+}
+
+func normalizeServerDeleteTriggerType(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "full_sync_cleanup"
+	}
+	return value
+}
+
 func normalizeEmailKey(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }

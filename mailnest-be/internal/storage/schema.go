@@ -8,7 +8,7 @@ import (
 
 func (s *Store) migrateGORM() error {
 	if s.db.dialect == dialectMySQL && s.db.gormDB.Migrator().HasTable(&userModel{}) {
-		if err := s.db.gormDB.AutoMigrate(&mailDraftModel{}, &mailThreadModel{}, &mailRuleLogModel{}, &mailSendLogModel{}); err != nil {
+		if err := s.db.gormDB.AutoMigrate(&mailDraftModel{}, &mailThreadModel{}, &mailRuleLogModel{}, &mailSendLogModel{}, &mailServerDeleteLogModel{}); err != nil {
 			return fmt.Errorf("gorm automigrate mysql incremental tables: %w", err)
 		}
 		return s.createSupplementalIndexes()
@@ -29,6 +29,7 @@ func (s *Store) migrateGORM() error {
 		&mailSyncJobModel{},
 		&mailMessageStateModel{},
 		&mailSyncJobEventModel{},
+		&mailServerDeleteLogModel{},
 	); err != nil {
 		return fmt.Errorf("gorm automigrate %s: %w", s.db.dialect, err)
 	}
@@ -55,6 +56,7 @@ func (s *Store) migrateExistingSQLite() error {
 		{table: "mail_sync_jobs", model: &mailSyncJobModel{}},
 		{table: "mail_message_states", model: &mailMessageStateModel{}},
 		{table: "mail_sync_job_events", model: &mailSyncJobEventModel{}},
+		{table: "mail_server_delete_logs", model: &mailServerDeleteLogModel{}},
 	}
 	for _, item := range models {
 		exists, err := s.sqliteTableExists(item.table)
@@ -344,6 +346,9 @@ func supplementalIndexStatements(dialect dbDialect) []string {
 			`CREATE INDEX idx_mail_send_logs_user_account ON mail_send_logs(user_id, account_id, created_at DESC)`,
 			`CREATE INDEX idx_mail_send_logs_user_message ON mail_send_logs(user_id, message_id, created_at DESC)`,
 			`CREATE INDEX idx_mail_send_logs_user_status ON mail_send_logs(user_id, status, created_at DESC)`,
+			`CREATE INDEX idx_mail_server_delete_logs_user_created ON mail_server_delete_logs(user_id, created_at DESC, id DESC)`,
+			`CREATE INDEX idx_mail_server_delete_logs_user_account ON mail_server_delete_logs(user_id, account_id, created_at DESC)`,
+			`CREATE INDEX idx_mail_server_delete_logs_user_status ON mail_server_delete_logs(user_id, status, created_at DESC)`,
 		}
 	case dialectPostgres:
 		return []string{
@@ -363,6 +368,9 @@ func supplementalIndexStatements(dialect dbDialect) []string {
 			`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_account ON mail_send_logs(user_id, account_id, created_at DESC)`,
 			`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_message ON mail_send_logs(user_id, message_id, created_at DESC)`,
 			`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_status ON mail_send_logs(user_id, status, created_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_server_delete_logs_user_created ON mail_server_delete_logs(user_id, created_at DESC, id DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_server_delete_logs_user_account ON mail_server_delete_logs(user_id, account_id, created_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_server_delete_logs_user_status ON mail_server_delete_logs(user_id, status, created_at DESC)`,
 		}
 	default:
 		return []string{
@@ -382,6 +390,9 @@ func supplementalIndexStatements(dialect dbDialect) []string {
 			`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_account ON mail_send_logs(user_id, account_id, created_at DESC)`,
 			`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_message ON mail_send_logs(user_id, message_id, created_at DESC)`,
 			`CREATE INDEX IF NOT EXISTS idx_mail_send_logs_user_status ON mail_send_logs(user_id, status, created_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_server_delete_logs_user_created ON mail_server_delete_logs(user_id, created_at DESC, id DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_server_delete_logs_user_account ON mail_server_delete_logs(user_id, account_id, created_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_server_delete_logs_user_status ON mail_server_delete_logs(user_id, status, created_at DESC)`,
 		}
 	}
 }
@@ -670,3 +681,27 @@ type mailSyncJobEventModel struct {
 }
 
 func (mailSyncJobEventModel) TableName() string { return "mail_sync_job_events" }
+
+type mailServerDeleteLogModel struct {
+	ID           int64      `gorm:"primaryKey;autoIncrement;column:id;index:idx_mail_server_delete_logs_user_created,priority:3,sort:desc"`
+	UserID       int64      `gorm:"column:user_id;not null;index:idx_mail_server_delete_logs_user_created,priority:1;index:idx_mail_server_delete_logs_user_account,priority:1;index:idx_mail_server_delete_logs_user_status,priority:1"`
+	AccountID    int64      `gorm:"column:account_id;not null;index:idx_mail_server_delete_logs_user_account,priority:2"`
+	SyncJobID    *int64     `gorm:"column:sync_job_id"`
+	MessageID    *int64     `gorm:"column:message_id"`
+	Folder       string     `gorm:"column:folder;size:255;not null"`
+	IMAPUID      string     `gorm:"column:imap_uid;size:255;not null"`
+	Subject      *string    `gorm:"column:subject;type:text"`
+	FromAddr     *string    `gorm:"column:from_addr;type:text"`
+	SentAt       *time.Time `gorm:"column:sent_at"`
+	ReceivedAt   *time.Time `gorm:"column:received_at"`
+	RawPath      *string    `gorm:"column:raw_path;type:text"`
+	RawExists    int        `gorm:"column:raw_exists;not null;default:0"`
+	Status       string     `gorm:"column:status;size:32;not null;index:idx_mail_server_delete_logs_user_status,priority:2"`
+	Reason       string     `gorm:"column:reason;size:255;not null;default:''"`
+	ErrorMessage *string    `gorm:"column:error_message;type:text"`
+	TriggerType  string     `gorm:"column:trigger_type;size:64;not null;default:'full_sync_cleanup'"`
+	CreatedAt    time.Time  `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP;index:idx_mail_server_delete_logs_user_created,priority:2,sort:desc;index:idx_mail_server_delete_logs_user_account,priority:3,sort:desc"`
+	UpdatedAt    time.Time  `gorm:"column:updated_at;not null;default:CURRENT_TIMESTAMP"`
+}
+
+func (mailServerDeleteLogModel) TableName() string { return "mail_server_delete_logs" }

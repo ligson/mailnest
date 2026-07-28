@@ -73,6 +73,7 @@ type FakeFetcher struct {
 	FolderErrors   map[string]error
 	Folders        []FolderInfo
 	DeletedUIDs    []string
+	DeleteErr      error
 }
 
 func (f *FakeFetcher) TestConnection(account AccountConfig) error {
@@ -168,6 +169,9 @@ func (f *FakeFetcher) DeleteInboxUIDs(account AccountConfig, uids []string) erro
 }
 
 func (f *FakeFetcher) DeleteFolderUIDs(account AccountConfig, uids []string) error {
+	if f.DeleteErr != nil {
+		return f.DeleteErr
+	}
 	f.DeletedUIDs = append(f.DeletedUIDs, uids...)
 	return nil
 }

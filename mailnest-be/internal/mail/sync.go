@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -350,7 +352,7 @@ func (s *Service) runFullSync(userID, accountID int64, cancel <-chan struct{}) {
 		return
 	}
 
-	if err := s.cleanupServerOldMessages(userID, accountID, account, config); err != nil {
+	if err := s.cleanupServerOldMessages(userID, accountID, jobID, account, config); err != nil {
 		log.Printf("全量同步服务器清理失败 userID=%d accountID=%d err=%v", userID, accountID, err)
 		if jobID > 0 {
 			_ = s.store.FinishSyncJob(jobID, "failed", newCount, err.Error())
@@ -413,7 +415,7 @@ func fullSyncKey(userID, accountID int64) string {
 	return fmt.Sprintf("%d:%d", userID, accountID)
 }
 
-func (s *Service) cleanupServerOldMessages(userID, accountID int64, account storage.MailAccount, config AccountConfig) error {
+func (s *Service) cleanupServerOldMessages(userID, accountID, jobID int64, account storage.MailAccount, config AccountConfig) error {
 	if !account.CleanupEnabled {
 		return nil
 	}
@@ -422,25 +424,120 @@ func (s *Service) cleanupServerOldMessages(userID, accountID int64, account stor
 		retentionDays = 90
 	}
 	cutoff := time.Now().AddDate(0, 0, -retentionDays)
-	uids, err := s.store.ListSyncedInboxUIDsBefore(userID, accountID, cutoff)
+	candidates, err := s.store.ListServerCleanupCandidates(userID, accountID, sql.NullTime{Time: cutoff, Valid: true})
 	if err != nil {
 		return err
 	}
-	if len(uids) == 0 {
+	if len(candidates) == 0 {
 		return nil
 	}
-	log.Printf("全量同步后开始清理服务器旧邮件 userID=%d accountID=%d retentionDays=%d deleteCount=%d", userID, accountID, retentionDays, len(uids))
+	if jobID > 0 {
+		_ = s.store.CreateSyncJobEvent(jobID, "info", "cleanup", "开始清理服务器旧邮件", mustJSON(map[string]any{
+			"retentionDays":  retentionDays,
+			"candidateCount": len(candidates),
+			"folder":         "INBOX",
+		}))
+	}
+
+	uids := make([]string, 0, len(candidates))
+	logIDs := make([]int64, 0, len(candidates))
+	skipped := 0
+	for _, candidate := range candidates {
+		rawPath := ""
+		if candidate.RawPath.Valid {
+			rawPath = candidate.RawPath.String
+		}
+		rawExists := s.storedRawFileExists(rawPath)
+		status := "pending"
+		reason := "local_raw_verified"
+		if !rawExists {
+			status = "skipped"
+			reason = "raw_file_missing"
+			skipped++
+		}
+		logItem, logErr := s.store.CreateMailServerDeleteLog(storage.CreateMailServerDeleteLogParams{
+			UserID:      userID,
+			AccountID:   accountID,
+			SyncJobID:   sql.NullInt64{Int64: jobID, Valid: jobID > 0},
+			MessageID:   candidate.MessageID,
+			Folder:      candidate.Folder,
+			IMAPUID:     candidate.IMAPUID,
+			Subject:     candidate.Subject,
+			FromAddr:    candidate.FromAddr,
+			SentAt:      candidate.SentAt,
+			ReceivedAt:  candidate.ReceivedAt,
+			RawPath:     candidate.RawPath,
+			RawExists:   rawExists,
+			Status:      status,
+			Reason:      reason,
+			TriggerType: "full_sync_cleanup",
+		})
+		if logErr != nil {
+			return logErr
+		}
+		if !rawExists {
+			continue
+		}
+		uids = append(uids, candidate.IMAPUID)
+		logIDs = append(logIDs, logItem.ID)
+	}
+	if len(uids) == 0 {
+		if jobID > 0 {
+			_ = s.store.CreateSyncJobEvent(jobID, "warn", "cleanup", "服务器清理已跳过：没有确认已保存原文的旧邮件", mustJSON(map[string]any{
+				"candidateCount": len(candidates),
+				"skippedCount":   skipped,
+			}))
+		}
+		return nil
+	}
+
+	log.Printf("全量同步后开始清理服务器旧邮件 userID=%d accountID=%d retentionDays=%d verifiedCount=%d skipped=%d", userID, accountID, retentionDays, len(uids), skipped)
 	for start := 0; start < len(uids); start += fullSyncBatchSize {
 		end := start + fullSyncBatchSize
 		if end > len(uids) {
 			end = len(uids)
 		}
 		if err := s.fetcher.DeleteInboxUIDs(config, uids[start:end]); err != nil {
+			for _, logID := range logIDs[start:end] {
+				_, _ = s.store.UpdateMailServerDeleteLogStatus(storage.UpdateMailServerDeleteLogStatusParams{
+					UserID:       userID,
+					ID:           logID,
+					Status:       "failed",
+					Reason:       "imap_delete_failed",
+					ErrorMessage: err.Error(),
+				})
+			}
 			return err
 		}
+		for _, logID := range logIDs[start:end] {
+			_, _ = s.store.UpdateMailServerDeleteLogStatus(storage.UpdateMailServerDeleteLogStatusParams{
+				UserID: userID,
+				ID:     logID,
+				Status: "deleted",
+				Reason: "imap_delete_success",
+			})
+		}
 	}
-	log.Printf("全量同步后服务器旧邮件清理完成 userID=%d accountID=%d deleteCount=%d", userID, accountID, len(uids))
+	log.Printf("全量同步后服务器旧邮件清理完成 userID=%d accountID=%d deleteCount=%d skipped=%d", userID, accountID, len(uids), skipped)
+	if jobID > 0 {
+		_ = s.store.CreateSyncJobEvent(jobID, "info", "cleanup", "服务器旧邮件清理完成", mustJSON(map[string]any{
+			"deletedCount": len(uids),
+			"skippedCount": skipped,
+		}))
+	}
 	return nil
+}
+
+func (s *Service) storedRawFileExists(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(s.dataDir, path)
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func accountSyncFolders(account storage.MailAccount) []string {

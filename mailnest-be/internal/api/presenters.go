@@ -105,6 +105,30 @@ func mailAccountPayload(account storage.MailAccount) map[string]any {
 	}
 }
 
+func mailServerDeleteLogPayload(item storage.MailServerDeleteLog) map[string]any {
+	return map[string]any{
+		"id":           strconv.FormatInt(item.ID, 10),
+		"accountId":    strconv.FormatInt(item.AccountID, 10),
+		"accountEmail": nullableString(item.AccountEmail),
+		"syncJobId":    nullableInt64(item.SyncJobID),
+		"messageId":    nullableInt64(item.MessageID),
+		"folder":       item.Folder,
+		"imapUid":      item.IMAPUID,
+		"subject":      nullableString(item.Subject),
+		"from":         nullableDecodedString(item.FromAddr),
+		"sentAt":       nullableTime(item.SentAt),
+		"receivedAt":   nullableTime(item.ReceivedAt),
+		"rawPath":      nullableString(item.RawPath),
+		"rawExists":    item.RawExists,
+		"status":       item.Status,
+		"reason":       item.Reason,
+		"errorMessage": nullableString(item.ErrorMessage),
+		"triggerType":  item.TriggerType,
+		"createdAt":    item.CreatedAt,
+		"updatedAt":    item.UpdatedAt,
+	}
+}
+
 func fullSyncStatusPayload(status mail.FullSyncStatus) map[string]any {
 	return map[string]any{
 		"fullSyncStatus":       status.Status,

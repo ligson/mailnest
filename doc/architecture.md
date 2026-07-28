@@ -512,7 +512,37 @@ database:
 
 同步事件日志用于排障，`phase` 建议覆盖连接、目录列表、拉取、解析、入库、规则执行和服务器清理等阶段。日志内容必须脱敏。
 
-### 5.15 附件中心索引
+### 5.15 mail_server_delete_logs
+
+- `id`
+- `user_id`
+- `account_id`
+- `sync_job_id`
+- `message_id`
+- `folder`
+- `imap_uid`
+- `subject`
+- `from_addr`
+- `sent_at`
+- `received_at`
+- `raw_path`
+- `raw_exists`
+- `status`
+- `reason`
+- `error_message`
+- `trigger_type`
+- `created_at`
+- `updated_at`
+
+`mail_server_delete_logs` 记录服务器旧邮件清理的审计明细。同步清理只能处理 `INBOX`，并且必须先确认本地数据库已有邮件记录、本地原文文件存在，再把 UID 交给 IMAP 删除；不满足条件时写入 `skipped`，IMAP 删除失败时写入 `failed` 和错误信息。该表用于回答“哪封服务器邮件为什么被删/没删/删失败”。
+
+建议索引：
+
+- `mail_server_delete_logs(user_id, created_at, id)`
+- `mail_server_delete_logs(user_id, account_id, created_at)`
+- `mail_server_delete_logs(user_id, status, created_at)`
+
+### 5.16 附件中心索引
 
 附件中心复用 `mail_attachments` 表，不单独复制附件文件。建议增加以下索引：
 
