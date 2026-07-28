@@ -45,6 +45,7 @@
 
 ### 部署
 
+- 将前端版本 `20260728082748-4d4dc5f-eml-batch-progress` 部署到生产环境的 Mail Nest Docker Compose 服务，后端继续使用 `20260727165928-ba3ae39-eml-2g-stream`；更新前已备份远端 Mail Nest `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260728082748-eml-batch-progress.tgz`；线上健康检查、`/mail` 静态资源、前端容器镜像标签和 nginx 大上传配置验证通过。
 - 将前后端版本 `20260727165928-ba3ae39-eml-2g-stream` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 Mail Nest `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727165928-eml-2g-stream.tgz`，并备份外层 nginx `mailnest.conf` 到 `mailnest.conf.bak-20260727165928-eml-2g-stream`；线上健康检查、`/mail` 静态资源、前后端容器镜像标签、前端容器 nginx `client_max_body_size 2304m`、外层 nginx `client_max_body_size 2304m` 和 `/api/` 流式转发配置验证通过，260MB EML 上传不再返回 `413` 或 `502`。
 - 将前端版本 `20260727155037-e204f61-eml-upload-limit` 部署到生产环境的 Mail Nest Docker Compose 服务，后端继续使用 `20260727151435-966fe64-mailbody`；更新前已备份远端 Mail Nest `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727155037-eml-upload-limit.tgz`，并备份外层 nginx `mailnest.conf` 到 `mailnest.conf.bak-20260727155037-eml-upload-limit`；线上健康检查、`/mail` 静态资源、前端容器 nginx `client_max_body_size 256m`、外层 nginx `client_max_body_size 256m` 和 60MB EML 上传不再返回 `413` 验证通过。
 - 将前后端版本 `20260727151435-966fe64-mailbody` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260727151435-mailbody.tgz`；线上健康检查、`/mail` 静态页面、前后端容器镜像标签和邮件正文 iframe 隔离静态资源验证通过。
