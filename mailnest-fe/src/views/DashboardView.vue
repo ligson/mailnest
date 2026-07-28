@@ -622,6 +622,20 @@
               <div v-if="importEMLProgress.currentFile" class="import-progress-current">
                 {{ importEMLProgress.currentFile }}
               </div>
+              <a-alert
+                v-if="importEMLProgress.errorMessage"
+                type="error"
+                show-icon
+                message="导入失败"
+                :description="importEMLProgress.errorMessage"
+              />
+              <a-alert
+                v-else-if="importEMLProgress.warningMessage"
+                type="warning"
+                show-icon
+                message="导入完成但有失败文件"
+                :description="importEMLProgress.warningMessage"
+              />
             </div>
             <div v-if="importEMLForm.files.length" class="import-eml-file-list">
               <div v-for="(file, index) in importEMLForm.files" :key="`${file.name}-${file.size}-${index}`" class="import-eml-file-item">
@@ -1010,6 +1024,7 @@ import {
   type MailAccount,
   type MailAttachment,
   type MailFolder,
+  type ImportEMLResult,
   type MailMessage,
   type MailMessageDetail,
   type MailRuleLog,
@@ -1145,6 +1160,8 @@ const importEMLProgress = reactive({
   etaSeconds: 0,
   speedSampleAt: 0,
   speedSampleBytes: 0,
+  errorMessage: '',
+  warningMessage: '',
 });
 const composeForm = reactive({
   accountId: '',
@@ -1973,6 +1990,7 @@ function onImportEMLFileSelected(event: Event) {
     input.value = '';
     return;
   }
+  resetImportEMLProgress();
   importEMLForm.files = files;
   input.value = '';
 }
@@ -2006,7 +2024,9 @@ async function submitImportEML() {
     const batches = buildImportEMLBatches(importEMLForm.files);
     const result = await importEMLInBatches(targetAccountId, targetFolder, batches);
     showImportEMLResultMessage(result);
-    resetImportEML(true);
+    if (result.failedCount === 0) {
+      resetImportEML(true);
+    }
     activeSystemFolder.value = targetFolder === 'INBOX' ? 'inbox' : 'sent';
     activeLocalFolderId.value = null;
     filters.accountId = targetAccountId;
@@ -2019,6 +2039,7 @@ async function submitImportEML() {
     }
   } catch (error) {
     importEMLProgress.status = '导入失败';
+    importEMLProgress.errorMessage = buildImportEMLErrorMessage(error);
     message.error(error instanceof Error ? error.message : '导入 EML 失败');
   } finally {
     importingEML.value = false;
@@ -2101,6 +2122,8 @@ async function importEMLInBatches(accountId: string, folder: string, batches: Im
     etaSeconds: 0,
     speedSampleAt: Date.now(),
     speedSampleBytes: 0,
+    errorMessage: '',
+    warningMessage: '',
   });
   for (let index = 0; index < batches.length; index++) {
     const batch = batches[index];
@@ -2132,6 +2155,7 @@ async function importEMLInBatches(accountId: string, folder: string, batches: Im
   }
   importEMLProgress.status = '导入完成';
   importEMLProgress.currentFile = '';
+  importEMLProgress.warningMessage = buildImportEMLWarningMessage(result);
   return result;
 }
 
@@ -2172,13 +2196,7 @@ function showImportEMLResultMessage(result: {
   duplicateCount: number;
   failedCount: number;
 }) {
-  const importSummary = [
-    `共 ${result.total} 个`,
-    `成功 ${result.successCount} 个`,
-    `新增 ${result.insertedCount} 个`,
-    `重复 ${result.duplicateCount} 个`,
-    `失败 ${result.failedCount} 个`,
-  ].join('，');
+  const importSummary = importEMLResultSummary(result);
   if (result.failedCount === result.total) {
     message.error(importSummary);
   } else if (result.failedCount > 0) {
@@ -2186,6 +2204,46 @@ function showImportEMLResultMessage(result: {
   } else {
     message.success(importSummary);
   }
+}
+
+function buildImportEMLWarningMessage(result: ImportEMLResult) {
+  if (result.failedCount <= 0) {
+    return '';
+  }
+  const failedItems = result.items.filter((item) => !item.success);
+  const lines = [
+    importEMLResultSummary(result),
+    `失败文件 ${result.failedCount} 个，请检查后可重新导入；已成功导入的邮件不会因为重试而重复保存。`,
+  ];
+  if (failedItems.length > 0) {
+    lines.push('失败明细：');
+    lines.push(...failedItems.slice(0, 8).map((item) => `${item.filename}：${item.error || '未知错误'}`));
+    if (failedItems.length > 8) {
+      lines.push(`还有 ${failedItems.length - 8} 个失败文件未显示。`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function buildImportEMLErrorMessage(error: unknown) {
+  const reason = error instanceof Error ? error.message : '未知错误';
+  return [
+    reason,
+    `失败位置：第 ${importEMLProgress.currentBatch || '-'} / ${importEMLProgress.totalBatches || '-'} 批`,
+    `上传进度：${formatSize(importEMLProgress.uploadedBytes)} / ${formatSize(importEMLProgress.totalBytes)}`,
+    `当前速度：${formatUploadSpeed(importEMLProgress.speedBytesPerSecond)}`,
+    '已经成功导入的批次会保留在系统中，重新导入时会自动按 Message-ID 或原文哈希去重。',
+  ].join('\n');
+}
+
+function importEMLResultSummary(result: Pick<ImportEMLResult, 'total' | 'successCount' | 'insertedCount' | 'duplicateCount' | 'failedCount'>) {
+  return [
+    `共 ${result.total} 个`,
+    `成功 ${result.successCount} 个`,
+    `新增 ${result.insertedCount} 个`,
+    `重复 ${result.duplicateCount} 个`,
+    `失败 ${result.failedCount} 个`,
+  ].join('，');
 }
 
 function resetImportEMLProgress() {
@@ -2207,6 +2265,8 @@ function resetImportEMLProgress() {
     etaSeconds: 0,
     speedSampleAt: 0,
     speedSampleBytes: 0,
+    errorMessage: '',
+    warningMessage: '',
   });
 }
 
@@ -4924,6 +4984,10 @@ function looksLikeEmail(value: string) {
   overflow-wrap: anywhere;
   color: var(--muted-color);
   font-size: 12px;
+}
+
+.import-eml-progress :deep(.ant-alert-description) {
+  white-space: pre-line;
 }
 
 .import-eml-file-list {
