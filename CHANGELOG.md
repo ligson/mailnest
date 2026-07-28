@@ -23,6 +23,10 @@
 
 - 更新 `README.md`、`doc/api.md` 和 `doc/backend-package-structure.md`，补充浏览器断点续传导入流程和接口说明。
 
+### 部署
+
+- 将前后端版本 `20260728134029-afde63c-resumable-eml` 部署到生产环境的 Mail Nest Docker Compose 服务；更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260728134029-resumable-eml.tgz`；线上健康检查、`/mail` 静态资源、新断点续传接口未登录拦截、前后端容器镜像标签和 amd64 镜像架构验证通过。
+
 ### 新增
 
 - 新增服务器删除日志：全量同步后的服务器旧邮件清理会记录每封候选邮件的账号、目录、UID、主题、原文确认结果、处理状态、原因和错误信息，并提供 `/api/v1/server-delete-logs` 查询接口。
