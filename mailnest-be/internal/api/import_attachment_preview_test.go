@@ -209,6 +209,74 @@ func TestImportEMLMessageBatchDoesNotLimitFileCount(t *testing.T) {
 	}
 }
 
+func TestImportEMLResumableUploadCanResumeAndFinish(t *testing.T) {
+	router := newTestRouter(t, true)
+	token := registerTestUser(t, router, "eml-resume", "eml-resume@example.com")
+	accountID := createTestAccount(t, router, token)
+	raw := []byte("From: Sender <sender@example.com>\r\nTo: Reader <reader@example.com>\r\nSubject: Resumable EML\r\nMessage-ID: <resumable-eml@example.com>\r\nDate: Mon, 27 Jul 2026 10:00:00 +0800\r\n\r\nHello resumable eml.")
+	createBody := fmt.Sprintf(`{"accountId":%q,"folder":"INBOX","filename":"resume.eml","size":%d,"lastModified":1785200000000,"fileKey":"resume.eml|%d|1785200000000"}`, accountID, len(raw), len(raw))
+
+	createResp := performRequest(router, http.MethodPost, "/api/v1/messages/import-eml/uploads", createBody, token)
+	if createResp.Code != http.StatusOK {
+		t.Fatalf("expected create upload status 200, got %d: %s", createResp.Code, createResp.Body.String())
+	}
+	createData := decodeEnvelope(t, createResp.Body.Bytes())["data"].(map[string]any)
+	uploadID := createData["uploadId"].(string)
+	if createData["uploadedBytes"] != float64(0) {
+		t.Fatalf("expected empty upload session, got %#v", createData)
+	}
+
+	firstChunk := raw[:42]
+	firstResp := performBinaryRequest(router, http.MethodPut, "/api/v1/messages/import-eml/uploads/"+uploadID+"/chunk", firstChunk, "0", token)
+	if firstResp.Code != http.StatusOK {
+		t.Fatalf("expected first chunk status 200, got %d: %s", firstResp.Code, firstResp.Body.String())
+	}
+	firstData := decodeEnvelope(t, firstResp.Body.Bytes())["data"].(map[string]any)
+	if firstData["uploadedBytes"] != float64(len(firstChunk)) {
+		t.Fatalf("expected first uploaded bytes, got %#v", firstData)
+	}
+
+	resumeResp := performRequest(router, http.MethodPost, "/api/v1/messages/import-eml/uploads", createBody, token)
+	if resumeResp.Code != http.StatusOK {
+		t.Fatalf("expected resume create status 200, got %d: %s", resumeResp.Code, resumeResp.Body.String())
+	}
+	resumeData := decodeEnvelope(t, resumeResp.Body.Bytes())["data"].(map[string]any)
+	if resumeData["uploadId"] != uploadID || resumeData["uploadedBytes"] != float64(len(firstChunk)) {
+		t.Fatalf("expected resumed offset, got %#v", resumeData)
+	}
+
+	conflictResp := performBinaryRequest(router, http.MethodPut, "/api/v1/messages/import-eml/uploads/"+uploadID+"/chunk", []byte("bad-offset"), "0", token)
+	if conflictResp.Code != http.StatusConflict {
+		t.Fatalf("expected offset conflict status 409, got %d: %s", conflictResp.Code, conflictResp.Body.String())
+	}
+	conflictData := decodeEnvelope(t, conflictResp.Body.Bytes())["data"].(map[string]any)
+	if conflictData["uploadedBytes"] != float64(len(firstChunk)) {
+		t.Fatalf("expected server offset in conflict payload, got %#v", conflictData)
+	}
+
+	restResp := performBinaryRequest(router, http.MethodPut, "/api/v1/messages/import-eml/uploads/"+uploadID+"/chunk", raw[len(firstChunk):], fmt.Sprint(len(firstChunk)), token)
+	if restResp.Code != http.StatusOK {
+		t.Fatalf("expected rest chunk status 200, got %d: %s", restResp.Code, restResp.Body.String())
+	}
+	finishResp := performRequest(router, http.MethodPost, "/api/v1/messages/import-eml/uploads/"+uploadID+"/finish", `{}`, token)
+	if finishResp.Code != http.StatusOK {
+		t.Fatalf("expected finish status 200, got %d: %s", finishResp.Code, finishResp.Body.String())
+	}
+	finishData := decodeEnvelope(t, finishResp.Body.Bytes())["data"].(map[string]any)
+	if finishData["inserted"] != true || finishData["uploadedBytes"] != float64(len(raw)) {
+		t.Fatalf("expected inserted finish payload, got %#v", finishData)
+	}
+
+	secondFinishResp := performRequest(router, http.MethodPost, "/api/v1/messages/import-eml/uploads/"+uploadID+"/finish", `{}`, token)
+	if secondFinishResp.Code != http.StatusOK {
+		t.Fatalf("expected idempotent finish status 200, got %d: %s", secondFinishResp.Code, secondFinishResp.Body.String())
+	}
+	listResp := performRequest(router, http.MethodGet, "/api/v1/messages", "", token)
+	if listResp.Code != http.StatusOK || listItemCount(t, listResp.Body.Bytes()) != 1 {
+		t.Fatalf("expected one imported message, got %d %s", listResp.Code, listResp.Body.String())
+	}
+}
+
 type emlImportFile struct {
 	Name string
 	Data []byte
@@ -241,4 +309,16 @@ func performEMLImportFiles(t *testing.T, router http.Handler, token, accountID s
 		t.Fatalf("close multipart writer: %v", err)
 	}
 	return performMultipartRequest(router, http.MethodPost, "/api/v1/messages/import-eml", body.Bytes(), writer.FormDataContentType(), token)
+}
+
+func performBinaryRequest(handler http.Handler, method, path string, body []byte, offset, token string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("X-Upload-Offset", offset)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
 }

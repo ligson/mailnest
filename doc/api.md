@@ -930,6 +930,8 @@ JSON 请求：
 
 ### 7.4 导入 EML 邮件
 
+#### 7.4.1 兼容 multipart 导入
+
 `POST /api/v1/messages/import-eml`
 
 请求类型：`multipart/form-data`
@@ -978,6 +980,134 @@ JSON 请求：
       "subject": "Imported EML"
     },
     "batch": true
+  }
+}
+```
+
+#### 7.4.2 大量 EML 断点续传导入
+
+浏览器大量导入优先使用上传会话接口，避免十几 GB 文件集依赖单个长请求。流程为：
+
+1. 前端为每个 `.eml` 文件调用创建会话接口。
+2. 服务端返回 `uploadId`、`uploadedBytes` 和 `chunkSize`，前端从 `uploadedBytes` 位置继续上传。
+3. 每个分片使用 `PUT` 上传，默认分片大小为 16MB；如果服务端返回 `409`，前端应使用响应中的 `uploadedBytes` 校准偏移量后继续。
+4. 上传过程中可调用心跳接口查询会话状态；网络中断后，用户重新选择同一批文件即可恢复同一个会话。
+5. 单文件上传完整后调用完成接口，后端复用现有 EML 解析、落盘、联系人沉淀、会话归并、规则和去重逻辑。
+
+上传会话临时文件保存在后端持久化数据目录 `imports/users/{userID}/{uploadId}/` 下；导入成功后删除临时 `upload.eml`，保留 `meta.json` 记录状态。导入失败时保留临时文件，便于继续重试或排查。生产升级时必须继续保留数据目录挂载，避免丢失未完成上传会话。
+
+##### 创建或恢复上传会话
+
+`POST /api/v1/messages/import-eml/uploads`
+
+请求：
+
+```json
+{
+  "accountId": "account-id",
+  "folder": "INBOX",
+  "filename": "archive.eml",
+  "size": 102400,
+  "lastModified": 1785200000000,
+  "fileKey": "archive.eml|102400|1785200000000|message/rfc822"
+}
+```
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "上传会话已准备",
+  "httpCode": 200,
+  "data": {
+    "uploadId": "upload-id",
+    "filename": "archive.eml",
+    "size": 102400,
+    "uploadedBytes": 32768,
+    "chunkSize": 16777216,
+    "status": "uploading",
+    "error": ""
+  }
+}
+```
+
+##### 心跳查询
+
+`GET /api/v1/messages/import-eml/uploads/{id}`
+
+返回当前会话状态、服务端已接收字节数和推荐分片大小。前端可在上传过程中定时调用，也可在重连后用它确认续传位置。
+
+##### 上传分片
+
+`PUT /api/v1/messages/import-eml/uploads/{id}/chunk`
+
+请求头：
+
+- `Content-Type: application/octet-stream`
+- `X-Upload-Offset: 32768`
+
+请求体为当前文件从 `X-Upload-Offset` 开始的一段二进制内容，单片默认不超过 16MB。
+
+如果偏移量正确，返回：
+
+```json
+{
+  "success": true,
+  "message": "分片上传成功",
+  "httpCode": 200,
+  "data": {
+    "uploadId": "upload-id",
+    "filename": "archive.eml",
+    "size": 102400,
+    "uploadedBytes": 65536,
+    "chunkSize": 16777216,
+    "status": "uploading",
+    "error": ""
+  }
+}
+```
+
+如果偏移量不一致，返回 HTTP `409`，`data.uploadedBytes` 表示服务端真实进度：
+
+```json
+{
+  "success": false,
+  "message": "上传偏移量不一致，请按服务端进度续传",
+  "httpCode": 409,
+  "data": {
+    "uploadId": "upload-id",
+    "uploadedBytes": 65536,
+    "chunkSize": 16777216,
+    "status": "uploading"
+  }
+}
+```
+
+##### 完成导入
+
+`POST /api/v1/messages/import-eml/uploads/{id}/finish`
+
+当服务端已接收字节数等于文件大小后调用。重复调用已导入会话会返回成功，不会再次写入重复邮件。
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "导入完成",
+  "httpCode": 200,
+  "data": {
+    "filename": "archive.eml",
+    "success": true,
+    "inserted": true,
+    "message": {
+      "id": "message-id",
+      "accountId": "account-id",
+      "subject": "Imported EML"
+    },
+    "uploadedBytes": 102400,
+    "uploadId": "upload-id"
   }
 }
 ```

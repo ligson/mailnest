@@ -556,7 +556,7 @@
       <a-modal
         v-model:open="importEMLOpen"
         title="导入 EML 邮件"
-        ok-text="导入"
+        ok-text="开始导入"
         cancel-text="取消"
         :confirm-loading="importingEML"
         :mask-closable="!importingEML"
@@ -593,17 +593,17 @@
                 <template #icon><upload-outlined /></template>
                 选择 EML 文件
               </a-button>
-              <span class="upload-picker-hint">可大量选择，单个最大 2GB，系统会自动分批上传</span>
+              <span class="upload-picker-hint">可大量选择，逐个文件断点续传；网络中断后重新选择同一批文件可继续</span>
             </div>
             <div v-if="importEMLForm.files.length" class="import-eml-summary">
               <span>{{ importEMLForm.files.length }} 个文件</span>
               <span>{{ formatSize(importEMLTotalSize) }}</span>
-              <span>预计 {{ importEMLEstimatedBatchCount }} 批</span>
+              <span>单文件分片上传</span>
             </div>
             <div v-if="importingEML || importEMLProgress.started" class="import-eml-progress">
               <div class="import-progress-head">
                 <strong>{{ importEMLProgress.status }}</strong>
-                <span>{{ importEMLProgress.currentBatch }}/{{ importEMLProgress.totalBatches }} 批</span>
+                <span>{{ importEMLProgress.currentFileIndex }}/{{ importEMLProgress.totalFiles }} 个</span>
               </div>
               <a-progress :percent="importEMLTotalPercent" :status="importEMLProgress.failed > 0 ? 'exception' : 'active'" />
               <div class="import-progress-meta">
@@ -622,6 +622,13 @@
               <div v-if="importEMLProgress.currentFile" class="import-progress-current">
                 {{ importEMLProgress.currentFile }}
               </div>
+              <a-progress
+                v-if="importEMLProgress.currentFile"
+                size="small"
+                :percent="importEMLCurrentFilePercent"
+                :show-info="false"
+                :status="importEMLProgress.failed > 0 ? 'exception' : 'active'"
+              />
               <a-alert
                 v-if="importEMLProgress.errorMessage"
                 type="error"
@@ -1009,6 +1016,7 @@ import { Modal, message } from 'ant-design-vue';
 import type { Dayjs } from 'dayjs';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import {
+  ApiEnvelopeError,
   mailAccountApi,
   contactApi,
   draftApi,
@@ -1025,6 +1033,7 @@ import {
   type MailAttachment,
   type MailFolder,
   type ImportEMLResult,
+  type ImportEMLUploadSession,
   type MailMessage,
   type MailMessageDetail,
   type MailRuleLog,
@@ -1046,11 +1055,6 @@ type ContactAddress = {
   name: string;
   email: string;
 };
-type ImportEMLBatch = {
-  files: File[];
-  size: number;
-};
-
 const systemFolders = [
   { key: 'inbox' as const, label: '收件箱', icon: markRaw(InboxOutlined) },
   { key: 'sent' as const, label: '发件箱', icon: markRaw(SendOutlined) },
@@ -1121,7 +1125,7 @@ const resizeConstraints = {
   resizers: 12,
 };
 const importEMLMaxFileBytes = 2 * 1024 * 1024 * 1024;
-const importEMLUploadBatchBytes = 512 * 1024 * 1024;
+const importEMLDefaultChunkBytes = 16 * 1024 * 1024;
 let composeSignatureInserted = false;
 let composeContextRequestId = 0;
 let draftSaveTimer: number | undefined;
@@ -1145,11 +1149,12 @@ const importEMLForm = reactive({
 const importEMLProgress = reactive({
   started: false,
   status: '',
-  currentBatch: 0,
-  totalBatches: 0,
+  currentFileIndex: 0,
   uploadedBytes: 0,
   totalBytes: 0,
-  completedBatchBytes: 0,
+  completedFileBytes: 0,
+  currentFileUploadedBytes: 0,
+  currentFileSize: 0,
   processedFiles: 0,
   totalFiles: 0,
   inserted: 0,
@@ -1216,12 +1221,17 @@ const normalAttachments = computed(() => (detail.value?.attachments || []).filte
 const visibleAccounts = computed(() => accounts.value.filter((account) => account.enabled));
 const selectedImportAccount = computed(() => visibleAccounts.value.find((account) => account.id === importEMLForm.accountId));
 const importEMLTotalSize = computed(() => importEMLForm.files.reduce((sum, file) => sum + file.size, 0));
-const importEMLEstimatedBatchCount = computed(() => buildImportEMLBatches(importEMLForm.files).length);
 const importEMLTotalPercent = computed(() => {
   if (!importEMLProgress.totalBytes) {
     return 0;
   }
   return Math.min(100, Math.round((importEMLProgress.uploadedBytes / importEMLProgress.totalBytes) * 100));
+});
+const importEMLCurrentFilePercent = computed(() => {
+  if (!importEMLProgress.currentFileSize) {
+    return 0;
+  }
+  return Math.min(100, Math.round((importEMLProgress.currentFileUploadedBytes / importEMLProgress.currentFileSize) * 100));
 });
 const selectedComposeAccount = computed(() => visibleAccounts.value.find((account) => account.id === composeForm.accountId));
 const detailFromAddress = computed(() => parseContactAddress(detail.value?.from || ''));
@@ -2021,8 +2031,7 @@ async function submitImportEML() {
   const targetFolder = importEMLForm.folder;
   importingEML.value = true;
   try {
-    const batches = buildImportEMLBatches(importEMLForm.files);
-    const result = await importEMLInBatches(targetAccountId, targetFolder, batches);
+    const result = await importEMLWithResume(targetAccountId, targetFolder, importEMLForm.files);
     showImportEMLResultMessage(result);
     if (result.failedCount === 0) {
       resetImportEML(true);
@@ -2071,49 +2080,29 @@ function validateImportEMLFiles(files: File[]) {
   return '';
 }
 
-function buildImportEMLBatches(files: File[]) {
-  const batches: ImportEMLBatch[] = [];
-  let current: ImportEMLBatch = { files: [], size: 0 };
-  for (const file of files) {
-    if (current.files.length > 0 && current.size + file.size > importEMLUploadBatchBytes) {
-      batches.push(current);
-      current = { files: [], size: 0 };
-    }
-    current.files.push(file);
-    current.size += file.size;
-    if (file.size >= importEMLUploadBatchBytes) {
-      batches.push(current);
-      current = { files: [], size: 0 };
-    }
-  }
-  if (current.files.length > 0) {
-    batches.push(current);
-  }
-  return batches;
-}
-
-async function importEMLInBatches(accountId: string, folder: string, batches: ImportEMLBatch[]) {
+async function importEMLWithResume(accountId: string, folder: string, files: File[]) {
   const result = {
-    total: importEMLForm.files.length,
+    total: files.length,
     successCount: 0,
     insertedCount: 0,
     duplicateCount: 0,
     failedCount: 0,
     items: [] as Array<{ filename: string; success: boolean; inserted: boolean; message: MailMessage | null; error: string | null }>,
-    batch: importEMLForm.files.length > 1,
+    batch: files.length > 1,
     inserted: undefined as boolean | undefined,
     message: null as MailMessage | null,
   };
   Object.assign(importEMLProgress, {
     started: true,
     status: '准备上传',
-    currentBatch: 0,
-    totalBatches: batches.length,
+    currentFileIndex: 0,
     uploadedBytes: 0,
-    totalBytes: batches.reduce((sum, batch) => sum + batch.size, 0),
-    completedBatchBytes: 0,
+    totalBytes: files.reduce((sum, file) => sum + file.size, 0),
+    completedFileBytes: 0,
+    currentFileUploadedBytes: 0,
+    currentFileSize: 0,
     processedFiles: 0,
-    totalFiles: importEMLForm.files.length,
+    totalFiles: files.length,
     inserted: 0,
     duplicate: 0,
     failed: 0,
@@ -2125,30 +2114,38 @@ async function importEMLInBatches(accountId: string, folder: string, batches: Im
     errorMessage: '',
     warningMessage: '',
   });
-  for (let index = 0; index < batches.length; index++) {
-    const batch = batches[index];
-    importEMLProgress.currentBatch = index + 1;
-    importEMLProgress.currentFile = batch.files.length === 1
-      ? batch.files[0].name
-      : `${batch.files[0].name} 等 ${batch.files.length} 个文件`;
+  resetImportEMLSpeedSample();
+  for (let index = 0; index < files.length; index++) {
+    const file = files[index];
+    importEMLProgress.currentFileIndex = index + 1;
+    importEMLProgress.currentFile = file.name;
+    importEMLProgress.currentFileSize = file.size;
+    importEMLProgress.currentFileUploadedBytes = 0;
+    importEMLProgress.status = `正在上传第 ${index + 1} 个文件`;
     resetImportEMLSpeedSample();
-    const batchResult = await uploadImportEMLBatch(accountId, folder, batch, index + 1);
-    importEMLProgress.completedBatchBytes += batch.size;
-    importEMLProgress.uploadedBytes = Math.min(importEMLProgress.totalBytes, importEMLProgress.completedBatchBytes);
+    const item = await uploadImportEMLFile(accountId, folder, file, index + 1);
+    importEMLProgress.completedFileBytes += file.size;
+    importEMLProgress.uploadedBytes = Math.min(importEMLProgress.totalBytes, importEMLProgress.completedFileBytes);
+    importEMLProgress.currentFileUploadedBytes = file.size;
     updateImportEMLTimeEstimate(true);
-    importEMLProgress.status = `正在处理第 ${index + 1} 批结果`;
-    result.successCount += batchResult.successCount;
-    result.insertedCount += batchResult.insertedCount;
-    result.duplicateCount += batchResult.duplicateCount;
-    result.failedCount += batchResult.failedCount;
-    result.items.push(...batchResult.items);
-    if (result.inserted === undefined && typeof batchResult.inserted === 'boolean') {
-      result.inserted = batchResult.inserted;
+    result.items.push(item);
+    if (item.success) {
+      result.successCount++;
+      if (item.inserted) {
+        result.insertedCount++;
+      } else {
+        result.duplicateCount++;
+      }
+      if (result.inserted === undefined) {
+        result.inserted = item.inserted;
+      }
+      if (!result.message && item.message) {
+        result.message = item.message;
+      }
+    } else {
+      result.failedCount++;
     }
-    if (!result.message && batchResult.message) {
-      result.message = batchResult.message;
-    }
-    importEMLProgress.processedFiles += batchResult.total;
+    importEMLProgress.processedFiles++;
     importEMLProgress.inserted = result.insertedCount;
     importEMLProgress.duplicate = result.duplicateCount;
     importEMLProgress.failed = result.failedCount;
@@ -2159,34 +2156,144 @@ async function importEMLInBatches(accountId: string, folder: string, batches: Im
   return result;
 }
 
-async function uploadImportEMLBatch(accountId: string, folder: string, batch: ImportEMLBatch, batchNumber: number) {
+async function uploadImportEMLFile(accountId: string, folder: string, file: File, fileNumber: number) {
+  try {
+    const session = await messageApi.createImportEMLUpload({
+      accountId,
+      folder,
+      filename: file.name,
+      size: file.size,
+      lastModified: file.lastModified,
+      fileKey: importEMLFileKey(file),
+    });
+    if (session.status === 'imported') {
+      importEMLProgress.status = `第 ${fileNumber} 个文件已导入，跳过上传`;
+      const finished = await messageApi.finishImportEMLUpload(session.uploadId);
+      return {
+        filename: finished.filename,
+        success: finished.success,
+        inserted: finished.inserted,
+        message: finished.message,
+        error: null,
+      };
+    }
+    const finished = await uploadImportEMLFileChunks(session, file, fileNumber);
+    return {
+      filename: file.name,
+      success: true,
+      inserted: finished.inserted,
+      message: finished.message,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      filename: file.name,
+      success: false,
+      inserted: false,
+      message: null,
+      error: error instanceof Error ? error.message : '未知错误',
+    };
+  }
+}
+
+async function uploadImportEMLFileChunks(initialSession: ImportEMLUploadSession, file: File, fileNumber: number) {
+  let session = await messageApi.getImportEMLUpload(initialSession.uploadId);
+  let offset = Math.min(session.uploadedBytes || 0, file.size);
+  const chunkSize = Math.max(1, session.chunkSize || importEMLDefaultChunkBytes);
+  importEMLProgress.currentFileUploadedBytes = offset;
+  importEMLProgress.uploadedBytes = Math.min(importEMLProgress.totalBytes, importEMLProgress.completedFileBytes + offset);
+  updateImportEMLTimeEstimate(true);
+  const heartbeatTimer = window.setInterval(() => {
+    void messageApi.getImportEMLUpload(session.uploadId).then((fresh) => {
+      const uploaded = Math.min(fresh.uploadedBytes || 0, file.size);
+      if (uploaded > importEMLProgress.currentFileUploadedBytes) {
+        importEMLProgress.currentFileUploadedBytes = uploaded;
+        importEMLProgress.uploadedBytes = Math.min(importEMLProgress.totalBytes, importEMLProgress.completedFileBytes + uploaded);
+        updateImportEMLTimeEstimate(true);
+      }
+    }).catch(() => {
+      // 心跳失败时不立刻打断导入，当前分片请求会给出最终结果。
+    });
+  }, 15000);
+  try {
+    while (offset < file.size) {
+      importEMLProgress.status = offset > 0
+        ? `第 ${fileNumber} 个文件续传中`
+        : `正在上传第 ${fileNumber} 个文件`;
+      const end = Math.min(file.size, offset + chunkSize);
+      const chunk = file.slice(offset, end);
+      session = await uploadImportEMLChunkWithRetry(session.uploadId, chunk, offset, fileNumber, (loaded) => {
+        const nextUploaded = Math.min(file.size, offset + loaded);
+        importEMLProgress.currentFileUploadedBytes = nextUploaded;
+        importEMLProgress.uploadedBytes = Math.min(importEMLProgress.totalBytes, importEMLProgress.completedFileBytes + nextUploaded);
+        updateImportEMLTimeEstimate();
+      });
+      offset = Math.min(session.uploadedBytes || end, file.size);
+      importEMLProgress.currentFileUploadedBytes = offset;
+      importEMLProgress.uploadedBytes = Math.min(importEMLProgress.totalBytes, importEMLProgress.completedFileBytes + offset);
+      updateImportEMLTimeEstimate(true);
+    }
+  } finally {
+    window.clearInterval(heartbeatTimer);
+  }
+  importEMLProgress.status = `正在导入第 ${fileNumber} 个文件`;
+  const finished = await messageApi.finishImportEMLUpload(session.uploadId);
+  return {
+    filename: finished.filename,
+    success: finished.success,
+    inserted: finished.inserted,
+    message: finished.message,
+    error: null,
+  };
+}
+
+async function uploadImportEMLChunkWithRetry(
+  uploadId: string,
+  chunk: Blob,
+  offset: number,
+  fileNumber: number,
+  onChunkProgress: (loaded: number) => void,
+) {
+  let nextOffset = offset;
   let lastError: unknown;
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      importEMLProgress.status = attempt === 1
-        ? `正在上传第 ${batchNumber} 批`
-        : `第 ${batchNumber} 批重试中`;
-      return await messageApi.importEML({
-        accountId,
-        folder,
-        files: batch.files,
-        onUploadProgress(event) {
-          importEMLProgress.uploadedBytes = Math.min(
-            importEMLProgress.totalBytes,
-            importEMLProgress.completedBatchBytes + Math.min(event.loaded || 0, batch.size),
-          );
-          updateImportEMLTimeEstimate();
-        },
+      return await messageApi.uploadImportEMLChunk(uploadId, chunk, nextOffset, (event) => {
+        onChunkProgress(event.loaded || 0);
       });
     } catch (error) {
+      const serverOffset = importEMLServerOffset(error);
+      if (serverOffset !== null) {
+        nextOffset = serverOffset;
+        return messageApi.getImportEMLUpload(uploadId);
+      }
       lastError = error;
-      if (attempt < 2) {
-        message.warning(`第 ${batchNumber} 批上传失败，正在重试`);
+      if (attempt < 3) {
+        importEMLProgress.status = `第 ${fileNumber} 个文件上传中断，正在重试 ${attempt}/2`;
+        await sleep(1200 * attempt);
       }
     }
   }
   const detail = lastError instanceof Error ? lastError.message : '未知错误';
-  throw new Error(`第 ${batchNumber} 批导入失败：${detail}`);
+  throw new Error(`第 ${fileNumber} 个文件上传失败：${detail}。重新选择同一批文件可以从已上传位置继续。`);
+}
+
+function importEMLServerOffset(error: unknown) {
+  if (error instanceof ApiEnvelopeError && error.status === 409) {
+    const data = error.data as Partial<ImportEMLUploadSession> | undefined;
+    if (typeof data?.uploadedBytes === 'number' && data.uploadedBytes >= 0) {
+      return data.uploadedBytes;
+    }
+  }
+  return null;
+}
+
+function importEMLFileKey(file: File) {
+  return `${file.name}|${file.size}|${file.lastModified}|${file.type || 'message/rfc822'}`;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function showImportEMLResultMessage(result: {
@@ -2229,10 +2336,10 @@ function buildImportEMLErrorMessage(error: unknown) {
   const reason = error instanceof Error ? error.message : '未知错误';
   return [
     reason,
-    `失败位置：第 ${importEMLProgress.currentBatch || '-'} / ${importEMLProgress.totalBatches || '-'} 批`,
+    `失败位置：第 ${importEMLProgress.currentFileIndex || '-'} / ${importEMLProgress.totalFiles || '-'} 个文件`,
     `上传进度：${formatSize(importEMLProgress.uploadedBytes)} / ${formatSize(importEMLProgress.totalBytes)}`,
     `当前速度：${formatUploadSpeed(importEMLProgress.speedBytesPerSecond)}`,
-    '已经成功导入的批次会保留在系统中，重新导入时会自动按 Message-ID 或原文哈希去重。',
+    '已经上传完成的文件会保留在服务端上传会话中，重新选择同一批文件可以继续；已经导入的邮件会按 Message-ID 或原文哈希去重。',
   ].join('\n');
 }
 
@@ -2250,11 +2357,12 @@ function resetImportEMLProgress() {
   Object.assign(importEMLProgress, {
     started: false,
     status: '',
-    currentBatch: 0,
-    totalBatches: 0,
+    currentFileIndex: 0,
     uploadedBytes: 0,
     totalBytes: 0,
-    completedBatchBytes: 0,
+    completedFileBytes: 0,
+    currentFileUploadedBytes: 0,
+    currentFileSize: 0,
     processedFiles: 0,
     totalFiles: 0,
     inserted: 0,

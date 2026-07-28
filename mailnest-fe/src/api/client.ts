@@ -7,6 +7,18 @@ export interface Envelope<T> {
   data: T;
 }
 
+export class ApiEnvelopeError<T = unknown> extends Error {
+  status?: number;
+  data?: T;
+
+  constructor(message: string, status?: number, data?: T) {
+    super(message);
+    this.name = 'ApiEnvelopeError';
+    this.status = status;
+    this.data = data;
+  }
+}
+
 export interface User {
   id: string;
   username: string;
@@ -453,6 +465,25 @@ export interface ImportEMLItem {
   error: string | null;
 }
 
+export interface ImportEMLUploadSession {
+  uploadId: string;
+  filename: string;
+  size: number;
+  uploadedBytes: number;
+  chunkSize: number;
+  status: 'uploading' | 'uploaded' | 'imported' | 'failed';
+  error: string;
+}
+
+export interface ImportEMLUploadFinishResult {
+  filename: string;
+  success: boolean;
+  inserted: boolean;
+  message: MailMessage | null;
+  uploadedBytes: number;
+  uploadId: string;
+}
+
 export interface SaveDraftPayload {
   accountId: string;
   to: string[];
@@ -607,7 +638,7 @@ export async function requestEnvelope<T>(request: Promise<{ data: Envelope<T> }>
     const response = await request;
     const envelope = response.data;
     if (!envelope.success) {
-      throw new Error(envelope.message || '请求失败');
+      throw new ApiEnvelopeError(envelope.message || '请求失败', envelope.httpCode, envelope.data);
     }
     return envelope.data;
   } catch (error) {
@@ -624,7 +655,7 @@ export async function requestEnvelope<T>(request: Promise<{ data: Envelope<T> }>
       if (error.response?.status === 413) {
         throw new Error('上传内容过大，单次导入总大小不能超过 2GB，请分批上传');
       }
-      throw new Error(envelope?.message || error.message || '请求失败');
+      throw new ApiEnvelopeError(envelope?.message || error.message || '请求失败', error.response?.status, envelope?.data);
     }
     throw error;
   }
@@ -795,6 +826,41 @@ export const messageApi = {
     return requestEnvelope<ImportEMLResult>(apiClient.post('/messages/import-eml', form, {
       timeout: 0,
       onUploadProgress: payload.onUploadProgress,
+    }));
+  },
+  createImportEMLUpload(payload: {
+    accountId: string;
+    folder?: string;
+    filename: string;
+    size: number;
+    lastModified: number;
+    fileKey: string;
+  }) {
+    return requestEnvelope<ImportEMLUploadSession>(apiClient.post('/messages/import-eml/uploads', {
+      accountId: payload.accountId,
+      folder: payload.folder || 'INBOX',
+      filename: payload.filename,
+      size: payload.size,
+      lastModified: payload.lastModified,
+      fileKey: payload.fileKey,
+    }));
+  },
+  getImportEMLUpload(uploadId: string) {
+    return requestEnvelope<ImportEMLUploadSession>(apiClient.get(`/messages/import-eml/uploads/${uploadId}`));
+  },
+  uploadImportEMLChunk(uploadId: string, chunk: Blob, offset: number, onUploadProgress?: (event: AxiosProgressEvent) => void) {
+    return requestEnvelope<ImportEMLUploadSession>(apiClient.put(`/messages/import-eml/uploads/${uploadId}/chunk`, chunk, {
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Upload-Offset': String(offset),
+      },
+      timeout: 0,
+      onUploadProgress,
+    }));
+  },
+  finishImportEMLUpload(uploadId: string) {
+    return requestEnvelope<ImportEMLUploadFinishResult>(apiClient.post(`/messages/import-eml/uploads/${uploadId}/finish`, {}, {
+      timeout: 0,
     }));
   },
 };

@@ -20,7 +20,8 @@ API 包负责 HTTP 路由、参数校验、权限上下文、调用业务服务�
 - `profile_handlers.go`：个人资料、头像上传和头像读取。
 - `account_handlers.go`：邮箱账号增删改查、连接测试、目录读取、手动同步和全量同步状态。
 - `message_handlers.go`：邮件列表、邮件详情、批量操作、移动文件夹、写信上下文和发送入口。
-- `import_handlers.go`：EML 文件上传导入入口。
+- `import_handlers.go`：兼容旧版 multipart EML 文件上传导入入口。
+- `import_resumable_handlers.go`：浏览器大量 EML 导入的上传会话、分片上传、心跳查询和完成导入接口。
 - `attachment_handlers.go`：附件中心列表、附件下载、附件预览和内嵌附件读取。
 - `contact_handlers.go`：联系人通讯录维护。
 - `folder_rule_handlers.go`：本地文件夹和邮件规则维护、预览、应用。
