@@ -611,6 +611,10 @@
                 <span>已处理 {{ importEMLProgress.processedFiles }} / {{ importEMLProgress.totalFiles }}</span>
               </div>
               <div class="import-progress-meta">
+                <span>速度 {{ formatUploadSpeed(importEMLProgress.speedBytesPerSecond) }}</span>
+                <span>预计剩余 {{ formatDuration(importEMLProgress.etaSeconds) }}</span>
+              </div>
+              <div class="import-progress-meta">
                 <span>新增 {{ importEMLProgress.inserted }}</span>
                 <span>重复 {{ importEMLProgress.duplicate }}</span>
                 <span>失败 {{ importEMLProgress.failed }}</span>
@@ -1137,6 +1141,10 @@ const importEMLProgress = reactive({
   duplicate: 0,
   failed: 0,
   currentFile: '',
+  speedBytesPerSecond: 0,
+  etaSeconds: 0,
+  speedSampleAt: 0,
+  speedSampleBytes: 0,
 });
 const composeForm = reactive({
   accountId: '',
@@ -2089,6 +2097,10 @@ async function importEMLInBatches(accountId: string, folder: string, batches: Im
     duplicate: 0,
     failed: 0,
     currentFile: '',
+    speedBytesPerSecond: 0,
+    etaSeconds: 0,
+    speedSampleAt: Date.now(),
+    speedSampleBytes: 0,
   });
   for (let index = 0; index < batches.length; index++) {
     const batch = batches[index];
@@ -2096,9 +2108,11 @@ async function importEMLInBatches(accountId: string, folder: string, batches: Im
     importEMLProgress.currentFile = batch.files.length === 1
       ? batch.files[0].name
       : `${batch.files[0].name} 等 ${batch.files.length} 个文件`;
+    resetImportEMLSpeedSample();
     const batchResult = await uploadImportEMLBatch(accountId, folder, batch, index + 1);
     importEMLProgress.completedBatchBytes += batch.size;
     importEMLProgress.uploadedBytes = Math.min(importEMLProgress.totalBytes, importEMLProgress.completedBatchBytes);
+    updateImportEMLTimeEstimate(true);
     importEMLProgress.status = `正在处理第 ${index + 1} 批结果`;
     result.successCount += batchResult.successCount;
     result.insertedCount += batchResult.insertedCount;
@@ -2137,6 +2151,7 @@ async function uploadImportEMLBatch(accountId: string, folder: string, batch: Im
             importEMLProgress.totalBytes,
             importEMLProgress.completedBatchBytes + Math.min(event.loaded || 0, batch.size),
           );
+          updateImportEMLTimeEstimate();
         },
       });
     } catch (error) {
@@ -2188,7 +2203,38 @@ function resetImportEMLProgress() {
     duplicate: 0,
     failed: 0,
     currentFile: '',
+    speedBytesPerSecond: 0,
+    etaSeconds: 0,
+    speedSampleAt: 0,
+    speedSampleBytes: 0,
   });
+}
+
+function resetImportEMLSpeedSample() {
+  importEMLProgress.speedSampleAt = Date.now();
+  importEMLProgress.speedSampleBytes = importEMLProgress.uploadedBytes;
+  importEMLProgress.speedBytesPerSecond = 0;
+}
+
+function updateImportEMLTimeEstimate(force = false) {
+  const now = Date.now();
+  const elapsedSeconds = (now - importEMLProgress.speedSampleAt) / 1000;
+  if (!force && elapsedSeconds < 0.8) {
+    return;
+  }
+  const byteDelta = importEMLProgress.uploadedBytes - importEMLProgress.speedSampleBytes;
+  if (elapsedSeconds > 0 && byteDelta >= 0) {
+    const instantSpeed = byteDelta / elapsedSeconds;
+    importEMLProgress.speedBytesPerSecond = importEMLProgress.speedBytesPerSecond > 0
+      ? importEMLProgress.speedBytesPerSecond * 0.55 + instantSpeed * 0.45
+      : instantSpeed;
+  }
+  const remainingBytes = Math.max(0, importEMLProgress.totalBytes - importEMLProgress.uploadedBytes);
+  importEMLProgress.etaSeconds = importEMLProgress.speedBytesPerSecond > 0
+    ? Math.ceil(remainingBytes / importEMLProgress.speedBytesPerSecond)
+    : 0;
+  importEMLProgress.speedSampleAt = now;
+  importEMLProgress.speedSampleBytes = importEMLProgress.uploadedBytes;
 }
 
 function openCompose() {
@@ -3086,7 +3132,34 @@ function formatSize(value: number) {
   if (value < 1024 * 1024) {
     return `${(value / 1024).toFixed(1)} KB`;
   }
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  if (value < 1024 * 1024 * 1024) {
+    return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  }
+  return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function formatUploadSpeed(value: number) {
+  if (!value || value <= 0) {
+    return '计算中';
+  }
+  return `${formatSize(value)}/秒`;
+}
+
+function formatDuration(value: number) {
+  if (!value || value <= 0) {
+    return '计算中';
+  }
+  if (value < 60) {
+    return `${Math.ceil(value)} 秒`;
+  }
+  const minutes = Math.floor(value / 60);
+  const seconds = Math.ceil(value % 60);
+  if (minutes < 60) {
+    return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  return restMinutes > 0 ? `${hours} 小时 ${restMinutes} 分` : `${hours} 小时`;
 }
 
 function formatShortTime(value: string | null) {
