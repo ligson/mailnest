@@ -23,6 +23,10 @@
 - 后端 `rtk go test ./...` 通过，覆盖本地原文存在才删除、原文缺失跳过、发件箱旧邮件不删除、IMAP 删除失败写失败日志。
 - 前端 `rtk npm run build` 通过，覆盖邮箱账号页服务器删除日志抽屉和 API 类型。
 
+### 部署
+
+- 将前端版本 `20260728110557-0ec95bb-eml-error-detail` 部署到生产环境的 Mail Nest Docker Compose 服务，后端继续使用 `20260728092052-812413d-server-delete-audit`；更新前已备份远端 Mail Nest `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260728110557-eml-error-detail.tgz`；线上健康检查、`/mail` 静态资源和前端容器镜像标签验证通过。
+
 ## 2026-07-27
 
 ### 新增
