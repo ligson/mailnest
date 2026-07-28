@@ -1,4 +1,4 @@
-import axios, { AxiosError } from 'axios';
+import axios, { AxiosError, type AxiosProgressEvent } from 'axios';
 
 export interface Envelope<T> {
   success: boolean;
@@ -758,13 +758,14 @@ export const messageApi = {
     });
     return response.data;
   },
-  importEML(payload: { accountId: string; folder?: string; files: File[] }) {
+  importEML(payload: { accountId: string; folder?: string; files: File[]; onUploadProgress?: (event: AxiosProgressEvent) => void }) {
     const form = new FormData();
     form.append('accountId', payload.accountId);
     form.append('folder', payload.folder || 'INBOX');
     payload.files.forEach((file) => form.append('file', file, file.name));
     return requestEnvelope<ImportEMLResult>(apiClient.post('/messages/import-eml', form, {
       timeout: 0,
+      onUploadProgress: payload.onUploadProgress,
     }));
   },
 };
