@@ -484,6 +484,26 @@ export interface ImportEMLUploadFinishResult {
   uploadId: string;
 }
 
+export interface ImportEMLUploadStatusItem {
+  filename: string;
+  fileKey: string;
+  size: number;
+  uploadId: string;
+  uploadedBytes: number;
+  chunkSize: number;
+  status: 'missing' | 'uploading' | 'uploaded' | 'imported' | 'failed' | 'invalid' | 'unknown';
+  needsUpload: boolean;
+  error: string;
+}
+
+export interface ImportEMLUploadStatusesData {
+  items: ImportEMLUploadStatusItem[];
+  total: number;
+  importedCount: number;
+  pendingCount: number;
+  chunkSize: number;
+}
+
 export interface SaveDraftPayload {
   accountId: string;
   to: string[];
@@ -847,6 +867,24 @@ export const messageApi = {
   },
   getImportEMLUpload(uploadId: string) {
     return requestEnvelope<ImportEMLUploadSession>(apiClient.get(`/messages/import-eml/uploads/${uploadId}`));
+  },
+  getImportEMLUploadStatuses(payload: {
+    accountId: string;
+    folder?: string;
+    files: Array<{
+      filename: string;
+      size: number;
+      lastModified: number;
+      fileKey: string;
+    }>;
+  }) {
+    return requestEnvelope<ImportEMLUploadStatusesData>(apiClient.post('/messages/import-eml/uploads/statuses', {
+      accountId: payload.accountId,
+      folder: payload.folder || 'INBOX',
+      files: payload.files,
+    }, {
+      timeout: 0,
+    }));
   },
   uploadImportEMLChunk(uploadId: string, chunk: Blob, offset: number, onUploadProgress?: (event: AxiosProgressEvent) => void) {
     return requestEnvelope<ImportEMLUploadSession>(apiClient.put(`/messages/import-eml/uploads/${uploadId}/chunk`, chunk, {

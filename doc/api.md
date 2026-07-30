@@ -988,13 +988,67 @@ JSON 请求：
 
 浏览器大量导入优先使用上传会话接口，避免十几 GB 文件集依赖单个长请求。流程为：
 
-1. 前端为每个 `.eml` 文件调用创建会话接口。
-2. 服务端返回 `uploadId`、`uploadedBytes` 和 `chunkSize`，前端从 `uploadedBytes` 位置继续上传。
-3. 每个分片使用 `PUT` 上传，默认分片大小为 16MB；如果服务端返回 `409`，前端应使用响应中的 `uploadedBytes` 校准偏移量后继续。
-4. 上传过程中可调用心跳接口查询会话状态；网络中断后，用户重新选择同一批文件即可恢复同一个会话。
-5. 单文件上传完整后调用完成接口，后端复用现有 EML 解析、落盘、联系人沉淀、会话归并、规则和去重逻辑。
+1. 前端先把本次选择的文件名、大小、修改时间和 `fileKey` 批量提交给状态预检接口。
+2. 服务端返回每个文件的上传会话状态；已 `imported` 的文件直接跳过，未完成文件继续后续流程。
+3. 前端为未完成的 `.eml` 文件调用创建会话接口。
+4. 服务端返回 `uploadId`、`uploadedBytes` 和 `chunkSize`，前端从 `uploadedBytes` 位置继续上传。
+5. 每个分片使用 `PUT` 上传，默认分片大小为 16MB；如果服务端返回 `409`，前端应使用响应中的 `uploadedBytes` 校准偏移量后继续。
+6. 上传过程中可调用心跳接口查询会话状态；网络中断后，用户重新选择同一批文件即可恢复同一个会话。
+7. 单文件上传完整后调用完成接口，后端复用现有 EML 解析、落盘、联系人沉淀、会话归并、规则和去重逻辑。
 
 上传会话临时文件保存在后端持久化数据目录 `imports/users/{userID}/{uploadId}/` 下；导入成功后删除临时 `upload.eml`，保留 `meta.json` 记录状态。导入失败时保留临时文件，便于继续重试或排查。生产升级时必须继续保留数据目录挂载，避免丢失未完成上传会话。
+
+##### 批量查询上传状态
+
+`POST /api/v1/messages/import-eml/uploads/statuses`
+
+请求：
+
+```json
+{
+  "accountId": "account-id",
+  "folder": "INBOX",
+  "files": [
+    {
+      "filename": "archive.eml",
+      "size": 102400,
+      "lastModified": 1785200000000,
+      "fileKey": "archive.eml|102400|1785200000000|message/rfc822"
+    }
+  ]
+}
+```
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "上传状态已获取",
+  "httpCode": 200,
+  "data": {
+    "total": 1,
+    "importedCount": 0,
+    "pendingCount": 1,
+    "chunkSize": 16777216,
+    "items": [
+      {
+        "filename": "archive.eml",
+        "fileKey": "archive.eml|102400|1785200000000|message/rfc822",
+        "size": 102400,
+        "uploadId": "upload-id",
+        "uploadedBytes": 32768,
+        "chunkSize": 16777216,
+        "status": "uploading",
+        "needsUpload": true,
+        "error": ""
+      }
+    ]
+  }
+}
+```
+
+该接口只基于当前登录用户自己的上传会话目录计算状态。真正写入邮件时仍由完成导入接口按 `Message-ID` 或原文哈希去重，防止同一邮件因为重新上传而重复保存。
 
 ##### 创建或恢复上传会话
 

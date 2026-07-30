@@ -1034,6 +1034,7 @@ import {
   type MailFolder,
   type ImportEMLResult,
   type ImportEMLUploadSession,
+  type ImportEMLUploadStatusItem,
   type MailMessage,
   type MailMessageDetail,
   type MailRuleLog,
@@ -1054,6 +1055,11 @@ type ContactAddress = {
   raw: string;
   name: string;
   email: string;
+};
+type ImportEMLFilePlan = {
+  file: File;
+  originalIndex: number;
+  status?: ImportEMLUploadStatusItem;
 };
 const systemFolders = [
   { key: 'inbox' as const, label: '收件箱', icon: markRaw(InboxOutlined) },
@@ -2114,16 +2120,33 @@ async function importEMLWithResume(accountId: string, folder: string, files: Fil
     errorMessage: '',
     warningMessage: '',
   });
+  importEMLProgress.status = '正在检查已导入文件';
+  const plans = await buildImportEMLFilePlans(accountId, folder, files);
+  const pendingPlans = plans.filter((plan) => plan.status?.status !== 'imported');
+  const skippedPlans = plans.filter((plan) => plan.status?.status === 'imported');
+  if (skippedPlans.length > 0) {
+    const skippedBytes = skippedPlans.reduce((sum, plan) => sum + plan.file.size, 0);
+    result.successCount += skippedPlans.length;
+    result.duplicateCount += skippedPlans.length;
+    importEMLProgress.processedFiles = skippedPlans.length;
+    importEMLProgress.duplicate = skippedPlans.length;
+    importEMLProgress.completedFileBytes = skippedBytes;
+    importEMLProgress.uploadedBytes = Math.min(importEMLProgress.totalBytes, skippedBytes);
+    importEMLProgress.status = pendingPlans.length > 0
+      ? `已跳过 ${skippedPlans.length} 个已导入文件，准备处理 ${pendingPlans.length} 个未完成文件`
+      : '导入完成';
+    updateImportEMLTimeEstimate(true);
+  }
   resetImportEMLSpeedSample();
-  for (let index = 0; index < files.length; index++) {
-    const file = files[index];
-    importEMLProgress.currentFileIndex = index + 1;
+  for (let index = 0; index < pendingPlans.length; index++) {
+    const file = pendingPlans[index].file;
+    importEMLProgress.currentFileIndex = importEMLProgress.processedFiles + 1;
     importEMLProgress.currentFile = file.name;
     importEMLProgress.currentFileSize = file.size;
     importEMLProgress.currentFileUploadedBytes = 0;
-    importEMLProgress.status = `正在上传第 ${index + 1} 个文件`;
+    importEMLProgress.status = `正在上传第 ${importEMLProgress.currentFileIndex} 个文件`;
     resetImportEMLSpeedSample();
-    const item = await uploadImportEMLFile(accountId, folder, file, index + 1);
+    const item = await uploadImportEMLFile(accountId, folder, file, importEMLProgress.currentFileIndex);
     importEMLProgress.completedFileBytes += file.size;
     importEMLProgress.uploadedBytes = Math.min(importEMLProgress.totalBytes, importEMLProgress.completedFileBytes);
     importEMLProgress.currentFileUploadedBytes = file.size;
@@ -2156,6 +2179,30 @@ async function importEMLWithResume(accountId: string, folder: string, files: Fil
   return result;
 }
 
+async function buildImportEMLFilePlans(accountId: string, folder: string, files: File[]): Promise<ImportEMLFilePlan[]> {
+  const plans = files.map((file, originalIndex) => ({ file, originalIndex }));
+  try {
+    const statuses = await messageApi.getImportEMLUploadStatuses({
+      accountId,
+      folder,
+      files: files.map((file) => ({
+        filename: file.name,
+        size: file.size,
+        lastModified: file.lastModified,
+        fileKey: importEMLFileKey(file),
+      })),
+    });
+    const statusByKey = new Map(statuses.items.map((item) => [item.fileKey, item]));
+    return plans.map((plan) => ({
+      ...plan,
+      status: statusByKey.get(importEMLFileKey(plan.file)),
+    }));
+  } catch (error) {
+    message.warning(error instanceof Error ? `导入预检失败，将按完整断点流程重试：${error.message}` : '导入预检失败，将按完整断点流程重试');
+    return plans;
+  }
+}
+
 async function uploadImportEMLFile(accountId: string, folder: string, file: File, fileNumber: number) {
   try {
     const session = await messageApi.createImportEMLUpload({
@@ -2168,12 +2215,11 @@ async function uploadImportEMLFile(accountId: string, folder: string, file: File
     });
     if (session.status === 'imported') {
       importEMLProgress.status = `第 ${fileNumber} 个文件已导入，跳过上传`;
-      const finished = await messageApi.finishImportEMLUpload(session.uploadId);
       return {
-        filename: finished.filename,
-        success: finished.success,
-        inserted: finished.inserted,
-        message: finished.message,
+        filename: file.name,
+        success: true,
+        inserted: false,
+        message: null,
         error: null,
       };
     }

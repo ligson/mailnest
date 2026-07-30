@@ -16,6 +16,7 @@ docker/*.tar.gz.part-*
 # Go
 *.test
 coverage.out
+mailnest-be/import-eml-dir
 
 # Node / frontend
 node_modules/

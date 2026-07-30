@@ -2,6 +2,31 @@
 
 所有重要变更都应记录在本文件中。本文档尽量使用中文，便于后续回忆需求和设计决策。
 
+## 2026-07-30
+
+### 优化
+
+- 大量 EML 断点续传导入增加“上传前批量状态预检”：前端重新选择同一批文件后，会先查询服务端上传会话状态，已导入文件直接跳过，只继续上传未完成文件，避免失败后重新扫描和上传全部文件。
+- 新增受控运维命令 `cmd/import-eml-dir`，用于从服务器目录补导 EML；工具复用正式导入、去重和落盘逻辑，并会跳过 macOS 归档元数据 `._*`、`__MACOSX`。
+- 运维补导工具导入成功或确认重复后，会同步匹配的浏览器上传会话为 `imported`，防止前端继续提示同一文件未完成。
+
+### 修复
+
+- 清理生产环境中一次 EML 补导时误导入的 macOS AppleDouble 元数据邮件，仅删除精确匹配的 `mail_messages.id=327423` 和孤立线程 `mail_threads.id=4590`；正常邮件未受影响。
+
+### 文档
+
+- 更新 `README.md`、`doc/api.md` 和 `doc/backend-package-structure.md`，补充导入预检接口、断点续传差集逻辑和目录补导工具说明。
+
+### 测试
+
+- 前端 `rtk npm run build` 通过，后端 `rtk go test ./...` 通过。
+- 生产环境补导回查通过：18 个未完成上传会话已全部同步为 `imported`，误导入 AppleDouble 邮件剩余数量为 0。
+
+### 部署
+
+- 将前后端版本 `20260730100400-32f23a4-import-precheck` 部署到生产环境的 Mail Nest Docker Compose 服务；使用本地 Docker 构建 amd64 镜像后通过 `docker save | ssh docker load` 导入远端，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260730100400-import-precheck.tgz`；线上健康检查、`/mail` 静态页面、新导入预检接口未登录拦截、前后端容器镜像标签和上传会话状态回查验证通过。
+
 ## 2026-07-28
 
 ### 新增

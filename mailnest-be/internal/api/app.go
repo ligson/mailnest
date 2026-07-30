@@ -84,6 +84,7 @@ func (a *App) Routes() http.Handler {
 	mux.Handle("POST /api/v1/messages/send", a.authMiddleware(http.HandlerFunc(a.handleSendMessage)))
 	mux.Handle("POST /api/v1/messages/import-eml", a.authMiddleware(http.HandlerFunc(a.handleImportEMLMessage)))
 	mux.Handle("POST /api/v1/messages/import-eml/uploads", a.authMiddleware(http.HandlerFunc(a.handleCreateImportEMLUpload)))
+	mux.Handle("POST /api/v1/messages/import-eml/uploads/statuses", a.authMiddleware(http.HandlerFunc(a.handleImportEMLUploadStatuses)))
 	mux.Handle("GET /api/v1/messages/import-eml/uploads/{id}", a.authMiddleware(http.HandlerFunc(a.handleImportEMLUploadHeartbeat)))
 	mux.Handle("PUT /api/v1/messages/import-eml/uploads/{id}/chunk", a.authMiddleware(http.HandlerFunc(a.handleImportEMLUploadChunk)))
 	mux.Handle("POST /api/v1/messages/import-eml/uploads/{id}/finish", a.authMiddleware(http.HandlerFunc(a.handleFinishImportEMLUpload)))

@@ -32,6 +32,19 @@ type importEMLUploadCreateRequest struct {
 	FileKey      string `json:"fileKey"`
 }
 
+type importEMLUploadStatusesRequest struct {
+	AccountID string                      `json:"accountId"`
+	Folder    string                      `json:"folder"`
+	Files     []importEMLUploadStatusFile `json:"files"`
+}
+
+type importEMLUploadStatusFile struct {
+	Filename     string `json:"filename"`
+	Size         int64  `json:"size"`
+	LastModified int64  `json:"lastModified"`
+	FileKey      string `json:"fileKey"`
+}
+
 type importEMLUploadSession struct {
 	UploadID     string `json:"uploadId"`
 	UserID       int64  `json:"userId"`
@@ -47,6 +60,55 @@ type importEMLUploadSession struct {
 	MessageID    int64  `json:"messageId"`
 	CreatedAt    string `json:"createdAt"`
 	UpdatedAt    string `json:"updatedAt"`
+}
+
+func (a *App) handleImportEMLUploadStatuses(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+	var req importEMLUploadStatusesRequest
+	if err := decodeJSON(r, &req); err != nil {
+		response.Error(w, http.StatusBadRequest, "请求参数格式错误")
+		return
+	}
+	accountID, err := strconv.ParseInt(strings.TrimSpace(req.AccountID), 10, 64)
+	if err != nil || accountID <= 0 {
+		response.Error(w, http.StatusBadRequest, "请选择导入邮箱账号")
+		return
+	}
+	if _, err := a.store.FindMailAccountByID(userID, accountID); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			response.Error(w, http.StatusNotFound, "邮箱账号不存在")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "读取邮箱账号失败")
+		return
+	}
+	folder := strings.TrimSpace(req.Folder)
+	if folder == "" {
+		folder = "INBOX"
+	}
+	items := make([]map[string]any, 0, len(req.Files))
+	var importedCount, pendingCount int
+	for _, file := range req.Files {
+		item := a.importEMLUploadStatusPayload(userID, accountID, folder, file)
+		if item["status"] == "imported" {
+			importedCount++
+		} else {
+			pendingCount++
+		}
+		items = append(items, item)
+	}
+	log.Printf("EML 上传会话批量预检完成 userID=%d accountID=%d total=%d imported=%d pending=%d", userID, accountID, len(items), importedCount, pendingCount)
+	response.OK(w, "上传状态已获取", map[string]any{
+		"items":         items,
+		"total":         len(items),
+		"importedCount": importedCount,
+		"pendingCount":  pendingCount,
+		"chunkSize":     importEMLChunkBytes,
+	})
 }
 
 func (a *App) handleCreateImportEMLUpload(w http.ResponseWriter, r *http.Request) {
@@ -367,6 +429,57 @@ func importEMLUploadPayload(session importEMLUploadSession, uploadedBytes int64)
 		"status":        session.Status,
 		"error":         session.Error,
 	}
+}
+
+func (a *App) importEMLUploadStatusPayload(userID, accountID int64, folder string, file importEMLUploadStatusFile) map[string]any {
+	filename := filepath.Base(strings.TrimSpace(file.Filename))
+	fileKey := strings.TrimSpace(file.FileKey)
+	item := map[string]any{
+		"filename":      filename,
+		"fileKey":       fileKey,
+		"size":          file.Size,
+		"uploadedBytes": int64(0),
+		"chunkSize":     importEMLChunkBytes,
+		"status":        "missing",
+		"uploadId":      "",
+		"needsUpload":   true,
+		"error":         "",
+	}
+	if filename == "" || !strings.EqualFold(filepath.Ext(filename), ".eml") || file.Size <= 0 || file.Size > maxImportEMLBytes {
+		item["status"] = "invalid"
+		item["needsUpload"] = false
+		item["error"] = "EML 文件信息无效"
+		return item
+	}
+	uploadID := importEMLUploadID(userID, accountID, folder, filename, file.Size, file.LastModified, fileKey)
+	item["uploadId"] = uploadID
+	session, err := a.readImportEMLUploadSession(userID, uploadID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return item
+		}
+		item["status"] = "unknown"
+		item["error"] = "读取上传会话失败"
+		return item
+	}
+	uploadedBytes, err := a.importEMLUploadSize(userID, uploadID)
+	if err != nil {
+		item["status"] = "unknown"
+		item["error"] = "读取上传文件失败"
+		return item
+	}
+	if session.Status == "imported" && uploadedBytes == 0 {
+		uploadedBytes = session.Size
+	}
+	if uploadedBytes > session.Size {
+		uploadedBytes = session.Size
+	}
+	item["filename"] = session.Filename
+	item["status"] = session.Status
+	item["uploadedBytes"] = uploadedBytes
+	item["error"] = session.Error
+	item["needsUpload"] = session.Status != "imported" && uploadedBytes < session.Size
+	return item
 }
 
 func (a *App) importEMLUploadDir(userID int64, uploadID string) string {

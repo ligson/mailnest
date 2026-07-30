@@ -245,6 +245,21 @@ func TestImportEMLResumableUploadCanResumeAndFinish(t *testing.T) {
 		t.Fatalf("expected resumed offset, got %#v", resumeData)
 	}
 
+	statusBody := fmt.Sprintf(`{"accountId":%q,"folder":"INBOX","files":[{"filename":"resume.eml","size":%d,"lastModified":1785200000000,"fileKey":"resume.eml|%d|1785200000000"}]}`, accountID, len(raw), len(raw))
+	statusResp := performRequest(router, http.MethodPost, "/api/v1/messages/import-eml/uploads/statuses", statusBody, token)
+	if statusResp.Code != http.StatusOK {
+		t.Fatalf("expected upload statuses status 200, got %d: %s", statusResp.Code, statusResp.Body.String())
+	}
+	statusData := decodeEnvelope(t, statusResp.Body.Bytes())["data"].(map[string]any)
+	statusItems := statusData["items"].([]any)
+	if len(statusItems) != 1 {
+		t.Fatalf("expected one upload status item, got %#v", statusData)
+	}
+	statusItem := statusItems[0].(map[string]any)
+	if statusItem["status"] != "uploading" || statusItem["uploadedBytes"] != float64(len(firstChunk)) || statusItem["needsUpload"] != true {
+		t.Fatalf("expected uploading status item, got %#v", statusItem)
+	}
+
 	conflictResp := performBinaryRequest(router, http.MethodPut, "/api/v1/messages/import-eml/uploads/"+uploadID+"/chunk", []byte("bad-offset"), "0", token)
 	if conflictResp.Code != http.StatusConflict {
 		t.Fatalf("expected offset conflict status 409, got %d: %s", conflictResp.Code, conflictResp.Body.String())
@@ -265,6 +280,16 @@ func TestImportEMLResumableUploadCanResumeAndFinish(t *testing.T) {
 	finishData := decodeEnvelope(t, finishResp.Body.Bytes())["data"].(map[string]any)
 	if finishData["inserted"] != true || finishData["uploadedBytes"] != float64(len(raw)) {
 		t.Fatalf("expected inserted finish payload, got %#v", finishData)
+	}
+
+	importedStatusResp := performRequest(router, http.MethodPost, "/api/v1/messages/import-eml/uploads/statuses", statusBody, token)
+	if importedStatusResp.Code != http.StatusOK {
+		t.Fatalf("expected imported upload statuses status 200, got %d: %s", importedStatusResp.Code, importedStatusResp.Body.String())
+	}
+	importedStatusData := decodeEnvelope(t, importedStatusResp.Body.Bytes())["data"].(map[string]any)
+	importedStatusItem := importedStatusData["items"].([]any)[0].(map[string]any)
+	if importedStatusItem["status"] != "imported" || importedStatusItem["uploadedBytes"] != float64(len(raw)) || importedStatusItem["needsUpload"] != false {
+		t.Fatalf("expected imported status item, got %#v", importedStatusItem)
 	}
 
 	secondFinishResp := performRequest(router, http.MethodPost, "/api/v1/messages/import-eml/uploads/"+uploadID+"/finish", `{}`, token)

@@ -21,7 +21,7 @@ API 包负责 HTTP 路由、参数校验、权限上下文、调用业务服务�
 - `account_handlers.go`：邮箱账号增删改查、连接测试、目录读取、手动同步和全量同步状态。
 - `message_handlers.go`：邮件列表、邮件详情、批量操作、移动文件夹、写信上下文和发送入口。
 - `import_handlers.go`：兼容旧版 multipart EML 文件上传导入入口。
-- `import_resumable_handlers.go`：浏览器大量 EML 导入的上传会话、分片上传、心跳查询和完成导入接口。
+- `import_resumable_handlers.go`：浏览器大量 EML 导入的上传会话、已导入预检、分片上传、心跳查询和完成导入接口。
 - `attachment_handlers.go`：附件中心列表、附件下载、附件预览和内嵌附件读取。
 - `contact_handlers.go`：联系人通讯录维护。
 - `folder_rule_handlers.go`：本地文件夹和邮件规则维护、预览、应用。
@@ -33,6 +33,10 @@ API 包负责 HTTP 路由、参数校验、权限上下文、调用业务服务�
 - `inline_images.go`：邮件详情中 CID 内嵌图片重写和图片兼容处理。
 - `contacts_presenter_helpers.go`：联系人请求参数归一化。
 - `helpers.go`：路由 ID、查询参数、日期、布尔值、空值等通用辅助函数。
+
+## `cmd`
+
+- `cmd/import-eml-dir`：受控的 EML 目录补导工具，用于服务器运维场景。工具会复用正式后端导入逻辑完成解析、去重、落盘和联系人沉淀；默认跳过 macOS 归档元数据文件 `._*` 和 `__MACOSX`，并在导入成功或判定重复后同步对应浏览器断点上传会话为 `imported`，避免前端后续重复上传已完成文件。
 
 ## `internal/storage`
 
