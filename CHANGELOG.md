@@ -31,6 +31,7 @@
 ### 部署
 
 - 将前后端版本 `20260730104836-023f529-import-precheck` 部署到生产环境的 Mail Nest Docker Compose 服务；使用本地 Docker 构建 amd64 镜像后通过 `docker save | ssh docker load` 导入远端，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260730100400-import-precheck.tgz`；线上健康检查、`/mail` 静态页面、新导入预检接口未登录拦截、前后端容器镜像标签和上传会话状态回查验证通过。
+- 将后端版本 `20260730112500-838994e-eml-date` 部署到生产环境；按 L1 轻量备份策略仅保存远端 Compose、配置、旧镜像标签和回滚说明到 `backups/deploy-light/20260730112500-eml-date/`，未全量压缩 `data/`；线上健康检查、后端容器标签和导入邮件 `sent_at` 修复回查通过。
 
 ## 2026-07-28
 
