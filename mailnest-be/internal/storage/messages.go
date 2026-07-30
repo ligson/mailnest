@@ -256,7 +256,7 @@ func (s *Store) ListMailMessagesWithRawContent(limit int) ([]MailMessage, error)
 		FROM mail_messages m
 		LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id
 		WHERE m.raw_path IS NOT NULL
-		ORDER BY m.id ASC
+		ORDER BY (m.sent_at IS NULL) DESC, m.id DESC
 		LIMIT ?`,
 		limit,
 	)
@@ -284,6 +284,7 @@ func (s *Store) UpdateMailMessageParsedContent(params UpdateMailMessageContentPa
 		`UPDATE mail_messages
 		SET message_id = ?, subject = ?, from_addr = ?, to_addrs = ?, cc_addrs = ?,
 			text_body_path = ?, html_body_path = ?, search_text = ?, in_reply_to = ?, references_header = ?,
+			sent_at = CASE WHEN ? = 1 THEN ? ELSE sent_at END,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE user_id = ? AND id = ?`,
 		nullIfEmpty(params.MessageID),
@@ -296,6 +297,8 @@ func (s *Store) UpdateMailMessageParsedContent(params UpdateMailMessageContentPa
 		nullIfEmpty(params.SearchText),
 		nullIfEmpty(params.InReplyTo),
 		nullIfEmpty(params.References),
+		boolToInt(params.SentAt.Valid),
+		nullTimeValue(params.SentAt),
 		params.UserID,
 		params.ID,
 	)

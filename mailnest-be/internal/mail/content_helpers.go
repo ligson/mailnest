@@ -19,6 +19,8 @@ var htmlJavascriptURLPattern = regexp.MustCompile(`(?is)(href|src)\s*=\s*("|')\s
 
 var htmlImageTagPattern = regexp.MustCompile(`(?is)<img\b[^>]*>`)
 
+var mailDateTrailingCommentPattern = regexp.MustCompile(`\s*\([^)]*\)\s*$`)
+
 func buildSearchText(fetched FetchedMessage, toAddrs, ccAddrs string) string {
 	parts := []string{
 		fetched.TextBody,
@@ -54,16 +56,40 @@ func valueOrExisting(value, existing string) string {
 }
 
 func parseTime(value string) sql.NullTime {
-	if strings.TrimSpace(value) == "" {
+	value = normalizeMailDateValue(value)
+	if value == "" {
 		return sql.NullTime{}
 	}
-	for _, layout := range []string{time.RFC3339, time.RFC1123Z, time.RFC1123, time.RFC822Z, time.RFC822} {
+	for _, layout := range []string{
+		time.RFC3339,
+		time.RFC1123Z,
+		time.RFC1123,
+		time.RFC822Z,
+		time.RFC822,
+		"Mon, 2 Jan 2006 15:04:05 -0700",
+		"Mon, 2 Jan 2006 15:04:05 MST",
+		"2 Jan 2006 15:04:05 -0700",
+		"2 Jan 2006 15:04:05 MST",
+	} {
 		parsed, err := time.Parse(layout, value)
 		if err == nil {
 			return sql.NullTime{Time: parsed, Valid: true}
 		}
 	}
 	return sql.NullTime{}
+}
+
+func normalizeMailDateValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.Contains(value, "(") && strings.Contains(value, ")") {
+		if cleaned := strings.TrimSpace(mailDateTrailingCommentPattern.ReplaceAllString(value, "")); cleaned != "" {
+			return cleaned
+		}
+	}
+	return value
 }
 
 func safePath(value string) string {

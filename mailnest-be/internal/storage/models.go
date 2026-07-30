@@ -302,6 +302,7 @@ type UpdateMailMessageContentParams struct {
 	SearchText   string
 	InReplyTo    string
 	References   string
+	SentAt       sql.NullTime
 }
 
 type SaveMailDraftParams struct {

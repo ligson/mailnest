@@ -117,7 +117,7 @@ func TestImportEMLMessageCreatesMessageAndDeduplicates(t *testing.T) {
 	router := newTestRouter(t, true)
 	token := registerTestUser(t, router, "eml-import", "eml-import@example.com")
 	accountID := createTestAccount(t, router, token)
-	raw := []byte("From: Sender <sender@example.com>\r\nTo: Reader <reader@example.com>\r\nSubject: Imported EML\r\nMessage-ID: <imported-eml@example.com>\r\nDate: Mon, 27 Jul 2026 10:00:00 +0800\r\n\r\nHello from eml.")
+	raw := []byte("From: Sender <sender@example.com>\r\nTo: Reader <reader@example.com>\r\nSubject: Imported EML\r\nMessage-ID: <imported-eml@example.com>\r\nDate: Mon, 8 Sep 2025 19:03:56 +0800 (GMT+08:00)\r\n\r\nHello from eml.")
 
 	importResp := performEMLImport(t, router, token, accountID, raw)
 	if importResp.Code != http.StatusOK {
@@ -140,6 +140,9 @@ func TestImportEMLMessageCreatesMessageAndDeduplicates(t *testing.T) {
 	detail := decodeEnvelope(t, detailResp.Body.Bytes())["data"].(map[string]any)
 	if detail["textBody"] != "Hello from eml." {
 		t.Fatalf("expected imported body, got %#v", detail["textBody"])
+	}
+	if detail["sentAt"] != "2025-09-08T19:03:56+08:00" {
+		t.Fatalf("expected imported sentAt from original Date header, got %#v", detail["sentAt"])
 	}
 
 	duplicateResp := performEMLImport(t, router, token, accountID, raw)

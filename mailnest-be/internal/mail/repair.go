@@ -1,6 +1,7 @@
 package mail
 
 import (
+	"database/sql"
 	"log"
 	"os"
 	"path/filepath"
@@ -52,6 +53,7 @@ func (s *Service) RepairStoredParsedMessages() error {
 		}
 		toAddrs := strings.Join(parsed.To, ", ")
 		ccAddrs := strings.Join(parsed.CC, ", ")
+		sentAt := sqlNullTimeForRepair(message.SentAt, parsed.SentAt)
 		if err := s.store.UpdateMailMessageParsedContent(storage.UpdateMailMessageContentParams{
 			UserID:       message.UserID,
 			ID:           message.ID,
@@ -65,6 +67,7 @@ func (s *Service) RepairStoredParsedMessages() error {
 			SearchText:   buildSearchText(parsed, toAddrs, ccAddrs),
 			InReplyTo:    parsed.InReplyTo,
 			References:   parsed.References,
+			SentAt:       sentAt,
 		}); err != nil {
 			return err
 		}
@@ -90,7 +93,17 @@ func messageNeedsParsedRepair(message storage.MailMessage, currentText, currentH
 	if strings.TrimSpace(currentHTML) == "" && strings.TrimSpace(parsed.HTMLBody) != "" {
 		return true
 	}
+	if !message.SentAt.Valid && parseTime(parsed.SentAt).Valid {
+		return true
+	}
 	return false
+}
+
+func sqlNullTimeForRepair(existing sql.NullTime, parsedValue string) sql.NullTime {
+	if existing.Valid {
+		return sql.NullTime{}
+	}
+	return parseTime(parsedValue)
 }
 
 func readContentFile(path string) string {
