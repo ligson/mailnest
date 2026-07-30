@@ -1,9 +1,13 @@
 package mail
 
 import (
+	"bufio"
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"html"
+	stdmail "net/mail"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -90,6 +94,41 @@ func normalizeMailDateValue(value string) string {
 		}
 	}
 	return value
+}
+
+func sentAtFromRaw(raw []byte) sql.NullTime {
+	message, err := stdmail.ReadMessage(bytes.NewReader(normalizeMIMEMessage(raw)))
+	if err != nil {
+		return sql.NullTime{}
+	}
+	return parseTime(message.Header.Get("Date"))
+}
+
+func sentAtFromRawHeaderFile(path string) (sql.NullTime, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return sql.NullTime{}, err
+	}
+	defer file.Close()
+
+	var header bytes.Buffer
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimRight(line, "\r") == "" {
+			break
+		}
+		header.WriteString(line)
+		header.WriteString("\r\n")
+	}
+	if err := scanner.Err(); err != nil {
+		return sql.NullTime{}, err
+	}
+	if header.Len() == 0 {
+		return sql.NullTime{}, nil
+	}
+	return sentAtFromRaw(append(header.Bytes(), []byte("\r\n")...)), nil
 }
 
 func safePath(value string) string {

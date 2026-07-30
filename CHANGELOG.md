@@ -14,6 +14,7 @@
 
 - 清理生产环境中一次 EML 补导时误导入的 macOS AppleDouble 元数据邮件，仅删除精确匹配的 `mail_messages.id=327423` 和孤立线程 `mail_threads.id=4590`；正常邮件未受影响。
 - 修复 EML 导入邮件日期解析：支持 `Mon, 8 Sep 2025 19:03:56 +0800 (GMT+08:00)` 这类带尾部时区注释且日期不补零的 `Date` 头，避免 `sent_at` 为空时前端退回显示导入时间；历史解析修复任务会优先补齐 `sent_at` 为空的最近邮件。
+- 新增缺失发送时间修复工具 `cmd/repair-mail-dates`：按账号批量读取 EML 原文头部 Date 并只补齐为空的 `sent_at`，不会覆盖已有日期；生产已对账号 2 的 EML 导入邮件执行受控修复，7048 封中仅剩 4 封没有可解析 Date。
 
 ### 文档
 
@@ -32,6 +33,7 @@
 
 - 将前后端版本 `20260730104836-023f529-import-precheck` 部署到生产环境的 Mail Nest Docker Compose 服务；使用本地 Docker 构建 amd64 镜像后通过 `docker save | ssh docker load` 导入远端，更新前已备份远端 `docker-compose.yml`、`config.yaml` 和 `data/` 到 `backups/pre-20260730100400-import-precheck.tgz`；线上健康检查、`/mail` 静态页面、新导入预检接口未登录拦截、前后端容器镜像标签和上传会话状态回查验证通过。
 - 将后端版本 `20260730112500-838994e-eml-date` 部署到生产环境；按 L1 轻量备份策略仅保存远端 Compose、配置、旧镜像标签和回滚说明到 `backups/deploy-light/20260730112500-eml-date/`，未全量压缩 `data/`；线上健康检查、后端容器标签和导入邮件 `sent_at` 修复回查通过。
+- 对生产账号 2 的 EML 导入邮件执行 L2 受控日期修复；修复前仅备份受影响 `mail_messages` 行到 `backups/database/20260730114500-eml-date-repair/`，未全量压缩 `data/`；修复工具检查 1462 封、补齐 1457 封、4 封无有效 Date、0 个读取错误，最终剩余空 `sent_at` 为 4。
 
 ## 2026-07-28
 
