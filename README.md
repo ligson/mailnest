@@ -86,6 +86,7 @@ mailnest/
 - `mailnest-fe/docker/nginx.conf`：前端静态资源服务，并将 `/api/` 代理到后端容器。
 - `docker/docker-compose.yml`：NAS 单机部署示例。
 - `docker/config.example.yaml`：后端生产配置示例。
+- `doc/deployment-backup-strategy.md`：生产部署备份分级策略，普通 UI/代码更新不再默认全量压缩邮件数据目录。
 
 真实 `docker/config.yaml`、运行数据、镜像包和本地 `.env` 均已加入 `.gitignore`，不要提交。
 

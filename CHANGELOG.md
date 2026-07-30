@@ -17,6 +17,10 @@
 ### 文档
 
 - 更新 `README.md`、`doc/api.md` 和 `doc/backend-package-structure.md`，补充导入预检接口、断点续传差集逻辑和目录补导工具说明。
+- 新增生产部署备份分级策略：普通前端或普通后端镜像更新只做轻量备份，不再默认全量压缩 `data/`；数据库变更、文件存储变更、生产数据清理和大规模迁移按风险提升到数据库备份、快照、增量备份或全量备份。
+- 更新 `AGENTS.md` 和 `README.md`，明确后续部署按 `doc/deployment-backup-strategy.md` 选择备份级别，避免每次小更新都压缩几十 GB 邮件数据。
+- 生产备份策略补充目录和保留规则：自动备份按 `deploy-light`、`database`、`data-risk` 分目录保存，每类默认只保留最近 2 次；长期保留备份需放入 `manual-keep` 并说明原因。
+- 按新策略整理 NAS 生产备份目录：保留最近 2 个自动数据备份到 `backups/data-risk/`，迁移和事故证据备份迁入 `backups/manual-keep/`，清理旧自动备份 84 个，并在 `manual-keep` 中保留清理清单。
 
 ### 测试
 
