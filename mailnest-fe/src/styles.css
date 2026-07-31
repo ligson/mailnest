@@ -589,11 +589,11 @@ body {
 }
 
 .shell-content.mail-shell-content {
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: var(--surface-bg);
-  box-shadow: none;
+  padding: 22px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 82%, var(--shell-bg));
+  border-radius: var(--workspace-radius);
+  background: var(--app-bg);
+  box-shadow: inset 1px 1px 0 color-mix(in srgb, #ffffff 58%, transparent);
 }
 
 .content-panel {

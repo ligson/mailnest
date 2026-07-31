@@ -4,7 +4,17 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"sync"
+	"time"
 )
+
+const adminUserSummaryCacheTTL = 30 * time.Second
+
+type adminUserSummaryCache struct {
+	mu        sync.Mutex
+	items     []AdminUserSummary
+	expiresAt time.Time
+}
 
 func (s *Store) CreateUser(username, email, passwordHash string) (User, error) {
 	isAdmin, err := s.nextUserShouldBeAdmin()
@@ -23,6 +33,7 @@ func (s *Store) CreateUser(username, email, passwordHash string) (User, error) {
 		return User{}, err
 	}
 
+	s.invalidateAdminUserSummaryCache()
 	return s.FindUserByID(id)
 }
 
@@ -89,6 +100,7 @@ func (s *Store) UpdateUserProfile(id int64, nickname, bio, uiTheme string) (User
 	if count == 0 {
 		return User{}, ErrNotFound
 	}
+	s.invalidateAdminUserSummaryCache()
 	return s.FindUserByID(id)
 }
 
@@ -108,6 +120,7 @@ func (s *Store) UpdateUserAvatarPath(id int64, avatarPath string) (User, error) 
 	if count == 0 {
 		return User{}, ErrNotFound
 	}
+	s.invalidateAdminUserSummaryCache()
 	return s.FindUserByID(id)
 }
 
@@ -127,6 +140,7 @@ func (s *Store) UpdateUserPasswordHash(id int64, passwordHash string) error {
 	if count == 0 {
 		return ErrNotFound
 	}
+	s.invalidateAdminUserSummaryCache()
 	return nil
 }
 
@@ -146,10 +160,23 @@ func (s *Store) UpdateUserEnabled(id int64, enabled bool) (User, error) {
 	if count == 0 {
 		return User{}, ErrNotFound
 	}
+	s.invalidateAdminUserSummaryCache()
 	return s.FindUserByID(id)
 }
 
 func (s *Store) ListAdminUserSummaries() ([]AdminUserSummary, error) {
+	if items, ok := s.cachedAdminUserSummaries(); ok {
+		return items, nil
+	}
+	summaries, err := s.queryAdminUserSummaries()
+	if err != nil {
+		return nil, err
+	}
+	s.storeAdminUserSummariesCache(summaries)
+	return cloneAdminUserSummaries(summaries), nil
+}
+
+func (s *Store) queryAdminUserSummaries() ([]AdminUserSummary, error) {
 	rows, err := s.db.Query(
 		`SELECT
 			u.id, u.username, u.email, u.password_hash, u.nickname, u.avatar_path, u.bio, u.ui_theme, u.is_admin, u.enabled, u.created_at, u.updated_at,
@@ -235,6 +262,41 @@ func (s *Store) ListAdminUserSummaries() ([]AdminUserSummary, error) {
 		return nil, err
 	}
 	return summaries, nil
+}
+
+func (s *Store) cachedAdminUserSummaries() ([]AdminUserSummary, bool) {
+	s.adminUserSummaryCache.mu.Lock()
+	defer s.adminUserSummaryCache.mu.Unlock()
+
+	if time.Now().After(s.adminUserSummaryCache.expiresAt) || len(s.adminUserSummaryCache.items) == 0 {
+		return nil, false
+	}
+	return cloneAdminUserSummaries(s.adminUserSummaryCache.items), true
+}
+
+func (s *Store) storeAdminUserSummariesCache(items []AdminUserSummary) {
+	s.adminUserSummaryCache.mu.Lock()
+	defer s.adminUserSummaryCache.mu.Unlock()
+
+	s.adminUserSummaryCache.items = cloneAdminUserSummaries(items)
+	s.adminUserSummaryCache.expiresAt = time.Now().Add(adminUserSummaryCacheTTL)
+}
+
+func (s *Store) invalidateAdminUserSummaryCache() {
+	s.adminUserSummaryCache.mu.Lock()
+	defer s.adminUserSummaryCache.mu.Unlock()
+
+	s.adminUserSummaryCache.items = nil
+	s.adminUserSummaryCache.expiresAt = time.Time{}
+}
+
+func cloneAdminUserSummaries(items []AdminUserSummary) []AdminUserSummary {
+	if len(items) == 0 {
+		return []AdminUserSummary{}
+	}
+	cloned := make([]AdminUserSummary, len(items))
+	copy(cloned, items)
+	return cloned
 }
 
 func scanUser(scanner interface {

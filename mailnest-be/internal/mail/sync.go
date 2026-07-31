@@ -454,6 +454,10 @@ func (s *Service) cleanupServerOldMessages(userID, accountID, jobID int64, accou
 			status = "skipped"
 			reason = "raw_file_missing"
 			skipped++
+		} else if !isServerIMAPUID(candidate.IMAPUID) {
+			status = "skipped"
+			reason = "invalid_imap_uid"
+			skipped++
 		}
 		logItem, logErr := s.store.CreateMailServerDeleteLog(storage.CreateMailServerDeleteLogParams{
 			UserID:      userID,
@@ -476,6 +480,9 @@ func (s *Service) cleanupServerOldMessages(userID, accountID, jobID int64, accou
 			return logErr
 		}
 		if !rawExists {
+			continue
+		}
+		if !isServerIMAPUID(candidate.IMAPUID) {
 			continue
 		}
 		uids = append(uids, candidate.IMAPUID)
@@ -538,6 +545,19 @@ func (s *Service) storedRawFileExists(path string) bool {
 	}
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func isServerIMAPUID(uid string) bool {
+	uid = strings.TrimSpace(uid)
+	if uid == "" {
+		return false
+	}
+	for _, ch := range uid {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func accountSyncFolders(account storage.MailAccount) []string {

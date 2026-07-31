@@ -1,7 +1,8 @@
 package storage
 
 type Store struct {
-	db *database
+	db                    *database
+	adminUserSummaryCache adminUserSummaryCache
 }
 
 // Open 使用默认 SQLite 配置打开存储层，主要服务本地开发和测试。

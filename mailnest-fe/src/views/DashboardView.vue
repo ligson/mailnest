@@ -1283,7 +1283,25 @@ const mailBodySrcdoc = computed(() => buildMailBodySrcdoc(detail.value?.htmlBody
 const contactByEmail = computed(() => {
   const map = new Map<string, Contact>();
   for (const contact of contacts.value) {
-    map.set(contact.email.toLowerCase(), contact);
+    const email = normalizeContactKey(contact.email);
+    if (email) {
+      map.set(email, contact);
+    }
+  }
+  return map;
+});
+const contactByEmailPrefix = computed(() => {
+  const map = new Map<string, Contact | null>();
+  for (const contact of contacts.value) {
+    const prefix = normalizeContactKey(contact.email.split('@')[0] || '');
+    if (!prefix) {
+      continue;
+    }
+    if (map.has(prefix)) {
+      map.set(prefix, null);
+      continue;
+    }
+    map.set(prefix, contact);
   }
   return map;
 });
@@ -1500,7 +1518,17 @@ async function loadFolders() {
 
 async function loadContacts() {
   try {
-    contacts.value = (await contactApi.list({ pageSize: 1000 })).items;
+    const pageSize = 1000;
+    const loaded: Contact[] = [];
+    let page = 1;
+    let total = 0;
+    do {
+      const data = await contactApi.list({ page, pageSize });
+      loaded.push(...data.items);
+      total = data.total;
+      page += 1;
+    } while (loaded.length < total);
+    contacts.value = loaded;
   } catch (error) {
     message.error(error instanceof Error ? error.message : '获取联系人失败');
   }
@@ -3494,7 +3522,7 @@ function parseContactAddress(value: string): ContactAddress {
 
 function displayAddressName(address: ContactAddress) {
   const contact = contactInfo(address);
-  return contact?.nickname || contact?.displayName || address.name || address.email || '未知联系人';
+  return contact?.nickname || contact?.displayName || contact?.name || address.name || address.email || '未知联系人';
 }
 
 function addressInitial(address: ContactAddress) {
@@ -3502,12 +3530,26 @@ function addressInitial(address: ContactAddress) {
 }
 
 function contactEmail(address: ContactAddress) {
-  return address.email || (looksLikeEmail(address.raw) ? address.raw : '');
+  const contact = contactInfo(address);
+  return contact?.email || address.email || (looksLikeEmail(address.raw) ? address.raw : '');
 }
 
 function contactInfo(address: ContactAddress) {
-  const email = contactEmail(address).toLowerCase();
-  return email ? contactByEmail.value.get(email) : undefined;
+  const email = normalizeContactKey(address.email || (looksLikeEmail(address.raw) ? address.raw : ''));
+  if (email) {
+    const exact = contactByEmail.value.get(email);
+    if (exact) {
+      return exact;
+    }
+  }
+
+  const prefix = normalizeContactKey((email ? email.split('@')[0] : '') || address.name || address.raw);
+  const matched = prefix ? contactByEmailPrefix.value.get(prefix) : undefined;
+  return matched || undefined;
+}
+
+function normalizeContactKey(value: string) {
+  return value.trim().replace(/^"|"$/g, '').toLowerCase();
 }
 
 async function editAddressContact(address: ContactAddress) {
@@ -3539,11 +3581,11 @@ function looksLikeEmail(value: string) {
   min-width: 0;
   height: 100%;
   min-height: 0;
-  border: 0;
-  border-radius: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
   overflow: hidden;
   background: var(--surface-bg);
-  box-shadow: none;
+  box-shadow: var(--shadow-soft);
 }
 
 .mail-resizer {
@@ -3578,6 +3620,7 @@ function looksLikeEmail(value: string) {
   padding: 16px 10px;
   overflow: auto;
   background: var(--surface-muted);
+  border-right: 1px solid var(--border-subtle);
 }
 
 .folder-heading,
@@ -3738,6 +3781,7 @@ function looksLikeEmail(value: string) {
   min-width: 0;
   min-height: 0;
   background: linear-gradient(180deg, var(--surface-bg), var(--surface-muted));
+  border-right: 1px solid var(--border-subtle);
 }
 
 .mail-list-header {
@@ -4279,7 +4323,9 @@ function looksLikeEmail(value: string) {
   min-height: 0;
   padding: 26px 30px;
   overflow: auto;
-  background: var(--surface-bg);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-muted) 52%, var(--surface-bg)), var(--surface-bg) 220px),
+    var(--surface-bg);
 }
 
 .mail-reader {

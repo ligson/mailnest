@@ -2,16 +2,20 @@ package api
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"mailnest-be/internal/response"
 	"mailnest-be/internal/storage"
 )
 
 func (a *App) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	summaries, err := a.store.ListAdminUserSummaries()
 	if err != nil {
+		log.Printf("系统管理用户列表失败: duration=%s error=%v", time.Since(started), err)
 		response.Error(w, http.StatusInternalServerError, "获取用户列表失败")
 		return
 	}
@@ -19,6 +23,7 @@ func (a *App) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
 	for _, summary := range summaries {
 		items = append(items, adminUserSummaryPayload(summary))
 	}
+	log.Printf("系统管理用户列表完成: users=%d duration=%s", len(items), time.Since(started))
 	response.OK(w, "获取成功", map[string]any{"items": items})
 }
 

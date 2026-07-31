@@ -165,6 +165,47 @@ func TestUpsertContactSeenDoesNotOverwriteManualProfile(t *testing.T) {
 	}
 }
 
+func TestAdminUserSummaryCacheReturnsCloneAndInvalidatesOnUserUpdate(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "mailnest.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	user, err := store.CreateUser("admin-cache-user", "admin-cache@example.com", "hash")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	first, err := store.ListAdminUserSummaries()
+	if err != nil {
+		t.Fatalf("list admin summaries: %v", err)
+	}
+	if len(first) != 1 || !first[0].User.Enabled {
+		t.Fatalf("expected enabled summary, got %#v", first)
+	}
+
+	first[0].User.Enabled = false
+	cached, err := store.ListAdminUserSummaries()
+	if err != nil {
+		t.Fatalf("list cached admin summaries: %v", err)
+	}
+	if !cached[0].User.Enabled {
+		t.Fatalf("expected cached summary clone to stay enabled, got %#v", cached[0])
+	}
+
+	if _, err := store.UpdateUserEnabled(user.ID, false); err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
+	updated, err := store.ListAdminUserSummaries()
+	if err != nil {
+		t.Fatalf("list updated admin summaries: %v", err)
+	}
+	if updated[0].User.Enabled {
+		t.Fatalf("expected cache to be invalidated after user update, got %#v", updated[0])
+	}
+}
+
 func TestListMailMessagesByQueryUsesSummaryFields(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "mailnest.db"))
 	if err != nil {
@@ -231,6 +272,68 @@ func TestListMailMessagesByQueryUsesSummaryFields(t *testing.T) {
 	}
 	if detail.SearchText.String != "正文搜索索引不应该出现在列表结果里" {
 		t.Fatalf("expected detail query to include search text, got %#v", detail.SearchText)
+	}
+}
+
+func TestListServerCleanupCandidatesSkipsImportedEMLUIDs(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "mailnest.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	user, err := store.CreateUser("cleanup-import-user", "cleanup-import@example.com", "hash")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	account, err := store.CreateMailAccount(MailAccount{
+		UserID:              user.ID,
+		DisplayName:         "清理候选账号",
+		Email:               "cleanup-import@example.com",
+		IMAPHost:            "imap.example.com",
+		IMAPPort:            993,
+		IMAPTLS:             true,
+		IMAPUsername:        "cleanup-import@example.com",
+		IMAPPasswordEncoded: "encrypted",
+		PollIntervalMinutes: 10,
+		Enabled:             true,
+	})
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+
+	oldSentAt := sql.NullTime{Time: time.Now().AddDate(0, 0, -10), Valid: true}
+	if _, _, err := store.InsertMailMessageIfNew(CreateMailMessageParams{
+		UserID:     user.ID,
+		AccountID:  account.ID,
+		Folder:     "INBOX",
+		IMAPUID:    "1234",
+		Subject:    "服务器旧邮件",
+		SentAt:     oldSentAt,
+		ReceivedAt: oldSentAt,
+		RawPath:    "users/1/accounts/1/messages/INBOX/1234/raw.eml",
+	}); err != nil {
+		t.Fatalf("insert server message: %v", err)
+	}
+	if _, _, err := store.InsertMailMessageIfNew(CreateMailMessageParams{
+		UserID:     user.ID,
+		AccountID:  account.ID,
+		Folder:     "INBOX",
+		IMAPUID:    "eml-2020020711480608847118@yonyou.com",
+		Subject:    "本地导入旧邮件",
+		SentAt:     oldSentAt,
+		ReceivedAt: oldSentAt,
+		RawPath:    "users/1/accounts/1/messages/INBOX/eml-imported/raw.eml",
+	}); err != nil {
+		t.Fatalf("insert imported message: %v", err)
+	}
+
+	candidates, err := store.ListServerCleanupCandidates(user.ID, account.ID, sql.NullTime{Time: time.Now().AddDate(0, 0, -1), Valid: true})
+	if err != nil {
+		t.Fatalf("list cleanup candidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].IMAPUID != "1234" {
+		t.Fatalf("expected only numeric server UID candidate, got %#v", candidates)
 	}
 }
 

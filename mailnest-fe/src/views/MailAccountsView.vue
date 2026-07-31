@@ -13,14 +13,37 @@
       </div>
 
       <a-table
+        class="accounts-table"
         row-key="id"
         :columns="columns"
         :data-source="accounts"
         :loading="loading"
         :pagination="false"
+        :scroll="{ x: 1180 }"
       >
         <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'enabled'">
+          <template v-if="column.key === 'account'">
+            <div class="account-info-cell">
+              <div class="account-avatar">{{ accountInitial(record) }}</div>
+              <div class="account-info-main">
+                <strong>{{ record.displayName || '未命名邮箱' }}</strong>
+                <span>{{ record.email }}</span>
+              </div>
+            </div>
+          </template>
+          <template v-else-if="column.key === 'server'">
+            <div class="account-server-cell">
+              <div>
+                <span>IMAP</span>
+                <strong>{{ record.imapHost }}:{{ record.imapPort }}</strong>
+              </div>
+              <div>
+                <span>SMTP</span>
+                <strong>{{ record.smtpHost || '-' }}{{ record.smtpHost ? `:${record.smtpPort}` : '' }}</strong>
+              </div>
+            </div>
+          </template>
+          <template v-else-if="column.key === 'enabled'">
             <div class="account-status-cell">
               <a-switch
                 :checked="record.enabled"
@@ -34,7 +57,7 @@
               </span>
             </div>
           </template>
-          <template v-if="column.key === 'syncStatus'">
+          <template v-else-if="column.key === 'syncStatus'">
             <div class="account-sync-cell">
               <a-tag :color="fullSyncTagColor(record.fullSyncStatus)">
                 {{ fullSyncStatusText(record.fullSyncStatus) }}
@@ -53,12 +76,12 @@
               </span>
             </div>
           </template>
-          <template v-if="column.key === 'authType'">
+          <template v-else-if="column.key === 'authType'">
             <a-tag :color="record.authType === 'oauth2' ? 'blue' : 'default'">
               {{ record.authType === 'oauth2' ? 'OAuth2' : '密码' }}
             </a-tag>
           </template>
-          <template v-if="column.key === 'action'">
+          <template v-else-if="column.key === 'action'">
             <div class="account-actions">
               <a-button size="small" type="primary" :loading="syncingId === record.id" @click="syncAccount(record.id)">收取</a-button>
               <a-button
@@ -439,15 +462,12 @@ const serverDeleteLogsLoading = ref(false);
 const serverDeleteLogTotal = ref(0);
 let statusTimer: number | undefined;
 const columns: TableColumnsType<MailAccount> = [
-  { title: '名称', dataIndex: 'displayName', key: 'displayName' },
-  { title: '邮箱', dataIndex: 'email', key: 'email' },
-  { title: 'IMAP 主机', dataIndex: 'imapHost', key: 'imapHost' },
-  { title: 'SMTP 主机', dataIndex: 'smtpHost', key: 'smtpHost' },
-  { title: '端口', dataIndex: 'imapPort', key: 'imapPort', width: 90 },
+  { title: '账号', key: 'account', width: 290, fixed: 'left' },
+  { title: '服务器', key: 'server', width: 270 },
   { title: '认证', key: 'authType', width: 90 },
   { title: '状态', key: 'enabled', width: 150 },
-  { title: '同步状态', key: 'syncStatus', width: 170 },
-  { title: '操作', key: 'action', width: 250 },
+  { title: '同步状态', key: 'syncStatus', width: 220 },
+  { title: '操作', key: 'action', width: 260, fixed: 'right' },
 ];
 const jobColumns: TableColumnsType<SyncJob> = [
   { title: '状态', key: 'status', width: 90 },
@@ -760,6 +780,10 @@ function filterFolderOption(input: string, option?: { label?: string; value?: st
   return `${option?.label || ''} ${option?.value || ''}`.toLowerCase().includes(keyword);
 }
 
+function accountInitial(account: MailAccount) {
+  return (account.displayName || account.email || '?').trim().slice(0, 1).toUpperCase();
+}
+
 function onSmtpTlsChanged() {
   if (form.smtpTls) {
     form.smtpStartTls = false;
@@ -1050,10 +1074,81 @@ async function startMicrosoftOAuth() {
 </script>
 
 <style scoped>
+.accounts-table {
+  min-width: 0;
+}
+
+.accounts-table :deep(.ant-table) {
+  border-radius: 8px;
+}
+
+.accounts-table :deep(.ant-table-thead > tr > th) {
+  white-space: nowrap;
+}
+
+.accounts-table :deep(.ant-table-cell) {
+  vertical-align: middle;
+}
+
+.account-info-cell {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.account-avatar {
+  display: inline-flex;
+  width: 42px;
+  height: 42px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border-color));
+  border-radius: 8px;
+  background: var(--accent-tint);
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
+.account-info-main,
+.account-server-cell {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.account-info-main strong,
+.account-info-main span,
+.account-server-cell strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-info-main span,
+.account-server-cell span {
+  color: var(--muted-color);
+  font-size: 12px;
+}
+
+.account-server-cell > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+}
+
+.account-server-cell strong {
+  font-weight: 600;
+}
+
 .account-sync-cell {
   display: grid;
   gap: 5px;
-  min-width: 130px;
+  min-width: 0;
 }
 
 .account-status-cell {

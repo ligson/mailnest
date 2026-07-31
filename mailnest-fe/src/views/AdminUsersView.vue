@@ -6,7 +6,7 @@
           <h2 class="page-title">系统管理</h2>
           <p class="page-subtitle">查看用户规模、账号状态和邮件附件存储占用</p>
         </div>
-        <a-button @click="loadUsers">
+        <a-button :loading="loading" @click="loadUsers">
           <template #icon><reload-outlined /></template>
           刷新
         </a-button>
@@ -15,27 +15,33 @@
       <div class="admin-metrics">
         <div class="admin-metric">
           <span>用户总数</span>
-          <strong>{{ users.length }}</strong>
+          <a-skeleton-button v-if="initialLoading" active size="small" class="metric-skeleton" />
+          <strong v-else>{{ users.length }}</strong>
         </div>
         <div class="admin-metric">
           <span>启用用户</span>
-          <strong>{{ enabledCount }}</strong>
+          <a-skeleton-button v-if="initialLoading" active size="small" class="metric-skeleton" />
+          <strong v-else>{{ enabledCount }}</strong>
         </div>
         <div class="admin-metric">
           <span>停用用户</span>
-          <strong>{{ disabledCount }}</strong>
+          <a-skeleton-button v-if="initialLoading" active size="small" class="metric-skeleton" />
+          <strong v-else>{{ disabledCount }}</strong>
         </div>
         <div class="admin-metric">
           <span>邮箱账号</span>
-          <strong>{{ totalAccounts }}</strong>
+          <a-skeleton-button v-if="initialLoading" active size="small" class="metric-skeleton" />
+          <strong v-else>{{ totalAccounts }}</strong>
         </div>
         <div class="admin-metric">
           <span>邮件总数</span>
-          <strong>{{ totalMessages }}</strong>
+          <a-skeleton-button v-if="initialLoading" active size="small" class="metric-skeleton" />
+          <strong v-else>{{ totalMessages }}</strong>
         </div>
         <div class="admin-metric">
           <span>附件占用</span>
-          <strong>{{ formatSize(totalAttachmentBytes) }}</strong>
+          <a-skeleton-button v-if="initialLoading" active size="small" class="metric-skeleton" />
+          <strong v-else>{{ formatSize(totalAttachmentBytes) }}</strong>
         </div>
       </div>
 
@@ -54,7 +60,9 @@
         :columns="columns"
         :data-source="filteredUsers"
         :loading="loading"
+        :locale="{ emptyText: loading ? '正在加载用户数据...' : '暂无用户' }"
         :pagination="{ pageSize: 12, showSizeChanger: false }"
+        :scroll="{ x: 980 }"
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'user'">
@@ -115,6 +123,7 @@ import { useAuthStore } from '../stores/auth';
 
 const auth = useAuthStore();
 const loading = ref(false);
+const hasLoaded = ref(false);
 const togglingId = ref('');
 const keyword = ref('');
 const statusFilter = ref<'all' | 'enabled' | 'disabled'>('all');
@@ -139,6 +148,7 @@ const disabledCount = computed(() => users.value.filter((item) => !item.enabled)
 const totalAccounts = computed(() => users.value.reduce((sum, item) => sum + item.mailAccountCount, 0));
 const totalMessages = computed(() => users.value.reduce((sum, item) => sum + item.messageCount, 0));
 const totalAttachmentBytes = computed(() => users.value.reduce((sum, item) => sum + item.attachmentBytes, 0));
+const initialLoading = computed(() => loading.value && !hasLoaded.value);
 const filteredUsers = computed(() => {
   const text = keyword.value.trim().toLowerCase();
   return users.value.filter((item) => {
@@ -161,8 +171,10 @@ async function loadUsers() {
   loading.value = true;
   try {
     users.value = (await adminApi.users()).items;
+    hasLoaded.value = true;
   } catch (error) {
     message.error(error instanceof Error ? error.message : '获取用户列表失败');
+    hasLoaded.value = true;
   } finally {
     loading.value = false;
   }
@@ -262,6 +274,10 @@ function formatTime(value: string | null) {
 .admin-metric strong {
   color: var(--heading-color);
   font-size: 24px;
+}
+
+.metric-skeleton {
+  width: 72px;
 }
 
 .admin-controls {

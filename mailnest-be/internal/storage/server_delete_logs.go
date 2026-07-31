@@ -14,6 +14,7 @@ func (s *Store) ListServerCleanupCandidates(userID, accountID int64, before sql.
 		FROM mail_messages
 		WHERE user_id = ? AND account_id = ? AND folder = 'INBOX'
 			AND imap_uid <> ''
+			AND imap_uid NOT LIKE 'eml-%'
 			AND COALESCE(sent_at, received_at, created_at) < ?
 		ORDER BY COALESCE(sent_at, received_at, created_at) ASC, id ASC`,
 		userID,
