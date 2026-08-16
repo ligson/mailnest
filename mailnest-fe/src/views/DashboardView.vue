@@ -33,7 +33,7 @@
               <strong>{{ account.displayName || account.email }}</strong>
               <small>{{ account.email }}</small>
             </span>
-            <span class="account-drag-handle" title="拖拽调整账号顺序" aria-label="拖拽调整账号顺序" @click.stop>
+            <span class="sidebar-drag-handle" title="拖拽调整账号顺序" aria-label="拖拽调整账号顺序" @click.stop>
               <holder-outlined />
             </span>
           </button>
@@ -44,16 +44,22 @@
         </div>
 
         <div class="folder-heading mailbox-heading">邮箱</div>
-        <button
-          v-for="folder in systemFolders"
-          :key="folder.key"
-          class="folder-item"
-          :class="{ active: activeFolderKey === folder.key }"
-          @click="selectSystemFolder(folder.key)"
-        >
-          <component :is="folder.icon" class="folder-icon" />
-          <span>{{ folder.label }}</span>
-        </button>
+        <div ref="systemFolderSortListEl" class="system-folder-sort-list">
+          <button
+            v-for="folder in systemFolders"
+            :key="folder.key"
+            :data-folder-key="folder.key"
+            class="folder-item system-folder-item"
+            :class="{ active: activeFolderKey === folder.key }"
+            @click="selectSystemFolder(folder.key)"
+          >
+            <component :is="folder.icon" class="folder-icon" />
+            <span>{{ folder.label }}</span>
+            <span class="sidebar-drag-handle" title="拖拽调整系统文件夹顺序" aria-label="拖拽调整系统文件夹顺序" @click.stop>
+              <holder-outlined />
+            </span>
+          </button>
+        </div>
 
         <div class="folder-section-title">
           <span>文件夹</span>
@@ -1070,7 +1076,12 @@ type ImportEMLFilePlan = {
   originalIndex: number;
   status?: ImportEMLUploadStatusItem;
 };
-const systemFolders = [
+type SystemFolderItem = {
+  key: SystemFolderKey;
+  label: string;
+  icon: Component;
+};
+const defaultSystemFolders: SystemFolderItem[] = [
   { key: 'inbox' as const, label: '收件箱', icon: markRaw(InboxOutlined) },
   { key: 'sent' as const, label: '发件箱', icon: markRaw(SendOutlined) },
   { key: 'drafts' as const, label: '草稿箱', icon: markRaw(EditOutlined) },
@@ -1080,6 +1091,7 @@ const systemFolders = [
   { key: 'trash' as const, label: '回收站', icon: markRaw(DeleteOutlined) },
   { key: 'attachments' as const, label: '有附件', icon: markRaw(PaperClipOutlined) },
 ];
+const systemFolders = ref<SystemFolderItem[]>([...defaultSystemFolders]);
 const folderColorOptions = ['#1f66d1', '#0f9f6e', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#64748b', '#be185d'];
 const router = useRouter();
 const route = useRoute();
@@ -1126,6 +1138,7 @@ const composeAttachmentInput = ref<HTMLInputElement | null>(null);
 const composeImageInput = ref<HTMLInputElement | null>(null);
 const workspaceEl = ref<HTMLElement | null>(null);
 const accountSortListEl = ref<HTMLElement | null>(null);
+const systemFolderSortListEl = ref<HTMLElement | null>(null);
 const accountOrderSaving = ref(false);
 const composeForwardAttachments = ref<ComposeForwardAttachment[]>([]);
 const selectedForwardAttachmentIds = ref<string[]>([]);
@@ -1155,6 +1168,7 @@ let resizeState: {
   startListWidth: number;
 } | null = null;
 let accountSortable: Sortable | null = null;
+let systemFolderSortable: Sortable | null = null;
 let accountSelectionRestored = false;
 const folderForm = reactive({
   name: '',
@@ -1354,7 +1368,7 @@ const activeFolderLabel = computed(() => {
   if (activeLocalFolderId.value) {
     return folders.value.find((item) => item.id === activeLocalFolderId.value)?.name || '文件夹';
   }
-  return systemFolders.find((item) => item.key === activeSystemFolder.value)?.label || '邮件';
+  return systemFolders.value.find((item) => item.key === activeSystemFolder.value)?.label || '邮件';
 });
 const mailCountText = computed(() => {
   if (!hasLoadedMessages.value) {
@@ -1455,10 +1469,14 @@ const composeBodyHint = computed(() => {
 
 onMounted(() => {
   fitPaneWidthsToViewport();
+  restoreSystemFolderOrder();
   window.addEventListener('resize', fitPaneWidthsToViewport);
   window.addEventListener('beforeunload', handleBeforeUnload);
   document.addEventListener('selectionchange', saveComposeSelection);
-  void nextTick(setupAccountSorting);
+  void nextTick(() => {
+    setupAccountSorting();
+    setupSystemFolderSorting();
+  });
   void refreshAll();
 });
 onBeforeUnmount(() => {
@@ -1470,6 +1488,8 @@ onBeforeUnmount(() => {
   document.removeEventListener('selectionchange', saveComposeSelection);
   accountSortable?.destroy();
   accountSortable = null;
+  systemFolderSortable?.destroy();
+  systemFolderSortable = null;
 });
 onBeforeRouteLeave((_to, _from, next) => {
   if (!shouldProtectComposeLeave()) {
@@ -1844,7 +1864,7 @@ function setupAccountSorting() {
   }
   accountSortable = Sortable.create(accountSortListEl.value, {
     animation: 160,
-    handle: '.account-drag-handle',
+    handle: '.sidebar-drag-handle',
     draggable: '.account-filter-item',
     dataIdAttr: 'data-account-id',
     ghostClass: 'account-sort-ghost',
@@ -1889,6 +1909,69 @@ async function saveAccountOrder(oldIndex?: number, newIndex?: number) {
     accountOrderSaving.value = false;
     accountSortable?.option('disabled', false);
   }
+}
+
+function systemFolderOrderStorageKey() {
+  return `mailnest.mail.system-folder-order.${auth.user?.id || 'current'}`;
+}
+
+function restoreSystemFolderOrder() {
+  const saved = localStorage.getItem(systemFolderOrderStorageKey());
+  if (!saved) {
+    return;
+  }
+  try {
+    const keys = JSON.parse(saved) as unknown;
+    if (!Array.isArray(keys) || keys.length !== defaultSystemFolders.length || new Set(keys).size !== keys.length) {
+      throw new Error('系统文件夹顺序格式错误');
+    }
+    const foldersByKey = new Map(defaultSystemFolders.map((folder) => [folder.key, folder]));
+    const restored = keys.map((key) => foldersByKey.get(key as SystemFolderKey));
+    if (restored.some((folder) => !folder)) {
+      throw new Error('系统文件夹顺序包含未知项');
+    }
+    systemFolders.value = restored as SystemFolderItem[];
+  } catch {
+    localStorage.removeItem(systemFolderOrderStorageKey());
+    systemFolders.value = [...defaultSystemFolders];
+  }
+}
+
+function setupSystemFolderSorting() {
+  if (!systemFolderSortListEl.value || systemFolderSortable) {
+    return;
+  }
+  systemFolderSortable = Sortable.create(systemFolderSortListEl.value, {
+    animation: 160,
+    handle: '.sidebar-drag-handle',
+    draggable: '.system-folder-item',
+    dataIdAttr: 'data-folder-key',
+    ghostClass: 'account-sort-ghost',
+    chosenClass: 'account-sort-chosen',
+    delay: 120,
+    delayOnTouchOnly: true,
+    touchStartThreshold: 4,
+    fallbackTolerance: 4,
+    onEnd(event) {
+      saveSystemFolderOrder(event.oldIndex, event.newIndex);
+    },
+  });
+}
+
+function saveSystemFolderOrder(oldIndex?: number, newIndex?: number) {
+  if (oldIndex === undefined || newIndex === undefined || oldIndex === newIndex) {
+    return;
+  }
+  const nextFolders = [...systemFolders.value];
+  const [moved] = nextFolders.splice(oldIndex, 1);
+  if (!moved) {
+    systemFolderSortable?.sort(systemFolders.value.map((folder) => folder.key));
+    return;
+  }
+  nextFolders.splice(newIndex, 0, moved);
+  systemFolders.value = nextFolders;
+  localStorage.setItem(systemFolderOrderStorageKey(), JSON.stringify(nextFolders.map((folder) => folder.key)));
+  message.success('系统文件夹顺序已保存');
 }
 
 function onViewModeChanged() {
@@ -3772,11 +3855,16 @@ function looksLikeEmail(value: string) {
   gap: 1px;
 }
 
+.system-folder-sort-list {
+  display: grid;
+  gap: 1px;
+}
+
 .account-sort-list.saving {
   cursor: progress;
 }
 
-.account-sort-list.saving .account-drag-handle {
+.account-sort-list.saving .sidebar-drag-handle {
   pointer-events: none;
 }
 
@@ -3787,7 +3875,7 @@ function looksLikeEmail(value: string) {
   gap: 2px;
 }
 
-.account-drag-handle {
+.sidebar-drag-handle {
   display: inline-flex;
   width: 24px;
   height: 28px;
@@ -3803,18 +3891,18 @@ function looksLikeEmail(value: string) {
   transition: color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
 }
 
-.account-filter-item:hover .account-drag-handle,
-.account-filter-item:focus-within .account-drag-handle,
-.account-sort-chosen .account-drag-handle {
+.folder-item:hover .sidebar-drag-handle,
+.folder-item:focus-within .sidebar-drag-handle,
+.account-sort-chosen .sidebar-drag-handle {
   opacity: 1;
 }
 
-.account-drag-handle:hover {
+.sidebar-drag-handle:hover {
   background: color-mix(in srgb, currentColor 10%, transparent);
   color: currentColor;
 }
 
-.account-drag-handle:active {
+.sidebar-drag-handle:active {
   cursor: grabbing;
 }
 
@@ -3849,7 +3937,7 @@ function looksLikeEmail(value: string) {
 }
 
 @media (hover: none) {
-  .account-drag-handle {
+  .sidebar-drag-handle {
     opacity: 0.72;
   }
 }
