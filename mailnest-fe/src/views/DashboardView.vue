@@ -10,29 +10,22 @@
     >
       <aside class="mail-folders">
         <div class="folder-heading account-heading">邮箱账号</div>
-        <button
-          class="folder-item account-filter-item"
-          :class="{ active: !filters.accountId }"
-          @click="selectAccount()"
-        >
-          <mail-outlined class="folder-icon" />
-          <span>全部账号</span>
-        </button>
         <div ref="accountSortListEl" class="account-sort-list" :class="{ saving: accountOrderSaving }">
           <button
-            v-for="account in visibleAccounts"
-            :key="account.id"
-            :data-account-id="account.id"
+            v-for="item in accountFilterItems"
+            :key="item.key"
+            :data-account-id="item.key"
             class="folder-item account-filter-item"
-            :class="{ active: filters.accountId === account.id }"
-            :title="`${account.displayName || account.email} <${account.email}>`"
-            @click="selectAccount(account.id)"
+            :class="{ active: item.account ? filters.accountId === item.account.id : !filters.accountId }"
+            :title="item.account ? `${item.account.displayName || item.account.email} <${item.account.email}>` : '全部账号'"
+            @click="selectAccount(item.account?.id)"
           >
             <mail-outlined class="folder-icon" />
-            <span class="account-filter-label">
-              <strong>{{ account.displayName || account.email }}</strong>
-              <small>{{ account.email }}</small>
+            <span v-if="item.account" class="account-filter-label">
+              <strong>{{ item.account.displayName || item.account.email }}</strong>
+              <small>{{ item.account.email }}</small>
             </span>
+            <span v-else>全部账号</span>
             <span class="sidebar-drag-handle" title="拖拽调整账号顺序" aria-label="拖拽调整账号顺序" @click.stop>
               <holder-outlined />
             </span>
@@ -1076,6 +1069,10 @@ type ImportEMLFilePlan = {
   originalIndex: number;
   status?: ImportEMLUploadStatusItem;
 };
+type AccountFilterItem = {
+  key: string;
+  account: MailAccount | null;
+};
 type SystemFolderItem = {
   key: SystemFolderKey;
   label: string;
@@ -1140,6 +1137,7 @@ const workspaceEl = ref<HTMLElement | null>(null);
 const accountSortListEl = ref<HTMLElement | null>(null);
 const systemFolderSortListEl = ref<HTMLElement | null>(null);
 const accountOrderSaving = ref(false);
+const allAccountPosition = ref(0);
 const composeForwardAttachments = ref<ComposeForwardAttachment[]>([]);
 const selectedForwardAttachmentIds = ref<string[]>([]);
 const restoredLocalAttachmentNames = ref<string[]>([]);
@@ -1253,6 +1251,12 @@ const filters = reactive({
 
 const normalAttachments = computed(() => (detail.value?.attachments || []).filter((item) => !item.inline));
 const visibleAccounts = computed(() => accounts.value.filter((account) => account.enabled));
+const accountFilterItems = computed<AccountFilterItem[]>(() => {
+  const items: AccountFilterItem[] = visibleAccounts.value.map((account) => ({ key: account.id, account }));
+  const position = Math.max(0, Math.min(allAccountPosition.value, items.length));
+  items.splice(position, 0, { key: 'all', account: null });
+  return items;
+});
 const selectedImportAccount = computed(() => visibleAccounts.value.find((account) => account.id === importEMLForm.accountId));
 const importEMLTotalSize = computed(() => importEMLForm.files.reduce((sum, file) => sum + file.size, 0));
 const importEMLTotalPercent = computed(() => {
@@ -1469,6 +1473,7 @@ const composeBodyHint = computed(() => {
 
 onMounted(() => {
   fitPaneWidthsToViewport();
+  restoreAllAccountPosition();
   restoreSystemFolderOrder();
   window.addEventListener('resize', fitPaneWidthsToViewport);
   window.addEventListener('beforeunload', handleBeforeUnload);
@@ -1858,6 +1863,15 @@ function restoreSelectedAccount() {
   filters.accountId = undefined;
 }
 
+function allAccountPositionStorageKey() {
+  return `mailnest.mail.all-account-position.${auth.user?.id || 'current'}`;
+}
+
+function restoreAllAccountPosition() {
+  const saved = Number.parseInt(localStorage.getItem(allAccountPositionStorageKey()) || '0', 10);
+  allAccountPosition.value = Number.isFinite(saved) && saved >= 0 ? saved : 0;
+}
+
 function setupAccountSorting() {
   if (!accountSortListEl.value || accountSortable) {
     return;
@@ -1883,17 +1897,28 @@ async function saveAccountOrder(oldIndex?: number, newIndex?: number) {
   if (oldIndex === undefined || newIndex === undefined || oldIndex === newIndex || accountOrderSaving.value) {
     return;
   }
+  const orderedKeys = accountSortable?.toArray() || [];
   const previousAccounts = [...accounts.value];
-  const enabledAccounts = [...visibleAccounts.value];
-  const [moved] = enabledAccounts.splice(oldIndex, 1);
-  if (!moved) {
-    accountSortable?.sort(previousAccounts.filter((account) => account.enabled).map((account) => account.id));
+  const previousAllPosition = allAccountPosition.value;
+  const expectedAccountIDs = new Set(visibleAccounts.value.map((account) => account.id));
+  const accountIDs = orderedKeys.filter((key) => key !== 'all');
+  const allPosition = orderedKeys.indexOf('all');
+  if (
+    orderedKeys.length !== expectedAccountIDs.size + 1
+    || allPosition < 0
+    || new Set(accountIDs).size !== expectedAccountIDs.size
+    || accountIDs.some((id) => !expectedAccountIDs.has(id))
+  ) {
+    accountSortable?.sort(accountFilterItems.value.map((item) => item.key));
     return;
   }
-  enabledAccounts.splice(newIndex, 0, moved);
+  const enabledByID = new Map(visibleAccounts.value.map((account) => [account.id, account]));
+  const enabledAccounts = accountIDs.map((id) => enabledByID.get(id)).filter((account): account is MailAccount => Boolean(account));
   const disabledAccounts = previousAccounts.filter((account) => !account.enabled);
   const nextAccounts = [...enabledAccounts, ...disabledAccounts];
   accounts.value = nextAccounts;
+  allAccountPosition.value = allPosition;
+  localStorage.setItem(allAccountPositionStorageKey(), String(allPosition));
   accountOrderSaving.value = true;
   accountSortable?.option('disabled', true);
   try {
@@ -1901,9 +1926,11 @@ async function saveAccountOrder(oldIndex?: number, newIndex?: number) {
     message.success('邮箱账号顺序已保存');
   } catch (error) {
     accounts.value = previousAccounts;
+    allAccountPosition.value = previousAllPosition;
+    localStorage.setItem(allAccountPositionStorageKey(), String(previousAllPosition));
     await loadAccounts();
     await nextTick();
-    accountSortable?.sort(visibleAccounts.value.map((account) => account.id));
+    accountSortable?.sort(accountFilterItems.value.map((item) => item.key));
     message.error(error instanceof Error ? error.message : '保存邮箱账号顺序失败');
   } finally {
     accountOrderSaving.value = false;
