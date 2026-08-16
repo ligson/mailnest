@@ -70,6 +70,7 @@ type MailAccount struct {
 	FullSyncError        sql.NullString
 	CleanupEnabled       bool
 	CleanupRetentionDays int
+	SortOrder            int
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 }

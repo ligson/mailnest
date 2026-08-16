@@ -70,6 +70,7 @@ func (a *App) Routes() http.Handler {
 	mux.Handle("GET /api/v1/profile/avatar/content", a.authMiddleware(http.HandlerFunc(a.handleProfileAvatarContent)))
 	mux.Handle("GET /api/v1/mail-accounts", a.authMiddleware(http.HandlerFunc(a.handleListMailAccounts)))
 	mux.Handle("POST /api/v1/mail-accounts", a.authMiddleware(http.HandlerFunc(a.handleCreateMailAccount)))
+	mux.Handle("PUT /api/v1/mail-accounts/reorder", a.authMiddleware(http.HandlerFunc(a.handleReorderMailAccounts)))
 	mux.Handle("PUT /api/v1/mail-accounts/{id}", a.authMiddleware(http.HandlerFunc(a.handleUpdateMailAccount)))
 	mux.Handle("DELETE /api/v1/mail-accounts/{id}", a.authMiddleware(http.HandlerFunc(a.handleDeleteMailAccount)))
 	mux.Handle("GET /api/v1/mail-accounts/{id}/folders", a.authMiddleware(http.HandlerFunc(a.handleListMailAccountFolders)))

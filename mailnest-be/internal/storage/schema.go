@@ -165,6 +165,7 @@ func mysqlExistingColumnStatements() []mysqlColumnStatement {
 	return []mysqlColumnStatement{
 		{table: "users", name: "is_admin", definition: `is_admin TINYINT NOT NULL DEFAULT 0`},
 		{table: "users", name: "enabled", definition: `enabled TINYINT NOT NULL DEFAULT 1`},
+		{table: "mail_accounts", name: "sort_order", definition: `sort_order INTEGER NOT NULL DEFAULT 0`},
 		{table: "mail_messages", name: "thread_id", definition: `thread_id BIGINT NULL`},
 	}
 }
@@ -226,6 +227,7 @@ func sqliteExistingColumnStatements() []sqliteColumnStatement {
 		{table: "mail_accounts", name: "smtp_username", definition: `smtp_username TEXT NOT NULL DEFAULT ''`},
 		{table: "mail_accounts", name: "smtp_password_encrypted", definition: `smtp_password_encrypted TEXT NOT NULL DEFAULT ''`},
 		{table: "mail_accounts", name: "signature_html", definition: `signature_html TEXT NOT NULL DEFAULT ''`},
+		{table: "mail_accounts", name: "sort_order", definition: `sort_order INTEGER NOT NULL DEFAULT 0`},
 		{table: "mail_attachments", name: "content_id", definition: `content_id TEXT`},
 		{table: "mail_attachments", name: "inline", definition: `inline INTEGER NOT NULL DEFAULT 0`},
 		{table: "mail_messages", name: "search_text", definition: `search_text TEXT`},
@@ -416,7 +418,7 @@ func (userModel) TableName() string { return "users" }
 
 type mailAccountModel struct {
 	ID                         int64      `gorm:"primaryKey;autoIncrement;column:id"`
-	UserID                     int64      `gorm:"column:user_id;not null;index"`
+	UserID                     int64      `gorm:"column:user_id;not null;index;index:idx_mail_accounts_user_sort,priority:1"`
 	Provider                   string     `gorm:"column:provider;size:64;not null;default:custom"`
 	AuthType                   string     `gorm:"column:auth_type;size:64;not null;default:password"`
 	DisplayName                string     `gorm:"column:display_name;size:255;not null"`
@@ -451,6 +453,7 @@ type mailAccountModel struct {
 	FullSyncError              *string    `gorm:"column:full_sync_error;type:text"`
 	CleanupEnabled             int        `gorm:"column:cleanup_enabled;not null;default:0"`
 	CleanupRetentionDays       int        `gorm:"column:cleanup_retention_days;not null;default:90"`
+	SortOrder                  int        `gorm:"column:sort_order;not null;default:0;index:idx_mail_accounts_user_sort,priority:2"`
 	CreatedAt                  time.Time  `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt                  time.Time  `gorm:"column:updated_at;not null;default:CURRENT_TIMESTAMP"`
 }

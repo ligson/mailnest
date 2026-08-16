@@ -102,6 +102,7 @@ func mailAccountPayload(account storage.MailAccount) map[string]any {
 		"fullSyncError":        nullableString(account.FullSyncError),
 		"cleanupEnabled":       account.CleanupEnabled,
 		"cleanupRetentionDays": account.CleanupRetentionDays,
+		"sortOrder":            account.SortOrder,
 	}
 }
 

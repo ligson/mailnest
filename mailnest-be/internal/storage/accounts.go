@@ -15,13 +15,21 @@ func (s *Store) CreateMailAccount(account MailAccount) (MailAccount, error) {
 	if strings.TrimSpace(account.AuthType) == "" {
 		account.AuthType = "password"
 	}
+	if account.SortOrder <= 0 {
+		if err := s.db.QueryRow(
+			`SELECT COALESCE(MAX(sort_order), 0) + 10 FROM mail_accounts WHERE user_id = ?`,
+			account.UserID,
+		).Scan(&account.SortOrder); err != nil {
+			return MailAccount{}, err
+		}
+	}
 	id, err := s.db.insertAndGetID(
 		`INSERT INTO mail_accounts (
 			user_id, provider, auth_type, display_name, email, imap_host, imap_port, imap_tls, imap_username,
 			imap_password_encrypted, smtp_host, smtp_port, smtp_tls, smtp_starttls, smtp_username,
 			smtp_password_encrypted, sent_folder, signature_html, oauth_access_token_encrypted, oauth_refresh_token_encrypted, oauth_expires_at,
-			poll_interval_minutes, enabled, cleanup_enabled, cleanup_retention_days
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			poll_interval_minutes, enabled, cleanup_enabled, cleanup_retention_days, sort_order
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		account.UserID,
 		account.Provider,
 		account.AuthType,
@@ -47,6 +55,7 @@ func (s *Store) CreateMailAccount(account MailAccount) (MailAccount, error) {
 		boolToInt(account.Enabled),
 		boolToInt(account.CleanupEnabled),
 		normalizeRetentionDays(account.CleanupRetentionDays),
+		account.SortOrder,
 	)
 	if err != nil {
 		return MailAccount{}, err
@@ -63,10 +72,10 @@ func (s *Store) ListMailAccounts(userID int64) ([]MailAccount, error) {
 			poll_interval_minutes, enabled, last_sync_at, last_sync_status,
 			last_sync_error, full_sync_status, full_sync_total, full_sync_processed, full_sync_new_count,
 			full_sync_started_at, full_sync_finished_at, full_sync_error, cleanup_enabled, cleanup_retention_days,
-			created_at, updated_at
+			sort_order, created_at, updated_at
 		FROM mail_accounts
 		WHERE user_id = ?
-		ORDER BY created_at DESC, id DESC`,
+		ORDER BY sort_order ASC, created_at DESC, id DESC`,
 		userID,
 	)
 	if err != nil {
@@ -101,7 +110,7 @@ func (s *Store) ListDueMailAccounts(limit int) ([]MailAccount, error) {
 			poll_interval_minutes, enabled, last_sync_at, last_sync_status,
 			last_sync_error, full_sync_status, full_sync_total, full_sync_processed, full_sync_new_count,
 			full_sync_started_at, full_sync_finished_at, full_sync_error, cleanup_enabled, cleanup_retention_days,
-			created_at, updated_at
+			sort_order, created_at, updated_at
 		FROM mail_accounts
 		`+s.db.dueMailAccountsWhere()+`
 		ORDER BY last_sync_at IS NOT NULL ASC, last_sync_at ASC, id ASC
@@ -135,7 +144,7 @@ func (s *Store) FindMailAccountByID(userID, id int64) (MailAccount, error) {
 			poll_interval_minutes, enabled, last_sync_at, last_sync_status,
 			last_sync_error, full_sync_status, full_sync_total, full_sync_processed, full_sync_new_count,
 			full_sync_started_at, full_sync_finished_at, full_sync_error, cleanup_enabled, cleanup_retention_days,
-			created_at, updated_at
+			sort_order, created_at, updated_at
 		FROM mail_accounts
 		WHERE user_id = ? AND id = ?`,
 		userID,
@@ -185,6 +194,58 @@ func (s *Store) UpdateMailAccount(account MailAccount) (MailAccount, error) {
 		return MailAccount{}, ErrNotFound
 	}
 	return s.FindMailAccountByID(account.UserID, account.ID)
+}
+
+// ReorderMailAccounts 在事务中保存用户的完整账号顺序，防止只更新一部分产生重复序号。
+func (s *Store) ReorderMailAccounts(userID int64, accountIDs []int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(`SELECT id FROM mail_accounts WHERE user_id = ?`, userID)
+	if err != nil {
+		return err
+	}
+	existing := make(map[int64]struct{}, len(accountIDs))
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		existing[id] = struct{}{}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(existing) != len(accountIDs) {
+		return ErrInvalidAccountOrder
+	}
+
+	seen := make(map[int64]struct{}, len(accountIDs))
+	for index, id := range accountIDs {
+		if _, ok := existing[id]; !ok {
+			return ErrInvalidAccountOrder
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return ErrInvalidAccountOrder
+		}
+		seen[id] = struct{}{}
+		if _, err := tx.Exec(
+			`UPDATE mail_accounts SET sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND id = ?`,
+			(index+1)*10,
+			userID,
+			id,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) UpdateMailAccountOAuthTokens(userID, id int64, accessToken, refreshToken string, expiresAt time.Time) error {
@@ -358,6 +419,7 @@ func scanMailAccount(scanner interface {
 		&account.FullSyncError,
 		&cleanupEnabled,
 		&account.CleanupRetentionDays,
+		&account.SortOrder,
 		&account.CreatedAt,
 		&account.UpdatedAt,
 	)

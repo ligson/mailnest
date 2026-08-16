@@ -50,6 +50,10 @@ type createMailAccountRequest struct {
 	CleanupRetentionDays int    `json:"cleanupRetentionDays"`
 }
 
+type reorderMailAccountsRequest struct {
+	AccountIDs []string `json:"accountIds"`
+}
+
 type completeMicrosoftOAuthRequest struct {
 	Code  string `json:"code"`
 	State string `json:"state"`

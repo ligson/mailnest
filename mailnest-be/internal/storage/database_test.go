@@ -166,6 +166,28 @@ func TestMySQLExistingColumnStatementsIncludeUserAdminFlags(t *testing.T) {
 	}
 }
 
+func TestMailAccountSortOrderHasCompatibleMigrationStatements(t *testing.T) {
+	mysqlFound := false
+	for _, statement := range mysqlExistingColumnStatements() {
+		if statement.table == "mail_accounts" && statement.name == "sort_order" {
+			mysqlFound = strings.Contains(statement.definition, "NOT NULL") && strings.Contains(statement.definition, "DEFAULT 0")
+		}
+	}
+	if !mysqlFound {
+		t.Fatal("expected compatible mysql migration for mail_accounts.sort_order")
+	}
+
+	sqliteFound := false
+	for _, statement := range sqliteExistingColumnStatements() {
+		if statement.table == "mail_accounts" && statement.name == "sort_order" {
+			sqliteFound = strings.Contains(statement.definition, "NOT NULL") && strings.Contains(statement.definition, "DEFAULT 0")
+		}
+	}
+	if !sqliteFound {
+		t.Fatal("expected compatible sqlite migration for mail_accounts.sort_order")
+	}
+}
+
 func TestRebindPlaceholdersForPostgres(t *testing.T) {
 	query := `SELECT '?' AS literal, "?" AS identifier
 FROM mail_messages

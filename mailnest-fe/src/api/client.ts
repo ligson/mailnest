@@ -115,6 +115,7 @@ export interface MailAccount {
   fullSyncError: string | null;
   cleanupEnabled: boolean;
   cleanupRetentionDays: number;
+  sortOrder: number;
 }
 
 export interface MailAccountListData {
@@ -736,6 +737,9 @@ export const mailAccountApi = {
   },
   update(id: string, payload: UpdateMailAccountPayload) {
     return requestEnvelope<MailAccount>(apiClient.put(`/mail-accounts/${id}`, payload));
+  },
+  reorder(accountIds: string[]) {
+    return requestEnvelope<Record<string, never>>(apiClient.put('/mail-accounts/reorder', { accountIds }));
   },
   remove(id: string) {
     return requestEnvelope<Record<string, never>>(apiClient.delete(`/mail-accounts/${id}`));

@@ -36,6 +36,38 @@ func TestMailAccountsAreIsolatedByUser(t *testing.T) {
 	}
 }
 
+func TestReorderMailAccountsReturnsPersistedUserOrder(t *testing.T) {
+	router := newTestRouter(t, true)
+	token := registerTestUser(t, router, "account-order", "account-order@example.com")
+
+	create := func(name string) string {
+		body := `{"displayName":"` + name + `","email":"` + name + `@example.com","imapHost":"imap.example.com","imapPort":993,"imapTls":true,"imapUsername":"` + name + `@example.com","imapPassword":"mail-password","pollIntervalMinutes":10,"enabled":true}`
+		resp := performRequest(router, http.MethodPost, "/api/v1/mail-accounts", body, token)
+		if resp.Code != http.StatusCreated {
+			t.Fatalf("create %s: %d %s", name, resp.Code, resp.Body.String())
+		}
+		return decodeEnvelope(t, resp.Body.Bytes())["data"].(map[string]any)["id"].(string)
+	}
+	firstID := create("first-order")
+	secondID := create("second-order")
+	thirdID := create("third-order")
+
+	body := `{"accountIds":["` + firstID + `","` + thirdID + `","` + secondID + `"]}`
+	resp := performRequest(router, http.MethodPut, "/api/v1/mail-accounts/reorder", body, token)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("reorder accounts: %d %s", resp.Code, resp.Body.String())
+	}
+	list := performRequest(router, http.MethodGet, "/api/v1/mail-accounts", "", token)
+	items := decodeEnvelope(t, list.Body.Bytes())["data"].(map[string]any)["items"].([]any)
+	want := []string{firstID, thirdID, secondID}
+	for index, item := range items {
+		account := item.(map[string]any)
+		if account["id"] != want[index] || account["sortOrder"] != float64((index+1)*10) {
+			t.Fatalf("unexpected item %d after reorder: %#v", index, account)
+		}
+	}
+}
+
 func TestUpdateMailAccountPreservesPasswordWhenEmpty(t *testing.T) {
 	fetcher := &capturingFetcher{}
 	router := newTestRouterWithFetcher(t, true, fetcher)

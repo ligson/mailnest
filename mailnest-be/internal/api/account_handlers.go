@@ -34,6 +34,39 @@ func (a *App) handleListMailAccounts(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, "获取成功", map[string]any{"items": items})
 }
 
+func (a *App) handleReorderMailAccounts(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(r)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
+		return
+	}
+
+	var req reorderMailAccountsRequest
+	if err := decodeJSON(r, &req); err != nil {
+		response.Error(w, http.StatusBadRequest, "请求参数格式错误")
+		return
+	}
+	accountIDs := make([]int64, 0, len(req.AccountIDs))
+	for _, rawID := range req.AccountIDs {
+		id, err := strconv.ParseInt(strings.TrimSpace(rawID), 10, 64)
+		if err != nil || id <= 0 {
+			response.Error(w, http.StatusBadRequest, "邮箱账号 ID 格式错误")
+			return
+		}
+		accountIDs = append(accountIDs, id)
+	}
+	if err := a.store.ReorderMailAccounts(userID, accountIDs); errors.Is(err, storage.ErrInvalidAccountOrder) {
+		response.Error(w, http.StatusConflict, "邮箱账号列表已变化，请刷新后重试")
+		return
+	} else if err != nil {
+		response.Error(w, http.StatusInternalServerError, "保存邮箱账号顺序失败")
+		return
+	}
+
+	log.Printf("邮箱账号顺序更新成功 userID=%d accountCount=%d", userID, len(accountIDs))
+	response.OK(w, "邮箱账号顺序已保存", map[string]any{})
+}
+
 func (a *App) handleCreateMailAccount(w http.ResponseWriter, r *http.Request) {
 	userID, ok := currentUserID(r)
 	if !ok {

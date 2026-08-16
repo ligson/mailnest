@@ -79,6 +79,57 @@ func TestListDueMailAccountsFiltersEnabledAndRunningFullSync(t *testing.T) {
 	}
 }
 
+func TestReorderMailAccountsPersistsOrderAndRejectsForeignAccounts(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "mailnest.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	user, err := store.CreateUser("order-user", "order-user@example.com", "hash")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	otherUser, err := store.CreateUser("other-order-user", "other-order-user@example.com", "hash")
+	if err != nil {
+		t.Fatalf("create other user: %v", err)
+	}
+	createAccount := func(ownerID int64, name string) MailAccount {
+		account, createErr := store.CreateMailAccount(MailAccount{
+			UserID: ownerID, DisplayName: name, Email: name + "@example.com",
+			IMAPHost: "imap.example.com", IMAPPort: 993, IMAPTLS: true,
+			IMAPUsername: name + "@example.com", IMAPPasswordEncoded: "encrypted",
+			PollIntervalMinutes: 10, Enabled: true,
+		})
+		if createErr != nil {
+			t.Fatalf("create account %s: %v", name, createErr)
+		}
+		return account
+	}
+	first := createAccount(user.ID, "first")
+	second := createAccount(user.ID, "second")
+	third := createAccount(user.ID, "third")
+	foreign := createAccount(otherUser.ID, "foreign")
+
+	if err := store.ReorderMailAccounts(user.ID, []int64{second.ID, first.ID, foreign.ID}); !errors.Is(err, ErrInvalidAccountOrder) {
+		t.Fatalf("expected foreign account order to be rejected, got %v", err)
+	}
+	if err := store.ReorderMailAccounts(user.ID, []int64{second.ID, third.ID, first.ID}); err != nil {
+		t.Fatalf("reorder accounts: %v", err)
+	}
+
+	accounts, err := store.ListMailAccounts(user.ID)
+	if err != nil {
+		t.Fatalf("list reordered accounts: %v", err)
+	}
+	if len(accounts) != 3 || accounts[0].ID != second.ID || accounts[1].ID != third.ID || accounts[2].ID != first.ID {
+		t.Fatalf("unexpected persisted account order: %#v", accounts)
+	}
+	if accounts[0].SortOrder != 10 || accounts[1].SortOrder != 20 || accounts[2].SortOrder != 30 {
+		t.Fatalf("unexpected sort values: %d, %d, %d", accounts[0].SortOrder, accounts[1].SortOrder, accounts[2].SortOrder)
+	}
+}
+
 func TestListDueMailAccountsSkipsRecentlySynced(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "mailnest.db"))
 	if err != nil {

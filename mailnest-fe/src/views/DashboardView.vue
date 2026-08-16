@@ -18,20 +18,26 @@
           <mail-outlined class="folder-icon" />
           <span>全部账号</span>
         </button>
-        <button
-          v-for="account in visibleAccounts"
-          :key="account.id"
-          class="folder-item account-filter-item"
-          :class="{ active: filters.accountId === account.id }"
-          :title="`${account.displayName || account.email} <${account.email}>`"
-          @click="selectAccount(account.id)"
-        >
-          <mail-outlined class="folder-icon" />
-          <span class="account-filter-label">
-            <strong>{{ account.displayName || account.email }}</strong>
-            <small>{{ account.email }}</small>
-          </span>
-        </button>
+        <div ref="accountSortListEl" class="account-sort-list" :class="{ saving: accountOrderSaving }">
+          <button
+            v-for="account in visibleAccounts"
+            :key="account.id"
+            :data-account-id="account.id"
+            class="folder-item account-filter-item"
+            :class="{ active: filters.accountId === account.id }"
+            :title="`${account.displayName || account.email} <${account.email}>`"
+            @click="selectAccount(account.id)"
+          >
+            <mail-outlined class="folder-icon" />
+            <span class="account-filter-label">
+              <strong>{{ account.displayName || account.email }}</strong>
+              <small>{{ account.email }}</small>
+            </span>
+            <span class="account-drag-handle" title="拖拽调整账号顺序" aria-label="拖拽调整账号顺序" @click.stop>
+              <holder-outlined />
+            </span>
+          </button>
+        </div>
         <div v-if="visibleAccounts.length === 0" class="folder-empty account-empty">
           <mail-outlined />
           <span>{{ accounts.length === 0 ? '暂无邮箱账号' : '暂无启用邮箱账号' }}</span>
@@ -972,7 +978,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, onBeforeUnmount, onMounted, reactive, ref, watch, type Component } from 'vue';
+import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type Component } from 'vue';
 import {
   AlignCenterOutlined,
   AlignLeftOutlined,
@@ -993,6 +999,7 @@ import {
   FontSizeOutlined,
   InboxOutlined,
   ItalicOutlined,
+  HolderOutlined,
   LinkOutlined,
   MailOutlined,
   MoreOutlined,
@@ -1015,6 +1022,7 @@ import {
 import { Modal, message } from 'ant-design-vue';
 import type { Dayjs } from 'dayjs';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
+import Sortable from 'sortablejs';
 import {
   ApiEnvelopeError,
   mailAccountApi,
@@ -1041,6 +1049,7 @@ import {
   type MailThread,
   type MailThreadDetail,
 } from '../api/client';
+import { useAuthStore } from '../stores/auth';
 import AppLayout from '../components/AppLayout.vue';
 
 type SystemFolderKey = 'inbox' | 'sent' | 'drafts' | 'all' | 'starred' | 'spam' | 'trash' | 'attachments';
@@ -1074,6 +1083,7 @@ const systemFolders = [
 const folderColorOptions = ['#1f66d1', '#0f9f6e', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#64748b', '#be185d'];
 const router = useRouter();
 const route = useRoute();
+const auth = useAuthStore();
 
 const loading = ref(false);
 const detailLoading = ref(false);
@@ -1115,6 +1125,8 @@ const composeEditor = ref<HTMLElement | null>(null);
 const composeAttachmentInput = ref<HTMLInputElement | null>(null);
 const composeImageInput = ref<HTMLInputElement | null>(null);
 const workspaceEl = ref<HTMLElement | null>(null);
+const accountSortListEl = ref<HTMLElement | null>(null);
+const accountOrderSaving = ref(false);
 const composeForwardAttachments = ref<ComposeForwardAttachment[]>([]);
 const selectedForwardAttachmentIds = ref<string[]>([]);
 const restoredLocalAttachmentNames = ref<string[]>([]);
@@ -1142,6 +1154,8 @@ let resizeState: {
   startFolderWidth: number;
   startListWidth: number;
 } | null = null;
+let accountSortable: Sortable | null = null;
+let accountSelectionRestored = false;
 const folderForm = reactive({
   name: '',
   color: '#1f66d1',
@@ -1444,6 +1458,7 @@ onMounted(() => {
   window.addEventListener('resize', fitPaneWidthsToViewport);
   window.addEventListener('beforeunload', handleBeforeUnload);
   document.addEventListener('selectionchange', saveComposeSelection);
+  void nextTick(setupAccountSorting);
   void refreshAll();
 });
 onBeforeUnmount(() => {
@@ -1453,6 +1468,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', fitPaneWidthsToViewport);
   window.removeEventListener('beforeunload', handleBeforeUnload);
   document.removeEventListener('selectionchange', saveComposeSelection);
+  accountSortable?.destroy();
+  accountSortable = null;
 });
 onBeforeRouteLeave((_to, _from, next) => {
   if (!shouldProtectComposeLeave()) {
@@ -1489,15 +1506,18 @@ watch(selectedForwardAttachmentIds, () => {
 }, { deep: true });
 
 async function refreshAll() {
-  await Promise.all([loadAccounts(), loadFolders(), loadContacts(), loadMessages()]);
+  await loadAccounts();
+  await Promise.all([loadFolders(), loadContacts(), loadMessages()]);
   await applyRouteMessageSelection();
 }
 
 async function loadAccounts() {
   try {
     accounts.value = (await mailAccountApi.list()).items;
+    restoreSelectedAccount();
     if (filters.accountId && !visibleAccounts.value.some((account) => account.id === filters.accountId)) {
       filters.accountId = undefined;
+      localStorage.setItem(selectedAccountStorageKey(), 'all');
       page.value = 1;
       if (hasLoadedMessages.value) {
         void loadMessages();
@@ -1789,10 +1809,86 @@ function selectAccount(accountId?: string) {
     return;
   }
   filters.accountId = accountId;
+  localStorage.setItem(selectedAccountStorageKey(), accountId || 'all');
   page.value = 1;
   selectedThreadId.value = null;
   threadDetail.value = null;
   void loadMessages();
+}
+
+function selectedAccountStorageKey() {
+  return `mailnest.mail.selected-account.${auth.user?.id || 'current'}`;
+}
+
+function restoreSelectedAccount() {
+  if (accountSelectionRestored) {
+    return;
+  }
+  accountSelectionRestored = true;
+  const saved = localStorage.getItem(selectedAccountStorageKey());
+  if (!saved || saved === 'all') {
+    filters.accountId = undefined;
+    return;
+  }
+  if (visibleAccounts.value.some((account) => account.id === saved)) {
+    filters.accountId = saved;
+    return;
+  }
+  localStorage.removeItem(selectedAccountStorageKey());
+  filters.accountId = undefined;
+}
+
+function setupAccountSorting() {
+  if (!accountSortListEl.value || accountSortable) {
+    return;
+  }
+  accountSortable = Sortable.create(accountSortListEl.value, {
+    animation: 160,
+    handle: '.account-drag-handle',
+    draggable: '.account-filter-item',
+    dataIdAttr: 'data-account-id',
+    ghostClass: 'account-sort-ghost',
+    chosenClass: 'account-sort-chosen',
+    delay: 120,
+    delayOnTouchOnly: true,
+    touchStartThreshold: 4,
+    fallbackTolerance: 4,
+    onEnd(event) {
+      void saveAccountOrder(event.oldIndex, event.newIndex);
+    },
+  });
+}
+
+async function saveAccountOrder(oldIndex?: number, newIndex?: number) {
+  if (oldIndex === undefined || newIndex === undefined || oldIndex === newIndex || accountOrderSaving.value) {
+    return;
+  }
+  const previousAccounts = [...accounts.value];
+  const enabledAccounts = [...visibleAccounts.value];
+  const [moved] = enabledAccounts.splice(oldIndex, 1);
+  if (!moved) {
+    accountSortable?.sort(previousAccounts.filter((account) => account.enabled).map((account) => account.id));
+    return;
+  }
+  enabledAccounts.splice(newIndex, 0, moved);
+  const disabledAccounts = previousAccounts.filter((account) => !account.enabled);
+  const nextAccounts = [...enabledAccounts, ...disabledAccounts];
+  accounts.value = nextAccounts;
+  accountOrderSaving.value = true;
+  accountSortable?.option('disabled', true);
+  try {
+    await mailAccountApi.reorder(nextAccounts.map((account) => account.id));
+    message.success('邮箱账号顺序已保存');
+  } catch (error) {
+    accounts.value = previousAccounts;
+    await loadAccounts();
+    await nextTick();
+    accountSortable?.sort(visibleAccounts.value.map((account) => account.id));
+    message.error(error instanceof Error ? error.message : '保存邮箱账号顺序失败');
+  } finally {
+    accountOrderSaving.value = false;
+    accountSortable?.option('disabled', false);
+  }
 }
 
 function onViewModeChanged() {
@@ -3671,9 +3767,63 @@ function looksLikeEmail(value: string) {
   align-items: flex-start;
 }
 
+.account-sort-list {
+  display: grid;
+  gap: 1px;
+}
+
+.account-sort-list.saving {
+  cursor: progress;
+}
+
+.account-sort-list.saving .account-drag-handle {
+  pointer-events: none;
+}
+
 .account-filter-label {
   display: grid;
+  min-width: 0;
+  flex: 1;
   gap: 2px;
+}
+
+.account-drag-handle {
+  display: inline-flex;
+  width: 24px;
+  height: 28px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  margin: -4px -5px -4px 0;
+  border-radius: 5px;
+  color: var(--muted-weak);
+  cursor: grab;
+  opacity: 0;
+  touch-action: none;
+  transition: color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+}
+
+.account-filter-item:hover .account-drag-handle,
+.account-filter-item:focus-within .account-drag-handle,
+.account-sort-chosen .account-drag-handle {
+  opacity: 1;
+}
+
+.account-drag-handle:hover {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: currentColor;
+}
+
+.account-drag-handle:active {
+  cursor: grabbing;
+}
+
+.account-sort-ghost {
+  opacity: 0.34;
+}
+
+.account-sort-chosen {
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.14);
 }
 
 .account-filter-label strong,
@@ -3696,6 +3846,12 @@ function looksLikeEmail(value: string) {
 .account-filter-item.active .account-filter-label small {
   color: currentColor;
   opacity: 0.72;
+}
+
+@media (hover: none) {
+  .account-drag-handle {
+    opacity: 0.72;
+  }
 }
 
 .account-empty {

@@ -479,7 +479,8 @@ JSON 请求：
         "fullSyncFinishedAt": "2026-07-07T10:12:00+08:00",
         "fullSyncError": null,
         "cleanupEnabled": false,
-        "cleanupRetentionDays": 90
+        "cleanupRetentionDays": 90,
+        "sortOrder": 10
       }
     ]
   }
@@ -565,7 +566,30 @@ JSON 请求：
 }
 ```
 
-### 6.4 删除邮箱账号
+### 6.4 调整邮箱账号顺序
+
+`PUT /api/v1/mail-accounts/reorder`
+
+请求必须提交当前用户完整的邮箱账号 ID 列表。后端在事务内校验账号归属和列表完整性，再依次保存顺序；列表已变化、包含重复 ID 或其他用户账号时返回 `409`，不会写入部分顺序。
+
+```json
+{
+  "accountIds": ["3", "1", "2"]
+}
+```
+
+响应：
+
+```json
+{
+  "success": true,
+  "message": "邮箱账号顺序已保存",
+  "httpCode": 200,
+  "data": {}
+}
+```
+
+### 6.5 删除邮箱账号
 
 `DELETE /api/v1/mail-accounts/{id}`
 
@@ -580,7 +604,7 @@ JSON 请求：
 }
 ```
 
-### 6.5 测试邮箱连接
+### 6.6 测试邮箱连接
 
 `POST /api/v1/mail-accounts/{id}/test-connection`
 
@@ -595,7 +619,7 @@ JSON 请求：
 }
 ```
 
-### 6.6 读取邮箱 IMAP 文件夹
+### 6.7 读取邮箱 IMAP 文件夹
 
 `GET /api/v1/mail-accounts/{id}/folders`
 
@@ -627,7 +651,7 @@ JSON 请求：
 }
 ```
 
-### 6.7 手动触发收取
+### 6.8 手动触发收取
 
 `POST /api/v1/mail-accounts/{id}/sync`
 
@@ -648,7 +672,7 @@ JSON 请求：
 }
 ```
 
-### 6.8 启动全量历史同步
+### 6.9 启动全量历史同步
 
 `POST /api/v1/mail-accounts/{id}/full-sync/start`
 
@@ -675,7 +699,7 @@ JSON 请求：
 }
 ```
 
-### 6.9 停止全量历史同步
+### 6.10 停止全量历史同步
 
 `POST /api/v1/mail-accounts/{id}/full-sync/stop`
 
@@ -702,7 +726,7 @@ JSON 请求：
 }
 ```
 
-### 6.10 查询同步状态
+### 6.11 查询同步状态
 
 `GET /api/v1/mail-accounts/{id}/sync-status`
 
@@ -727,7 +751,7 @@ JSON 请求：
 }
 ```
 
-### 6.11 同步后清理服务器旧邮件
+### 6.12 同步后清理服务器旧邮件
 
 邮箱账号可配置：
 
@@ -738,7 +762,7 @@ JSON 请求：
 
 如果候选邮件缺少本地原文文件，后端必须跳过删除并写入服务器删除日志，避免远端邮件还没确认落盘就被删除。
 
-### 6.12 服务器删除日志
+### 6.13 服务器删除日志
 
 `GET /api/v1/server-delete-logs`
 
