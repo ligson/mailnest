@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -35,7 +36,7 @@ func (a *App) handleImportEMLMessage(w http.ResponseWriter, r *http.Request) {
 	if folder == "" {
 		folder = "INBOX"
 	}
-	payload := importEMLBatchPayload(userID, accountID, folder, files, a)
+	payload := importEMLBatchPayload(r.Context(), userID, accountID, folder, files, a)
 	if payload.accountNotFound {
 		response.Error(w, http.StatusNotFound, "邮箱账号不存在")
 		return
@@ -53,7 +54,7 @@ type importEMLBatchResult struct {
 	accountNotFound bool
 }
 
-func importEMLBatchPayload(userID, accountID int64, folder string, files []importEMLUpload, a *App) importEMLBatchResult {
+func importEMLBatchPayload(ctx context.Context, userID, accountID int64, folder string, files []importEMLUpload, a *App) importEMLBatchResult {
 	items := make([]map[string]any, 0, len(files))
 	var firstMessage any
 	var firstInserted any
@@ -79,7 +80,7 @@ func importEMLBatchPayload(userID, accountID int64, folder string, files []impor
 			items = append(items, item)
 			continue
 		}
-		imported, err := a.mailService.ImportEML(userID, accountID, folder, data)
+		imported, err := a.mailService.ImportEMLContext(ctx, userID, accountID, folder, data)
 		data = nil
 		if errors.Is(err, storage.ErrNotFound) {
 			result.accountNotFound = true

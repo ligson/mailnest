@@ -8,7 +8,7 @@ import (
 
 func (s *Store) migrateGORM() error {
 	if s.db.dialect == dialectMySQL && s.db.gormDB.Migrator().HasTable(&userModel{}) {
-		if err := s.db.gormDB.AutoMigrate(&mailDraftModel{}, &mailThreadModel{}, &mailRuleLogModel{}, &mailSendLogModel{}, &mailServerDeleteLogModel{}); err != nil {
+		if err := s.db.gormDB.AutoMigrate(&mailDraftModel{}, &mailThreadModel{}, &mailRuleLogModel{}, &mailSendLogModel{}, &mailServerDeleteLogModel{}, &mailSearchTaskModel{}); err != nil {
 			return fmt.Errorf("gorm automigrate mysql incremental tables: %w", err)
 		}
 		return s.createSupplementalIndexes()
@@ -30,6 +30,7 @@ func (s *Store) migrateGORM() error {
 		&mailMessageStateModel{},
 		&mailSyncJobEventModel{},
 		&mailServerDeleteLogModel{},
+		&mailSearchTaskModel{},
 	); err != nil {
 		return fmt.Errorf("gorm automigrate %s: %w", s.db.dialect, err)
 	}
@@ -57,6 +58,7 @@ func (s *Store) migrateExistingSQLite() error {
 		{table: "mail_message_states", model: &mailMessageStateModel{}},
 		{table: "mail_sync_job_events", model: &mailSyncJobEventModel{}},
 		{table: "mail_server_delete_logs", model: &mailServerDeleteLogModel{}},
+		{table: "mail_search_tasks", model: &mailSearchTaskModel{}},
 	}
 	for _, item := range models {
 		exists, err := s.sqliteTableExists(item.table)
@@ -313,6 +315,14 @@ func (s *Store) ensureDialectColumnTypes() error {
 			return err
 		}
 	}
+	// 类型已满足时不要重复 ALTER，尤其不能在每次启动时重建全文索引。
+	var columnType string
+	if err := s.db.QueryRow(`SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'mail_messages' AND COLUMN_NAME = 'search_text'`).Scan(&columnType); err != nil {
+		return err
+	}
+	if strings.EqualFold(columnType, "longtext") {
+		return nil
+	}
 	_, err := s.db.Exec(`ALTER TABLE mail_messages MODIFY COLUMN search_text LONGTEXT NULL`)
 	if err != nil {
 		return fmt.Errorf("ensure mysql long text columns: %w", err)
@@ -486,6 +496,7 @@ type mailMessageModel struct {
 	ToAddrs         *string    `gorm:"column:to_addrs;type:text"`
 	CCAddrs         *string    `gorm:"column:cc_addrs;type:text"`
 	SentAt          *time.Time `gorm:"column:sent_at"`
+	SortAt          *time.Time `gorm:"column:sort_at"`
 	ReceivedAt      *time.Time `gorm:"column:received_at;index:idx_mail_messages_user_received,priority:2,sort:desc"`
 	HasAttachments  int        `gorm:"column:has_attachments;not null;default:0"`
 	TextBodyPath    *string    `gorm:"column:text_body_path;type:text"`
@@ -503,6 +514,7 @@ type mailMessageModel struct {
 func (mailMessageModel) TableName() string { return "mail_messages" }
 
 type mailThreadModel struct {
+	SortAt            *time.Time `gorm:"column:sort_at"`
 	ID                int64      `gorm:"primaryKey;autoIncrement;column:id;index:idx_mail_threads_user_last,priority:3,sort:desc"`
 	UserID            int64      `gorm:"column:user_id;not null;index:idx_mail_threads_user_last,priority:1;index:idx_mail_threads_user_subject,priority:1"`
 	AccountID         int64      `gorm:"column:account_id;not null;default:0;index:idx_mail_threads_user_subject,priority:2"`

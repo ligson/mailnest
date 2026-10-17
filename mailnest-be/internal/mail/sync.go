@@ -1,6 +1,7 @@
 package mail
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -197,6 +198,16 @@ func (s *Service) GetFullSyncStatus(userID, accountID int64) (FullSyncStatus, er
 }
 
 func (s *Service) runFullSync(userID, accountID int64, cancel <-chan struct{}) {
+	// 将停止信号传到后台资源队列；等待资源时也能立即停止，不再等到下一批。
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	go func() {
+		select {
+		case <-cancel:
+			stop()
+		case <-ctx.Done():
+		}
+	}()
 	started := time.Now()
 	defer s.unregisterFullSyncCancel(userID, accountID)
 	jobID, err := s.store.CreateSyncJob(userID, accountID, "full", "running")
@@ -311,8 +322,15 @@ func (s *Service) runFullSync(userID, accountID int64, cancel <-chan struct{}) {
 					_ = s.store.FinishMailAccountFullSync(userID, accountID, "cancelled", "用户停止了全量同步")
 					return
 				}
-				inserted, err := s.saveMessage(userID, accountID, folderBatch.folder, fetched)
+				inserted, err := s.saveMessageContext(ctx, userID, accountID, folderBatch.folder, fetched, "sync")
 				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						if jobID > 0 {
+							_ = s.store.FinishSyncJob(jobID, "cancelled", newCount, "用户停止了全量同步")
+						}
+						_ = s.store.FinishMailAccountFullSync(userID, accountID, "cancelled", "用户停止了全量同步")
+						return
+					}
 					log.Printf("全量同步保存邮件失败 userID=%d accountID=%d folder=%s uid=%s processed=%d total=%d err=%v", userID, accountID, folderBatch.folder, fetched.UID, processed, total, err)
 					if jobID > 0 {
 						_ = s.store.FinishSyncJob(jobID, "failed", processed, err.Error())

@@ -1,6 +1,7 @@
 package mail
 
 import (
+	"context"
 	"database/sql"
 	"log"
 	"os"
@@ -20,23 +21,36 @@ func (s *Service) RepairStoredParsedMessages() error {
 		return err
 	}
 	checked := 0
-	repaired := 0
-	skippedReadError := 0
 	for _, message := range messages {
+		if err := s.repairStoredParsedMessage(message); err != nil {
+			return err
+		}
 		checked++
+	}
+	log.Printf("历史邮件解析修复完成 checked=%d duration=%s", checked, time.Since(started))
+	return nil
+}
+
+// 每封邮件单独让行交互读取，不让启动修复长期占用后台资源。
+func (s *Service) repairStoredParsedMessage(message storage.MailMessage) error {
+	release, err := s.store.Workload().Background(context.Background(), "repair")
+	if err != nil {
+		return err
+	}
+	defer release()
+	{
 		if !message.RawPath.Valid || strings.TrimSpace(message.RawPath.String) == "" {
-			continue
+			return nil
 		}
 		raw, err := os.ReadFile(message.RawPath.String)
 		if err != nil {
-			skippedReadError++
-			continue
+			return nil
 		}
 		parsed := fetchedMessageFromRaw(raw)
 		currentText := readContentFile(nullableStringValue(message.TextBodyPath))
 		currentHTML := readContentFile(nullableStringValue(message.HTMLBodyPath))
 		if !messageNeedsParsedRepair(message, currentText, currentHTML, parsed) {
-			continue
+			return nil
 		}
 		textPath := nullableStringValue(message.TextBodyPath)
 		htmlPath := nullableStringValue(message.HTMLBodyPath)
@@ -71,9 +85,7 @@ func (s *Service) RepairStoredParsedMessages() error {
 		}); err != nil {
 			return err
 		}
-		repaired++
 	}
-	log.Printf("历史邮件解析修复完成 checked=%d repaired=%d readErrors=%d duration=%s", checked, repaired, skippedReadError, time.Since(started))
 	return nil
 }
 

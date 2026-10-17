@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -9,16 +11,19 @@ import (
 	"mailnest-be/internal/mail"
 	"mailnest-be/internal/oauth"
 	"mailnest-be/internal/response"
+	"mailnest-be/internal/searchindex"
 	"mailnest-be/internal/storage"
 )
 
 // App 负责装配 HTTP 路由、存储层、邮件服务和 OAuth 服务。
 type App struct {
-	cfg         config.Config
-	store       *storage.Store
-	mailService *mail.Service
-	oauth       *oauth.Service
-	captchas    *captchaStore
+	cfg                config.Config
+	store              *storage.Store
+	mailService        *mail.Service
+	oauth              *oauth.Service
+	captchas           *captchaStore
+	searchIndex        *searchindex.Service
+	searchStartupError string
 }
 
 func NewApp(cfg config.Config) (*App, error) {
@@ -45,19 +50,39 @@ func NewAppWithDependencies(cfg config.Config, fetcher mail.Fetcher, exchanger o
 		return nil, err
 	}
 	mailService := mail.NewService(store, fetcher, exchanger, cfg.App.DataDir, cfg.App.CredentialSecret)
+	if cfg.Search.Engine != "" && cfg.Search.Engine != "database" && cfg.Search.Engine != "bleve" {
+		_ = store.Close()
+		return nil, fmt.Errorf("search.engine 仅支持 database 或 bleve")
+	}
+	var index *searchindex.Service
+	startupError := ""
+	if cfg.Search.Engine == "bleve" {
+		index, err = searchindex.Open(store, cfg.Search, cfg.App.DataDir)
+		if err != nil {
+			log.Printf("邮件索引启动失败，使用数据库搜索 err=%v", err)
+			startupError = "检索索引无法启动，暂用数据库搜索；请管理员检查配置及索引目录"
+		} else {
+			store.SetMailSearchProvider(index)
+		}
+	}
 
 	return &App{
-		cfg:         cfg,
-		store:       store,
-		mailService: mailService,
-		oauth:       oauth.NewService(store, exchanger, cfg.App.CredentialSecret, cfg.OAuth.Microsoft.RedirectURL),
-		captchas:    newCaptchaStore(),
+		cfg:                cfg,
+		store:              store,
+		mailService:        mailService,
+		oauth:              oauth.NewService(store, exchanger, cfg.App.CredentialSecret, cfg.OAuth.Microsoft.RedirectURL),
+		captchas:           newCaptchaStore(),
+		searchIndex:        index,
+		searchStartupError: startupError,
 	}, nil
 }
 
 func (a *App) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", a.handleHealth)
+	mux.Handle("POST /api/v1/contacts/resolve", a.authMiddleware(http.HandlerFunc(a.handleResolveContacts)))
+	mux.Handle("GET /api/v1/messages/count", a.authMiddleware(http.HandlerFunc(a.handleListMessages)))
+	mux.Handle("GET /api/v1/threads/count", a.authMiddleware(http.HandlerFunc(a.handleListThreads)))
 	mux.HandleFunc("GET /api/v1/auth/captcha", a.handleCaptcha)
 	mux.HandleFunc("POST /api/v1/auth/register", a.handleRegister)
 	mux.HandleFunc("POST /api/v1/auth/login", a.handleLogin)
@@ -80,6 +105,8 @@ func (a *App) Routes() http.Handler {
 	mux.Handle("POST /api/v1/mail-accounts/{id}/full-sync/stop", a.authMiddleware(http.HandlerFunc(a.handleStopFullSyncMailAccount)))
 	mux.Handle("GET /api/v1/mail-accounts/{id}/sync-status", a.authMiddleware(http.HandlerFunc(a.handleMailAccountSyncStatus)))
 	mux.Handle("GET /api/v1/messages", a.authMiddleware(http.HandlerFunc(a.handleListMessages)))
+	mux.Handle("GET /api/v1/search/status", a.authMiddleware(http.HandlerFunc(a.handleSearchStatus)))
+	mux.Handle("POST /api/v1/admin/search/rebuild", a.adminMiddleware(http.HandlerFunc(a.handleSearchRebuild)))
 	mux.Handle("POST /api/v1/messages/batch-actions", a.authMiddleware(http.HandlerFunc(a.handleMessageBatchAction)))
 	mux.Handle("POST /api/v1/messages/batch-preview", a.authMiddleware(http.HandlerFunc(a.handleMessageBatchPreview)))
 	mux.Handle("POST /api/v1/messages/send", a.authMiddleware(http.HandlerFunc(a.handleSendMessage)))
@@ -130,11 +157,15 @@ func (a *App) Routes() http.Handler {
 	mux.Handle("POST /api/v1/oauth/microsoft/start", a.authMiddleware(http.HandlerFunc(a.handleMicrosoftOAuthStart)))
 	mux.Handle("POST /api/v1/oauth/microsoft/complete", a.authMiddleware(http.HandlerFunc(a.handleMicrosoftOAuthComplete)))
 	mux.Handle("GET /api/v1/admin/users", a.adminMiddleware(http.HandlerFunc(a.handleAdminListUsers)))
+	mux.Handle("GET /api/v1/admin/version", a.adminMiddleware(http.HandlerFunc(a.handleAdminVersion)))
 	mux.Handle("PUT /api/v1/admin/users/{id}/enabled", a.adminMiddleware(http.HandlerFunc(a.handleAdminUpdateUserEnabled)))
 	return mux
 }
 
 func (a *App) StartBackgroundTasks(ctx context.Context) {
+	if a.searchIndex != nil {
+		a.searchIndex.Start(ctx)
+	}
 	go func() {
 		log.Printf("后台任务启动：修复历史邮件解析内容")
 		if err := a.mailService.RepairStoredParsedMessages(); err != nil {
@@ -144,6 +175,15 @@ func (a *App) StartBackgroundTasks(ctx context.Context) {
 		log.Printf("后台任务完成：历史邮件解析内容修复结束")
 	}()
 	a.mailService.StartAutoSyncScheduler(ctx, mail.AutoSyncOptions{})
+}
+
+// Close 等待索引批次退出后释放磁盘锁，数据库最后关闭。
+func (a *App) Close() error {
+	var indexErr error
+	if a.searchIndex != nil {
+		indexErr = a.searchIndex.Close()
+	}
+	return errors.Join(indexErr, a.store.Close())
 }
 
 func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {

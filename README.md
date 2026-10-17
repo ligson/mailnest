@@ -24,6 +24,8 @@ mailnest/
 └── README.md                 # 项目说明
 ```
 
+前后端业务代码后续统一按菜单树分层：一级菜单建立业务目录，子菜单嵌套到父目录，菜单专属实现就近维护，跨菜单公共能力独立复用。现有代码按功能渐进迁移，目标结构及约束见 [菜单模块目录规范](doc/menu-module-structure.md)。本规范不表示现有目录已全部完成迁移。
+
 ## 技术栈建议
 
 ### 后端
@@ -70,11 +72,18 @@ mailnest/
 - [架构设计](doc/architecture.md)
 - [接口规范](doc/api.md)
 - [后端包结构说明](doc/backend-package-structure.md)
+- [菜单模块目录规范与渐进迁移要求](doc/menu-module-structure.md)
 - [实施计划](doc/implementation-plan.md)
 - [邮件批量操作、规则增强、同步日志与附件中心设计](doc/mail-batch-rules-sync-attachments-design.md)
 - [邮件线程与规则命中记录设计](doc/mail-thread-rule-log-design.md)
 - [垃圾邮件系统文件夹与规则标记设计](doc/mail-spam-design.md)
 - [邮件回复与转发功能设计](doc/reply-forward-design.md)
+- [写信弹框正文优先与紧凑布局](doc/compose-layout-design.md)
+- [邮件搜索性能与全文索引](doc/mail-search-performance.md)
+- [Bleve 本地邮件检索、重建与安全切换](doc/bleve-search-design.md)
+- [搜索与页面加载优化、接口约定及验收](doc/performance-optimization-plan.md)
+- [第二轮性能优化目标与实施进度](doc/performance-next-stage.md)
+- [前后端版本管理、构建注入与系统管理展示](doc/version-management.md)
 - [更新日志](CHANGELOG.md)
 
 ## Docker Compose 部署

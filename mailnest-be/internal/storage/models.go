@@ -329,6 +329,7 @@ type ListMailDraftsQuery struct {
 }
 
 type ListMailMessagesQuery struct {
+	BeforeID       int64
 	UserID         int64
 	AccountID      int64
 	FolderID       int64
@@ -348,9 +349,13 @@ type ListMailMessagesQuery struct {
 	Limit          int
 	Offset         int
 	SummaryOnly    bool
+	SkipTotal      bool
+	CountOnly      bool
 }
 
 type ListMailThreadsQuery struct {
+	SkipTotal      bool
+	CountOnly      bool
 	UserID         int64
 	AccountID      int64
 	FolderID       int64

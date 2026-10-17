@@ -18,6 +18,18 @@ database:
   maxOpenConns: 4
   maxIdleConns: 4
 
+search:
+  # database 保持兼容搜索；bleve 启用本地可重建索引，无需额外搜索服务。
+  engine: "database"
+  # 首次启用 bleve 建议 shadow（只验证，不改变搜索结果）；核对通过后切换 active。
+  mode: "shadow"
+  # 空值使用 app.dataDir/search，必须位于持久化磁盘，且只允许一个后端写进程。
+  path: ""
+  batchSize: 25
+  batchDelayMs: 50
+  # 过于宽泛的搜索回退数据库，不截断结果。上限 50000。
+  maxCandidates: 20000
+
 oauth:
   microsoft:
     tenant: "consumers"

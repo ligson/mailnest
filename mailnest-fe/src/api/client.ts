@@ -1,4 +1,5 @@
-import axios, { AxiosError, type AxiosProgressEvent } from 'axios';
+import axios, { AxiosError, CanceledError, type AxiosProgressEvent } from 'axios';
+import { clearMailboxCache } from '../utils/mailboxCache';
 
 export interface Envelope<T> {
   success: boolean;
@@ -190,7 +191,10 @@ export interface MailThreadListData {
   items: MailThread[];
   page: number;
   pageSize: number;
-  total: number;
+  total: number | null;
+  totalPending?: boolean;
+  hasMore?: boolean;
+  revision?: string;
 }
 
 export interface MailAttachment {
@@ -261,10 +265,14 @@ export interface MailDraftListData {
 }
 
 export interface MessageListData {
+	 nextCursor?: string;
   items: MailMessage[];
   page: number;
   pageSize: number;
-  total: number;
+  total: number | null;
+  totalPending?: boolean;
+  hasMore?: boolean;
+  revision?: string;
 }
 
 export interface MailFolder {
@@ -645,6 +653,14 @@ apiClient.interceptors.request.use((config) => {
   }
   return config;
 });
+apiClient.interceptors.response.use((response) => {
+  const method=(response.config.method || 'get').toLowerCase();
+  if (!['get','head','options'].includes(method) && response.config.url !== '/contacts/resolve' && response.data?.success) clearMailboxCache();
+  return response;
+}, (error) => {
+  if (error.response?.status === 401) clearMailboxCache();
+  return Promise.reject(error);
+});
 
 export function isCanceledRequest(error: unknown): boolean {
   return error instanceof Error && (
@@ -703,7 +719,39 @@ export const authApi = {
   },
 };
 
+export interface MailSearchStatus {
+  engine: 'database' | 'bleve';
+  mode: string;
+  available: boolean;
+  phase: 'disabled' | 'building' | 'ready';
+  done: number;
+  total: number;
+  pending: number;
+  failed: number;
+  message: string;
+  shadowChecks?: number;
+  shadowMissing?: number;
+}
+
+export const searchApi = {
+  status(signal?: AbortSignal) {
+    return requestEnvelope<MailSearchStatus>(apiClient.get('/search/status', { signal }));
+  },
+  rebuild() {
+    return requestEnvelope<Record<string, never>>(apiClient.post('/admin/search/rebuild'));
+  },
+};
+
+export interface AppBuildInfo {
+  version: string;
+  commit: string;
+  buildTime: string;
+}
+
 export const adminApi = {
+  version() {
+    return requestEnvelope<{ backend: AppBuildInfo }>(apiClient.get('/admin/version'));
+  },
   users() {
     return requestEnvelope<AdminUserListData>(apiClient.get('/admin/users'));
   },
@@ -773,8 +821,31 @@ export const oauthApi = {
   },
 };
 
+// 慢统计在服务端后台完成；每次轮询是短请求，切换筛选/用户后立即停止。
+async function requestExactCount(path: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<{total:number;revision:string}> {
+  const owner = localStorage.getItem(tokenStorageKey);
+  const deadline = Date.now() + 90000;
+  while (Date.now() < deadline) {
+    if (signal?.aborted || owner !== localStorage.getItem(tokenStorageKey)) throw new CanceledError();
+    const data = await requestEnvelope<{total:number|null;totalPending?:boolean;revision:string}>(apiClient.get(path,{params:{...params,deferred:true},signal}));
+    if (!data.totalPending && typeof data.total === 'number') return {total:data.total,revision:data.revision};
+    if (!data.totalPending) throw new Error('统计返回格式错误');
+    await new Promise<void>((resolve,reject) => {
+      const onAbort = () => { clearTimeout(timer); reject(new CanceledError()); };
+      const timer = setTimeout(() => { signal?.removeEventListener('abort',onAbort); resolve(); },1000);
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort',onAbort,{once:true});
+    });
+  }
+  throw new Error('统计尚未完成，请稍后重试');
+}
+
 export const messageApi = {
+  count(params: Record<string, unknown>, options?: { signal?: AbortSignal }) {
+    return requestExactCount('/messages/count',params,options?.signal);
+  },
   list(params?: {
+    cursor?: string;
     accountId?: string;
     folderId?: string;
     systemFolder?: string;
@@ -789,8 +860,9 @@ export const messageApi = {
     starred?: boolean;
     page?: number;
     pageSize?: number;
-  }) {
-    return requestEnvelope<MessageListData>(apiClient.get('/messages', { params }));
+    includeTotal?: boolean;
+  }, options?: { signal?: AbortSignal }) {
+    return requestEnvelope<MessageListData>(apiClient.get('/messages', { params, signal: options?.signal }));
   },
   detail(id: string, options?: { signal?: AbortSignal }) {
     return requestEnvelope<MailMessageDetail>(apiClient.get(`/messages/${id}`, {
@@ -908,6 +980,9 @@ export const messageApi = {
 };
 
 export const threadApi = {
+  count(params: Record<string, unknown>, options?: { signal?: AbortSignal }) {
+    return requestExactCount('/threads/count',params,options?.signal);
+  },
   list(params?: {
     accountId?: string;
     folderId?: string;
@@ -923,11 +998,12 @@ export const threadApi = {
     starred?: boolean;
     page?: number;
     pageSize?: number;
-  }) {
-    return requestEnvelope<MailThreadListData>(apiClient.get('/threads', { params }));
+    includeTotal?: boolean;
+  }, options?: { signal?: AbortSignal }) {
+    return requestEnvelope<MailThreadListData>(apiClient.get('/threads', { params, signal: options?.signal }));
   },
-  detail(id: string) {
-    return requestEnvelope<MailThreadDetail>(apiClient.get(`/threads/${id}`));
+  detail(id: string, options?: { signal?: AbortSignal }) {
+    return requestEnvelope<MailThreadDetail>(apiClient.get(`/threads/${id}`, { signal: options?.signal }));
   },
   rebuild(payload: { scope: 'empty' | 'all'; accountId?: string }) {
     return requestEnvelope<{ processedCount: number; threadCount: number }>(apiClient.post('/threads/rebuild', payload));
@@ -935,8 +1011,8 @@ export const threadApi = {
 };
 
 export const draftApi = {
-  list(params?: { page?: number; pageSize?: number }) {
-    return requestEnvelope<MailDraftListData>(apiClient.get('/drafts', { params }));
+  list(params?: { page?: number; pageSize?: number }, options?: { signal?: AbortSignal }) {
+    return requestEnvelope<MailDraftListData>(apiClient.get('/drafts', { params, signal: options?.signal }));
   },
   detail(id: string) {
     return requestEnvelope<MailDraft>(apiClient.get(`/drafts/${id}`));
@@ -1022,8 +1098,11 @@ export const mailFolderApi = {
 };
 
 export const contactApi = {
-  list(params?: { keyword?: string; page?: number; pageSize?: number }) {
-    return requestEnvelope<ContactListData>(apiClient.get('/contacts', { params }));
+  resolve(addresses: string[],signal?:AbortSignal) {
+    return requestEnvelope<{items:Contact[];ambiguousPrefixes:string[];revision:string}>(apiClient.post('/contacts/resolve',{addresses},{signal}));
+  },
+  list(params?: { keyword?: string; page?: number; pageSize?: number }, options?: { signal?: AbortSignal }) {
+    return requestEnvelope<ContactListData>(apiClient.get('/contacts', { params, signal: options?.signal }));
   },
   create(payload: ContactPayload) {
     return requestEnvelope<Contact>(apiClient.post('/contacts', payload));

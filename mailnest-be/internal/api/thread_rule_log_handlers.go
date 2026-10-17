@@ -2,25 +2,31 @@ package api
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"mailnest-be/internal/response"
 	"mailnest-be/internal/storage"
 )
 
 func (a *App) handleListThreads(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	userID, ok := currentUserID(r)
 	if !ok {
 		response.Error(w, http.StatusUnauthorized, "未登录或登录已过期")
 		return
 	}
 	page := parsePositiveInt(r.URL.Query().Get("page"), 1)
-	pageSize := parsePositiveInt(r.URL.Query().Get("pageSize"), 20)
+	pageSize := min(parsePositiveInt(r.URL.Query().Get("pageSize"), 20), 100)
+	countOnly := strings.HasSuffix(r.URL.Path, "/count")
+	skipTotal := r.URL.Query().Get("includeTotal") == "false" && !countOnly
+	revision := a.store.MailReadVersionForUser(userID)
 	accountID, _ := strconv.ParseInt(r.URL.Query().Get("accountId"), 10, 64)
 	folderID, _ := strconv.ParseInt(r.URL.Query().Get("folderId"), 10, 64)
-	items, total, err := a.store.ListMailThreads(storage.ListMailThreadsQuery{
+	query := storage.ListMailThreadsQuery{
 		UserID:         userID,
 		AccountID:      accountID,
 		FolderID:       folderID,
@@ -36,21 +42,58 @@ func (a *App) handleListThreads(w http.ResponseWriter, r *http.Request) {
 		Starred:        parseBoolQuery(r.URL.Query().Get("starred")),
 		Limit:          pageSize,
 		Offset:         (page - 1) * pageSize,
-	})
+		SkipTotal:      skipTotal, CountOnly: countOnly,
+	}
+	var items []storage.MailThreadListItem
+	var total int
+	var err error
+	var pending bool
+	if countOnly && r.URL.Query().Get("deferred") == "true" {
+		total, pending, err = a.store.DeferredThreadCount(r.Context(), query)
+	} else {
+		items, total, err = a.store.ListMailThreadsContext(r.Context(), query)
+	}
 	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		log.Printf("会话列表查询失败 user_id=%d duration=%s search_mode=%s error=%v", userID, time.Since(started), a.store.MailSearchMode(), err)
 		response.Error(w, http.StatusInternalServerError, "获取会话列表失败")
 		return
+	}
+	if countOnly {
+		if pending {
+			response.JSON(w, http.StatusAccepted, true, "正在后台统计", map[string]any{"total": nil, "totalPending": true, "revision": revision})
+			return
+		}
+		response.OK(w, "统计完成", map[string]any{"total": total, "revision": revision})
+		return
+	}
+	hasMore := total > (page-1)*pageSize+len(items)
+	if skipTotal {
+		hasMore = len(items) > pageSize
+		if hasMore {
+			items = items[:pageSize]
+		}
+	}
+	var totalValue any = total
+	if skipTotal {
+		totalValue = nil
 	}
 	payload := make([]map[string]any, 0, len(items))
 	for _, item := range items {
 		payload = append(payload, mailThreadPayload(item))
 	}
 	response.OK(w, "获取成功", map[string]any{
-		"items":    payload,
-		"page":     page,
-		"pageSize": pageSize,
-		"total":    total,
+		"items":        payload,
+		"page":         page,
+		"pageSize":     pageSize,
+		"total":        totalValue,
+		"totalPending": skipTotal,
+		"hasMore":      hasMore,
+		"revision":     revision,
 	})
+	logSlowAPI("threads.list", started, "search_mode="+a.store.MailSearchMode(), "items="+strconv.Itoa(len(items)), "total="+strconv.Itoa(total))
 }
 
 func (a *App) handleThreadDetail(w http.ResponseWriter, r *http.Request) {

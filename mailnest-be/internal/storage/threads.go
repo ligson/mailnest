@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"strings"
@@ -10,14 +11,15 @@ import (
 func (s *Store) CreateMailThread(params CreateMailThreadParams) (MailThread, error) {
 	threadID, err := s.db.insertAndGetID(
 		`INSERT INTO mail_threads (
-			user_id, account_id, root_message_id, subject, normalized_subject, message_count, unread_count, has_attachments, last_message_at
-		) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)`,
+			user_id, account_id, root_message_id, subject, normalized_subject, message_count, unread_count, has_attachments, last_message_at,sort_at
+		) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?,COALESCE(?,CURRENT_TIMESTAMP))`,
 		params.UserID,
 		params.AccountID,
 		nullInt64Value(params.RootMessageID),
 		strings.TrimSpace(params.Subject),
 		strings.TrimSpace(params.NormalizedSubject),
 		boolToInt(params.HasAttachments),
+		nullTimeValue(params.LastMessageAt),
 		nullTimeValue(params.LastMessageAt),
 	)
 	if err != nil {
@@ -138,13 +140,14 @@ func (s *Store) RefreshMailThreadStats(userID, threadID int64) error {
 	rootMessageID, subject := s.threadRootMessage(userID, threadID)
 	_, err = s.db.Exec(
 		`UPDATE mail_threads
-		SET root_message_id = ?, subject = ?, message_count = ?, unread_count = ?, has_attachments = ?, last_message_at = ?, updated_at = CURRENT_TIMESTAMP
+		SET root_message_id = ?, subject = ?, message_count = ?, unread_count = ?, has_attachments = ?, last_message_at = ?, sort_at=COALESCE(?,created_at), updated_at = CURRENT_TIMESTAMP
 		WHERE user_id = ? AND id = ?`,
 		nullInt64Value(rootMessageID),
 		subject,
 		messageCount,
 		unreadCount,
 		hasAttachments,
+		nullTimeValue(dbValueToNullTime(lastMessageValue)),
 		nullTimeValue(dbValueToNullTime(lastMessageValue)),
 		userID,
 		threadID,
@@ -171,12 +174,39 @@ func (s *Store) threadRootMessage(userID, threadID int64) (sql.NullInt64, string
 }
 
 func (s *Store) ListMailThreads(query ListMailThreadsQuery) ([]MailThreadListItem, int, error) {
-	where, args := buildThreadMessageWhere(query)
+	return s.ListMailThreadsContext(context.Background(), query)
+}
+
+func (s *Store) listMailThreadsUncached(ctx context.Context, query ListMailThreadsQuery) ([]MailThreadListItem, int, error) {
+	phaseStart, poolBefore := time.Now(), s.db.Stats()
+	candidates, err := s.mailSearchCandidates(ctx, MailSearchTextQuery{UserID: query.UserID, Keyword: query.Keyword, From: query.From, Subject: query.Subject, Body: query.Body})
+	s.observeMailPhase(query.UserID, "thread.candidates", phaseStart, poolBefore, len(candidates.IDs))
+	if err != nil {
+		return nil, 0, err
+	}
+	where, args := s.buildThreadMessageWhere(query)
+	where += candidateMailWhere(candidates)
 	where += " AND m.thread_id IS NOT NULL"
 
 	var total int
-	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT m.thread_id) FROM mail_messages m LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id `+where, args...).Scan(&total); err != nil {
-		return nil, 0, err
+	source := s.mailMessageSource(candidates)
+	// 普通列表从已排序会话出发，用 EXISTS 校验筛选命中，避免全量邮件 DISTINCT。
+	threadWhere := `t.user_id = ? AND t.id IN (SELECT DISTINCT m.thread_id FROM ` + source + ` LEFT JOIN mail_message_states ms ON ms.user_id=m.user_id AND ms.message_id=m.id ` + where + `)`
+	if strings.TrimSpace(query.Keyword+query.From+query.Subject+query.Body) == "" {
+		threadWhere = `t.user_id = ? AND EXISTS (SELECT 1 FROM mail_messages m LEFT JOIN mail_message_states ms ON ms.user_id=m.user_id AND ms.message_id=m.id ` + where + ` AND m.thread_id=t.id)`
+	}
+	if !query.SkipTotal || query.CountOnly {
+		phaseStart, poolBefore = time.Now(), s.db.Stats()
+		err = s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT m.thread_id) FROM `+source+` LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id `+where, args...).Scan(&total)
+		s.observeMailPhase(query.UserID, "threads.count", phaseStart, poolBefore, len(candidates.IDs))
+		if err != nil {
+			return nil, 0, err
+		}
+	} else {
+		total = -1
+	}
+	if query.CountOnly {
+		return nil, total, nil
 	}
 
 	if query.Limit <= 0 || query.Limit > 100 {
@@ -188,16 +218,17 @@ func (s *Store) ListMailThreads(query ListMailThreadsQuery) ([]MailThreadListIte
 	listArgs := make([]any, 0, len(args)+3)
 	listArgs = append(listArgs, query.UserID)
 	listArgs = append(listArgs, args...)
-	listArgs = append(listArgs, query.Limit, query.Offset)
-	rows, err := s.db.Query(
+	scanLimit := query.Limit
+	if query.SkipTotal {
+		scanLimit++
+	}
+	listArgs = append(listArgs, scanLimit, query.Offset)
+	phaseStart, poolBefore = time.Now(), s.db.Stats()
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT t.id, t.user_id, t.account_id, t.root_message_id, t.subject, t.normalized_subject, t.message_count, t.unread_count, t.has_attachments, t.last_message_at, t.created_at, t.updated_at
 		FROM mail_threads t
-		WHERE t.user_id = ? AND t.id IN (
-			SELECT DISTINCT m.thread_id
-			FROM mail_messages m
-			LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id `+where+`
-		)
-		ORDER BY COALESCE(t.last_message_at, t.created_at) DESC, t.id DESC
+		WHERE `+threadWhere+`
+		ORDER BY t.sort_at DESC, t.id DESC
 		LIMIT ? OFFSET ?`,
 		listArgs...,
 	)
@@ -212,24 +243,41 @@ func (s *Store) ListMailThreads(query ListMailThreadsQuery) ([]MailThreadListIte
 		if err != nil {
 			return nil, 0, err
 		}
-		latest, err := s.FindLatestMailMessageInThread(query.UserID, thread.ID)
-		if err != nil && !errors.Is(err, ErrNotFound) {
-			return nil, 0, err
-		}
 		items = append(items, MailThreadListItem{
-			Thread:        thread,
-			LatestMessage: latest,
-			Participants:  threadParticipants(latest),
+			Thread: thread,
 		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
+	// 先归还会话查询的连接，再发批量摘要查询，单连接 SQLite 也不会自锁。
+	if err := rows.Close(); err != nil {
+		return nil, 0, err
+	}
+	ids := make([]int64, len(items))
+	for i := range items {
+		ids[i] = items[i].Thread.ID
+	}
+	s.observeMailPhase(query.UserID, "threads.list", phaseStart, poolBefore, len(candidates.IDs))
+	phaseStart, poolBefore = time.Now(), s.db.Stats()
+	latest, err := s.latestThreadSummaries(ctx, query.UserID, ids)
+	s.observeMailPhase(query.UserID, "threads.summaries", phaseStart, poolBefore, len(ids))
+	if err != nil {
+		return nil, 0, err
+	}
+	for i := range items {
+		items[i].LatestMessage = latest[items[i].Thread.ID]
+		items[i].Participants = threadParticipants(items[i].LatestMessage)
+	}
 	return items, total, nil
 }
 
 func (s *Store) FindLatestMailMessageInThread(userID, threadID int64) (MailMessage, error) {
-	row := s.db.QueryRow(
+	return s.findLatestMailMessageInThreadContext(context.Background(), userID, threadID)
+}
+
+func (s *Store) findLatestMailMessageInThreadContext(ctx context.Context, userID, threadID int64) (MailMessage, error) {
+	row := s.db.QueryRowContext(ctx,
 		`SELECT m.id, m.user_id, m.account_id, m.thread_id, m.local_folder_id, m.folder, m.imap_uid, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs,
 			m.sent_at, m.received_at, m.has_attachments, m.text_body_path, m.html_body_path, m.raw_path, m.search_text,
 			m.in_reply_to, m.references_header, m.source_message_id, m.compose_mode,
@@ -331,7 +379,7 @@ func (s *Store) CountMailThreads(userID int64) (int, error) {
 	return count, err
 }
 
-func buildThreadMessageWhere(query ListMailThreadsQuery) (string, []any) {
+func (s *Store) buildThreadMessageWhere(query ListMailThreadsQuery) (string, []any) {
 	where := "WHERE m.user_id = ?"
 	args := []any{query.UserID}
 	if query.AccountID > 0 {
@@ -362,35 +410,15 @@ func buildThreadMessageWhere(query ListMailThreadsQuery) (string, []any) {
 	case "spam":
 		query.IsSpam = sql.NullBool{Bool: true, Valid: true}
 	}
-	if query.Keyword = strings.TrimSpace(query.Keyword); query.Keyword != "" {
-		like := "%" + query.Keyword + "%"
-		where += ` AND (
-			COALESCE(m.subject, '') LIKE ?
-			OR COALESCE(m.from_addr, '') LIKE ?
-			OR COALESCE(m.to_addrs, '') LIKE ?
-			OR COALESCE(m.cc_addrs, '') LIKE ?
-			OR COALESCE(m.search_text, '') LIKE ?
-		)`
-		args = append(args, like, like, like, like, like)
-	}
-	if query.From = strings.TrimSpace(query.From); query.From != "" {
-		where += " AND COALESCE(m.from_addr, '') LIKE ?"
-		args = append(args, "%"+query.From+"%")
-	}
-	if query.Subject = strings.TrimSpace(query.Subject); query.Subject != "" {
-		where += " AND COALESCE(m.subject, '') LIKE ?"
-		args = append(args, "%"+query.Subject+"%")
-	}
-	if query.Body = strings.TrimSpace(query.Body); query.Body != "" {
-		where += " AND COALESCE(m.search_text, '') LIKE ?"
-		args = append(args, "%"+query.Body+"%")
-	}
+	searchWhere, searchArgs := s.mailSearchWhere(query.Keyword, query.From, query.Subject, query.Body)
+	where += searchWhere
+	args = append(args, searchArgs...)
 	if query.DateFrom.Valid {
-		where += " AND COALESCE(m.sent_at, m.received_at, m.created_at) >= ?"
+		where += " AND m.sort_at >= ?"
 		args = append(args, query.DateFrom.Time)
 	}
 	if query.DateTo.Valid {
-		where += " AND COALESCE(m.sent_at, m.received_at, m.created_at) < ?"
+		where += " AND m.sort_at < ?"
 		args = append(args, query.DateTo.Time.AddDate(0, 0, 1))
 	}
 	if query.HasAttachments.Valid {

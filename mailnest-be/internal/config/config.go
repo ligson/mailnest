@@ -12,6 +12,16 @@ type Config struct {
 	App      AppConfig      `yaml:"app"`
 	Database DatabaseConfig `yaml:"database"`
 	OAuth    OAuthConfig    `yaml:"oauth"`
+	Search   SearchConfig   `yaml:"search"`
+}
+
+type SearchConfig struct {
+	Engine        string `yaml:"engine"`
+	Mode          string `yaml:"mode"`
+	Path          string `yaml:"path"`
+	BatchSize     int    `yaml:"batchSize"`
+	BatchDelayMS  int    `yaml:"batchDelayMs"`
+	MaxCandidates int    `yaml:"maxCandidates"`
 }
 
 type ServerConfig struct {
@@ -48,6 +58,8 @@ type MicrosoftOAuthConfig struct {
 
 func Default() Config {
 	return Config{
+		// 历史配置不自动触发索引构建；显式启用 Bleve 后默认先做影子验证。
+		Search: SearchConfig{Engine: "database", Mode: "shadow", BatchSize: 25, BatchDelayMS: 50, MaxCandidates: 20000},
 		Server: ServerConfig{
 			Host: "127.0.0.1",
 			Port: 8080,

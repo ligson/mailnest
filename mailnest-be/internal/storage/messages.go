@@ -1,15 +1,22 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"log"
 	"strings"
 	"time"
 )
 
 // InsertMailMessageIfNew 使用账号、目录和 IMAP UID 去重，避免重复同步同一封邮件。
 func (s *Store) InsertMailMessageIfNew(params CreateMailMessageParams) (MailMessage, bool, error) {
-	result, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return MailMessage{}, false, err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(
 		s.db.insertIgnoreSQL(
 			"mail_messages",
 			[]string{
@@ -50,12 +57,23 @@ func (s *Store) InsertMailMessageIfNew(params CreateMailMessageParams) (MailMess
 		return MailMessage{}, false, err
 	}
 
-	message, err := s.FindMailMessageByUID(params.UserID, params.AccountID, params.Folder, params.IMAPUID)
-	if err != nil {
+	if rows > 0 {
+		var id int64
+		if err := tx.QueryRow(`SELECT id FROM mail_messages WHERE user_id=? AND account_id=? AND folder=? AND imap_uid=?`, params.UserID, params.AccountID, params.Folder, params.IMAPUID).Scan(&id); err != nil {
+			return MailMessage{}, false, err
+		}
+		if err := enqueueMailSearchTask(tx, params.UserID, id); err != nil {
+			return MailMessage{}, false, err
+		}
+		if _, err := tx.Exec(`UPDATE mail_messages SET sort_at=COALESCE(sent_at,received_at,created_at) WHERE user_id=? AND id=?`, params.UserID, id); err != nil {
+			return MailMessage{}, false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		return MailMessage{}, false, err
 	}
-
-	return message, rows > 0, nil
+	message, err := s.FindMailMessageByUID(params.UserID, params.AccountID, params.Folder, params.IMAPUID)
+	return message, rows > 0, err
 }
 
 func (s *Store) FindMailMessageByUID(userID, accountID int64, folder, uid string) (MailMessage, error) {
@@ -85,6 +103,23 @@ func (s *Store) ListMailMessages(userID int64, accountID int64, limit, offset in
 }
 
 func (s *Store) ListMailMessagesByQuery(query ListMailMessagesQuery) ([]MailMessage, int, error) {
+	return s.ListMailMessagesByQueryContext(context.Background(), query)
+}
+
+func (s *Store) listMailMessagesUncached(ctx context.Context, query ListMailMessagesQuery) ([]MailMessage, int, error) {
+	phaseStart, poolBefore := time.Now(), s.db.Stats()
+	textQuery := MailSearchTextQuery{UserID: query.UserID, Keyword: query.Keyword, From: query.From, Subject: query.Subject, Body: query.Body}
+	stream, canStream := s.searchProvider.(MailSearchPageProvider)
+	streaming := canStream && s.searchProvider.Mode() == "bleve-active" && query.SummaryOnly && query.SkipTotal && !query.CountOnly && query.Offset <= 1000 && strings.TrimSpace(query.Keyword+query.From+query.Subject+query.Body) != ""
+	var candidates MailSearchCandidates
+	var err error
+	if !streaming {
+		candidates, err = s.mailSearchCandidates(ctx, textQuery)
+	}
+	s.observeMailPhase(query.UserID, "candidates", phaseStart, poolBefore, len(candidates.IDs))
+	if err != nil {
+		return nil, 0, err
+	}
 	where := "WHERE m.user_id = ?"
 	args := []any{query.UserID}
 	if query.AccountID > 0 {
@@ -115,37 +150,16 @@ func (s *Store) ListMailMessagesByQuery(query ListMailMessagesQuery) ([]MailMess
 	case "spam":
 		query.IsSpam = sql.NullBool{Bool: true, Valid: true}
 	}
-	if query.Keyword = strings.TrimSpace(query.Keyword); query.Keyword != "" {
-		like := "%" + query.Keyword + "%"
-		// 主搜索框覆盖主题、发件人、收件人、抄送和预构建 search_text；
-		// 前端切换搜索范围时，再使用下面的精确字段过滤。
-		where += ` AND (
-			COALESCE(m.subject, '') LIKE ?
-			OR COALESCE(m.from_addr, '') LIKE ?
-			OR COALESCE(m.to_addrs, '') LIKE ?
-			OR COALESCE(m.cc_addrs, '') LIKE ?
-			OR COALESCE(m.search_text, '') LIKE ?
-		)`
-		args = append(args, like, like, like, like, like)
-	}
-	if query.From = strings.TrimSpace(query.From); query.From != "" {
-		where += " AND COALESCE(m.from_addr, '') LIKE ?"
-		args = append(args, "%"+query.From+"%")
-	}
-	if query.Subject = strings.TrimSpace(query.Subject); query.Subject != "" {
-		where += " AND COALESCE(m.subject, '') LIKE ?"
-		args = append(args, "%"+query.Subject+"%")
-	}
-	if query.Body = strings.TrimSpace(query.Body); query.Body != "" {
-		where += " AND COALESCE(m.search_text, '') LIKE ?"
-		args = append(args, "%"+query.Body+"%")
-	}
+	searchWhere, searchArgs := s.mailSearchWhere(query.Keyword, query.From, query.Subject, query.Body)
+	searchArgStart := len(args)
+	where += searchWhere
+	args = append(args, searchArgs...)
 	if query.DateFrom.Valid {
-		where += " AND COALESCE(m.sent_at, m.received_at, m.created_at) >= ?"
+		where += " AND m.sort_at >= ?"
 		args = append(args, query.DateFrom.Time)
 	}
 	if query.DateTo.Valid {
-		where += " AND COALESCE(m.sent_at, m.received_at, m.created_at) < ?"
+		where += " AND m.sort_at < ?"
 		args = append(args, query.DateTo.Time.AddDate(0, 0, 1))
 	}
 	if query.HasAttachments.Valid {
@@ -172,10 +186,27 @@ func (s *Store) ListMailMessagesByQuery(query ListMailMessagesQuery) ([]MailMess
 		where += " AND ms.deleted_at IS NULL"
 	}
 
+	where += candidateMailWhere(candidates)
 	countArgs := append([]any{}, args...)
 	var total int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mail_messages m LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id `+where, countArgs...).Scan(&total); err != nil {
-		return nil, 0, err
+	source := s.mailMessageSource(candidates)
+	if !query.SkipTotal || query.CountOnly {
+		phaseStart, poolBefore = time.Now(), s.db.Stats()
+		err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+source+` LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id `+where, countArgs...).Scan(&total)
+		s.observeMailPhase(query.UserID, "messages.count", phaseStart, poolBefore, len(candidates.IDs))
+		if err != nil {
+			return nil, 0, err
+		}
+	} else {
+		total = -1
+	}
+	if query.CountOnly {
+		return nil, total, nil
+	}
+	if query.BeforeID > 0 {
+		where += " AND (m.sort_at,m.id) < (SELECT sort_at,id FROM mail_messages WHERE user_id=? AND id=?)"
+		args = append(args, query.UserID, query.BeforeID)
+		query.Offset = 0
 	}
 
 	if query.Limit <= 0 || query.Limit > 100 {
@@ -184,27 +215,56 @@ func (s *Store) ListMailMessagesByQuery(query ListMailMessagesQuery) ([]MailMess
 	if query.Offset < 0 {
 		query.Offset = 0
 	}
-	args = append(args, query.Limit, query.Offset)
+	if streaming {
+		phaseStart, poolBefore = time.Now(), s.db.Stats()
+		metadataWhere, metadataArgs := withoutSearchClause(where, args, searchWhere, searchArgStart, len(searchArgs))
+		items, available, streamErr := s.streamCandidateSummaryPage(ctx, query, textQuery, stream, metadataWhere, metadataArgs, searchWhere, searchArgs)
+		s.observeMailPhase(query.UserID, "messages.stream_page", phaseStart, poolBefore, 0)
+		if ctx.Err() != nil {
+			return nil, 0, ctx.Err()
+		}
+		if streamErr == nil && available {
+			return items, total, nil
+		}
+		if streamErr != nil {
+			log.Printf("邮件候选流式检索失败，准确回退数据库 user_id=%d error=%v", query.UserID, streamErr)
+		}
+		// 索引不可用/超限/失败均重新走完整 SQL，不使用流式处理中途的局部结果。
+	}
+	if query.SummaryOnly && candidates.Available && !candidates.Shadow && len(candidates.IDs) > 0 && len(searchWhere) > 0 {
+		metadataWhere, metadataArgs := withoutSearchClause(where, args, searchWhere, searchArgStart, len(searchArgs))
+		phaseStart, poolBefore = time.Now(), s.db.Stats()
+		items, err := s.candidateSummaryPage(ctx, query, candidates, metadataWhere, metadataArgs, searchWhere, searchArgs)
+		s.observeMailPhase(query.UserID, "messages.candidate_page", phaseStart, poolBefore, len(candidates.IDs))
+		return items, total, err
+	}
+	scanLimit := query.Limit
+	if query.SkipTotal {
+		scanLimit++
+	}
+	args = append(args, scanLimit, query.Offset)
 
 	selectSQL := `SELECT m.id, m.user_id, m.account_id, m.thread_id, m.local_folder_id, m.folder, m.imap_uid, m.message_id, m.subject, m.from_addr, m.to_addrs, m.cc_addrs,
 			m.sent_at, m.received_at, m.has_attachments, m.text_body_path, m.html_body_path, m.raw_path, m.search_text,
 			m.in_reply_to, m.references_header, m.source_message_id, m.compose_mode,
 			COALESCE(ms.is_read, 0), COALESCE(ms.starred, 0), COALESCE(ms.is_spam, 0), ms.spam_at, ms.deleted_at, m.created_at, m.updated_at
-		FROM mail_messages m
+		FROM ` + source + `
 		LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id ` + where + `
-		ORDER BY COALESCE(m.sent_at, m.received_at, m.created_at) DESC, m.id DESC
+		ORDER BY m.sort_at DESC, m.id DESC
 		LIMIT ? OFFSET ?`
 	if query.SummaryOnly {
 		// 邮件列表默认只读摘要字段，详情页再读取正文文件，避免首屏被大正文拖慢。
 		selectSQL = `SELECT m.id, m.user_id, m.account_id, m.thread_id, m.local_folder_id, m.folder, m.imap_uid, m.subject, m.from_addr, m.to_addrs,
 			m.sent_at, m.received_at, m.has_attachments, COALESCE(ms.is_read, 0), COALESCE(ms.starred, 0), COALESCE(ms.is_spam, 0), ms.spam_at, ms.deleted_at, m.created_at, m.updated_at
-		FROM mail_messages m
+		FROM ` + source + `
 		LEFT JOIN mail_message_states ms ON ms.user_id = m.user_id AND ms.message_id = m.id ` + where + `
-		ORDER BY COALESCE(m.sent_at, m.received_at, m.created_at) DESC, m.id DESC
+		ORDER BY m.sort_at DESC, m.id DESC
 		LIMIT ? OFFSET ?`
 	}
 
-	rows, err := s.db.Query(selectSQL, args...)
+	phaseStart, poolBefore = time.Now(), s.db.Stats()
+	defer func() { s.observeMailPhase(query.UserID, "messages.list", phaseStart, poolBefore, len(candidates.IDs)) }()
+	rows, err := s.db.QueryContext(ctx, selectSQL, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -226,6 +286,13 @@ func (s *Store) ListMailMessagesByQuery(query ListMailMessagesQuery) ([]MailMess
 		return nil, 0, err
 	}
 
+	if candidates.Available && candidates.Shadow && s.searchProvider != nil {
+		ids := make([]int64, len(messages))
+		for i, m := range messages {
+			ids[i] = m.ID
+		}
+		s.searchProvider.ObserveShadow(query.UserID, ids, candidates)
+	}
 	return messages, total, nil
 }
 
@@ -330,8 +397,9 @@ func (s *Store) ListMailMessagesMissingSentAt(userID, accountID, beforeID int64,
 func (s *Store) UpdateMailMessageSentAtIfMissing(userID, messageID int64, sentAt time.Time) (bool, error) {
 	result, err := s.db.Exec(
 		`UPDATE mail_messages
-		SET sent_at = ?, updated_at = CURRENT_TIMESTAMP
+		SET sent_at = ?, sort_at = COALESCE(?,received_at,created_at), updated_at = CURRENT_TIMESTAMP
 		WHERE user_id = ? AND id = ? AND sent_at IS NULL`,
+		sentAt,
 		sentAt,
 		userID,
 		messageID,
@@ -347,11 +415,17 @@ func (s *Store) UpdateMailMessageSentAtIfMissing(userID, messageID int64, sentAt
 }
 
 func (s *Store) UpdateMailMessageParsedContent(params UpdateMailMessageContentParams) error {
-	result, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(
 		`UPDATE mail_messages
 		SET message_id = ?, subject = ?, from_addr = ?, to_addrs = ?, cc_addrs = ?,
 			text_body_path = ?, html_body_path = ?, search_text = ?, in_reply_to = ?, references_header = ?,
 			sent_at = CASE WHEN ? = 1 THEN ? ELSE sent_at END,
+            sort_at = COALESCE(CASE WHEN ? = 1 THEN ? ELSE sent_at END,received_at,created_at),
 			updated_at = CURRENT_TIMESTAMP
 		WHERE user_id = ? AND id = ?`,
 		nullIfEmpty(params.MessageID),
@@ -364,6 +438,8 @@ func (s *Store) UpdateMailMessageParsedContent(params UpdateMailMessageContentPa
 		nullIfEmpty(params.SearchText),
 		nullIfEmpty(params.InReplyTo),
 		nullIfEmpty(params.References),
+		boolToInt(params.SentAt.Valid),
+		nullTimeValue(params.SentAt),
 		boolToInt(params.SentAt.Valid),
 		nullTimeValue(params.SentAt),
 		params.UserID,
@@ -379,7 +455,10 @@ func (s *Store) UpdateMailMessageParsedContent(params UpdateMailMessageContentPa
 	if count == 0 {
 		return ErrNotFound
 	}
-	return nil
+	if err := enqueueMailSearchTask(tx, params.UserID, params.ID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) UpdateMailMessageHasAttachments(userID, messageID int64, hasAttachments bool) error {
@@ -740,12 +819,16 @@ func scanMailMessage(scanner interface {
 func scanMailMessageSummary(scanner interface {
 	Scan(dest ...any) error
 }) (MailMessage, error) {
+	return scanMailMessageSummaryCC(scanner, false)
+}
+
+func scanMailMessageSummaryCC(scanner interface{ Scan(dest ...any) error }, withCC bool) (MailMessage, error) {
 	var message MailMessage
 	var hasAttachments int
 	var isRead int
 	var starred int
 	var isSpam int
-	err := scanner.Scan(
+	destinations := []any{
 		&message.ID,
 		&message.UserID,
 		&message.AccountID,
@@ -766,7 +849,11 @@ func scanMailMessageSummary(scanner interface {
 		&message.DeletedAt,
 		&message.CreatedAt,
 		&message.UpdatedAt,
-	)
+	}
+	if withCC {
+		destinations = append(destinations, &message.CCAddrs)
+	}
+	err := scanner.Scan(destinations...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return MailMessage{}, ErrNotFound
 	}

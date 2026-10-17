@@ -1,8 +1,14 @@
 package storage
 
+import "mailnest-be/internal/workload"
+
 type Store struct {
 	db                    *database
 	adminUserSummaryCache adminUserSummaryCache
+	mailSearch            mailSearchCapabilities
+	searchProvider        MailSearchProvider
+	mailReads             readCache
+	workload              *workload.Governor
 }
 
 // Open 使用默认 SQLite 配置打开存储层，主要服务本地开发和测试。
@@ -20,18 +26,29 @@ func OpenWithOptions(options DatabaseOptions) (*Store, error) {
 		return nil, err
 	}
 
-	store := &Store{db: db}
+	store := &Store{db: db, workload: workload.New(db.Stats().MaxOpenConnections)}
 	if err := store.migrate(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := store.ensureMailSortTime(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 
+	store.detectMailSearchIndex()
+	if err := store.ensureThreadSortTime(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return store, nil
 }
 
 func (s *Store) Close() error {
 	return s.db.Close()
 }
+
+func (s *Store) Workload() *workload.Governor { return s.workload }
 
 // migrate 对已有 SQLite 生产库走兼容迁移，新库或其他数据库走 GORM 迁移。
 func (s *Store) migrate() error {

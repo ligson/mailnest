@@ -1,12 +1,15 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
@@ -33,13 +36,19 @@ const (
 
 type database struct {
 	*sql.DB
-	gormDB  *gorm.DB
-	dialect dbDialect
+	gormDB        *gorm.DB
+	dialect       dbDialect
+	mailRevision  atomic.Uint64
+	cacheVersions cacheVersions
+	instance      int64
 }
 
 type transaction struct {
 	*sql.Tx
-	dialect dbDialect
+	dialect      dbDialect
+	database     *database
+	mailChanged  bool
+	cacheChanges map[cacheMutation]struct{}
 }
 
 func openDatabase(options DatabaseOptions) (*database, error) {
@@ -78,7 +87,7 @@ func openDatabase(options DatabaseOptions) (*database, error) {
 	raw.SetMaxOpenConns(maxOpenConns)
 	raw.SetMaxIdleConns(maxIdleConns)
 
-	db := &database{DB: raw, gormDB: gormDB, dialect: dialect}
+	db := &database{DB: raw, gormDB: gormDB, dialect: dialect, instance: time.Now().UnixNano()}
 	if err := db.configure(); err != nil {
 		_ = raw.Close()
 		return nil, err
@@ -174,7 +183,22 @@ func (db *database) configure() error {
 }
 
 func (db *database) Exec(query string, args ...any) (sql.Result, error) {
-	return db.DB.Exec(rebindPlaceholders(db.dialect, query), args...)
+	result, err := db.DB.Exec(rebindPlaceholders(db.dialect, query), args...)
+	if err == nil && mailboxMutation(query) {
+		if n, e := result.RowsAffected(); e == nil && n > 0 {
+			db.invalidateQuery(query, args)
+		}
+	}
+	return result, err
+}
+
+// Context 版本同样转换占位符，避免 PostgreSQL 路径绕过方言适配。
+func (db *database) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return db.DB.QueryContext(ctx, rebindPlaceholders(db.dialect, query), args...)
+}
+
+func (db *database) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return db.DB.QueryRowContext(ctx, rebindPlaceholders(db.dialect, query), args...)
 }
 
 func (db *database) Query(query string, args ...any) (*sql.Rows, error) {
@@ -190,13 +214,16 @@ func (db *database) Begin() (*transaction, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &transaction{Tx: tx, dialect: db.dialect}, nil
+	return &transaction{Tx: tx, dialect: db.dialect, database: db}, nil
 }
 
 func (db *database) insertAndGetID(query string, args ...any) (int64, error) {
 	if db.dialect == dialectPostgres {
 		var id int64
 		err := db.QueryRow(query+" RETURNING id", args...).Scan(&id)
+		if err == nil && mailboxMutation(query) {
+			db.invalidateQuery(query, args)
+		}
 		return id, err
 	}
 	result, err := db.Exec(query, args...)
@@ -311,7 +338,40 @@ func (db *database) dueMailAccountsWhere() string {
 }
 
 func (tx *transaction) Exec(query string, args ...any) (sql.Result, error) {
-	return tx.Tx.Exec(rebindPlaceholders(tx.dialect, query), args...)
+	result, err := tx.Tx.Exec(rebindPlaceholders(tx.dialect, query), args...)
+	if err == nil && mailboxMutation(query) {
+		if n, e := result.RowsAffected(); e == nil && n > 0 {
+			tx.mailChanged = true
+			tx.recordCacheChange(query, args)
+		}
+	}
+	return result, err
+}
+
+// 事务真正提交之后才推进缓存版本，回滚和索引 outbox 消费不使缓存失效。
+func (tx *transaction) Commit() error {
+	err := tx.Tx.Commit()
+	if err == nil && tx.mailChanged && tx.database != nil {
+		tx.database.mailRevision.Add(1)
+		for change := range tx.cacheChanges {
+			tx.database.cacheVersions.bump(change)
+		}
+	}
+	return err
+}
+
+func mailboxMutation(query string) bool {
+	fields := strings.Fields(strings.ToLower(query))
+	if len(fields) < 2 || (fields[0] != "insert" && fields[0] != "update" && fields[0] != "delete") {
+		return false
+	}
+	for _, field := range fields[:min(len(fields), 6)] {
+		switch strings.Trim(field, "`\"()") {
+		case "mail_messages", "mail_message_states", "mail_threads", "mail_accounts", "mail_folders", "contacts", "users":
+			return true
+		}
+	}
+	return false
 }
 
 func (tx *transaction) Query(query string, args ...any) (*sql.Rows, error) {
@@ -326,6 +386,10 @@ func (tx *transaction) insertAndGetID(query string, args ...any) (int64, error) 
 	if tx.dialect == dialectPostgres {
 		var id int64
 		err := tx.QueryRow(query+" RETURNING id", args...).Scan(&id)
+		if err == nil && mailboxMutation(query) {
+			tx.mailChanged = true
+			tx.recordCacheChange(query, args)
+		}
 		return id, err
 	}
 	result, err := tx.Exec(query, args...)

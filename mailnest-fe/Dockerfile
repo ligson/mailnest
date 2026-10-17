@@ -8,6 +8,9 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
+ARG APP_VERSION=
+ARG VCS_REF=unknown
+ARG BUILD_TIME=
 RUN npm run build
 
 FROM ${NGINX_BASE}

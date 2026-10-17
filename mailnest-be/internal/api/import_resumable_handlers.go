@@ -325,7 +325,7 @@ func (a *App) handleFinishImportEMLUpload(w http.ResponseWriter, r *http.Request
 		response.Error(w, http.StatusInternalServerError, "读取上传文件失败")
 		return
 	}
-	imported, err := a.mailService.ImportEML(userID, session.AccountID, session.Folder, raw)
+	imported, err := a.mailService.ImportEMLContext(r.Context(), userID, session.AccountID, session.Folder, raw)
 	raw = nil
 	if err != nil {
 		session.Status = "failed"

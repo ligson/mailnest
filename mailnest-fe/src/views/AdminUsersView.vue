@@ -12,6 +12,8 @@
         </a-button>
       </div>
 
+      <SystemVersion />
+
       <div class="admin-metrics">
         <div class="admin-metric">
           <span>用户总数</span>
@@ -119,6 +121,7 @@ import type { TableColumnsType } from 'ant-design-vue';
 import { ReloadOutlined } from '@ant-design/icons-vue';
 import { adminApi, type AdminUserSummary } from '../api/client';
 import AppLayout from '../components/AppLayout.vue';
+import SystemVersion from '../components/SystemVersion.vue';
 import { useAuthStore } from '../stores/auth';
 
 const auth = useAuthStore();

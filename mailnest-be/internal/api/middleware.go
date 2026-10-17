@@ -31,6 +31,11 @@ func (a *App) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// 先校验签名，避免未登录请求影响调度；合法请求的鉴权查询也应优先。
+		if (r.Method == http.MethodGet && !strings.HasSuffix(r.URL.Path, "/count")) || r.URL.Path == "/api/v1/contacts/resolve" {
+			release := a.store.Workload().Interactive()
+			defer release()
+		}
 		user, err := a.store.FindUserByID(userID)
 		if errors.Is(err, storage.ErrNotFound) {
 			response.Error(w, http.StatusUnauthorized, "账号已停用或登录已过期")

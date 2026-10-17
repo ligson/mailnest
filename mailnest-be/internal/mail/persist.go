@@ -1,6 +1,7 @@
 package mail
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -20,6 +21,19 @@ func (s *Service) saveMessage(userID, accountID int64, folder string, fetched Fe
 }
 
 func (s *Service) saveMessageWithTrigger(userID, accountID int64, folder string, fetched FetchedMessage, triggerType string) (bool, error) {
+	return s.saveMessageContext(context.Background(), userID, accountID, folder, fetched, triggerType)
+}
+
+func (s *Service) saveMessageContext(ctx context.Context, userID, accountID int64, folder string, fetched FetchedMessage, triggerType string) (bool, error) {
+	release, err := s.store.Workload().Background(ctx, "persist")
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	return s.saveMessageData(userID, accountID, folder, fetched, triggerType)
+}
+
+func (s *Service) saveMessageData(userID, accountID int64, folder string, fetched FetchedMessage, triggerType string) (bool, error) {
 	folder = normalizeFolderName(folder)
 	uid := strings.TrimSpace(fetched.UID)
 	if uid == "" {

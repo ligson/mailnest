@@ -152,10 +152,10 @@
               allow-clear
               class="search-keyword-input"
               :placeholder="searchPlaceholder"
-              @change="onFilterChanged"
-              @press-enter="loadMessages"
+              @change="scheduleSearch"
+              @press-enter="onFilterChanged"
             />
-            <a-button class="search-submit-button" aria-label="搜索" @click="loadMessages">
+            <a-button class="search-submit-button" aria-label="搜索" @click="onFilterChanged">
               <template #icon><search-outlined /></template>
             </a-button>
           </div>
@@ -173,6 +173,7 @@
               <span v-if="filters.starred" class="filter-chip">星标</span>
               <a-button type="link" size="small" @click="clearAdvancedFilters">清空</a-button>
             </a-space>
+            <div class="filter-search-status"><mail-search-status /></div>
           </div>
           <div v-if="advancedFiltersOpen" class="advanced-filter-panel">
             <a-range-picker
@@ -327,8 +328,14 @@
           </div>
         </a-spin>
 
+        <div v-if="!totalKnown && hasLoadedMessages" class="mail-pagination mail-pending-pagination">
+          <a-button size="small" title="上一页" aria-label="上一页" :disabled="page <= 1 || loading" @click="page -= 1; loadMessages()"><LeftOutlined /></a-button>
+          <span>第 {{ page }} 页</span>
+          <a-button size="small" title="下一页" aria-label="下一页" :disabled="!hasMore || loading" @click="page += 1; loadMessages()"><RightOutlined /></a-button>
+          <a-button v-if="countError" type="link" size="small" @click="retryExactTotal">重试统计</a-button>
+        </div>
         <a-pagination
-          v-if="total > pageSize"
+          v-else-if="total > pageSize"
           v-model:current="page"
           :page-size="pageSize"
           :total="total"
@@ -667,63 +674,93 @@
         v-model:open="composeOpen"
         :title="composeDrawerTitle"
         :width="1040"
+        :style="{ top: '16px', paddingBottom: 0 }"
         :destroy-on-close="false"
         :mask-closable="false"
         @cancel="closeCompose"
         :footer="null"
         class="compose-modal"
       >
+        <div class="compose-loading-shell">
         <a-spin :spinning="composeLoading" tip="正在准备邮件...">
           <a-form layout="vertical" :model="composeForm" class="compose-form">
             <div class="compose-fields">
-              <a-form-item label="发件账号">
-                <a-select v-model:value="composeForm.accountId" placeholder="选择发件邮箱" @change="onComposeAccountChanged">
+              <a-form-item label="发件人" html-for="compose-from" class="compose-field-row">
+                <a-select id="compose-from" v-model:value="composeForm.accountId" :bordered="false" placeholder="选择发件邮箱" @change="onComposeAccountChanged">
                   <a-select-option v-for="account in visibleAccounts" :key="account.id" :value="account.id">
                     {{ account.displayName }} &lt;{{ account.email }}&gt;
                   </a-select-option>
                 </a-select>
               </a-form-item>
-              <a-form-item label="收件人">
-                <a-select
-                  v-model:value="composeForm.to"
-                  mode="tags"
-                  :options="contactOptions"
-                  placeholder="输入邮箱后回车"
-                  :token-separators="[',', ';', '，', '；']"
-                />
-              </a-form-item>
-              <div class="compose-address-grid">
-                <a-form-item label="抄送">
+              <div class="compose-recipient-row">
+                <a-form-item label="收件人" html-for="compose-to" class="compose-field-row compose-recipient-field">
                   <a-select
-                    v-model:value="composeForm.cc"
+                    id="compose-to"
+                    v-model:value="composeForm.to"
+                    :bordered="false"
                     mode="tags"
                     :options="contactOptions"
-                    placeholder="可选"
+                    :filter-option="false"
+                    :loading="contactSearchLoading"
+                    @search="searchContacts"
+                    placeholder="输入邮箱后回车"
                     :token-separators="[',', ';', '，', '；']"
                   />
                 </a-form-item>
-                <a-form-item label="密送">
-                  <a-select
-                    v-model:value="composeForm.bcc"
-                    mode="tags"
-                    :options="contactOptions"
-                    placeholder="可选"
-                    :token-separators="[',', ';', '，', '；']"
-                  />
-                </a-form-item>
+                <div v-if="!composeCcVisible || !composeBccVisible" class="compose-recipient-actions">
+                  <a-button v-if="!composeCcVisible" type="link" size="small" aria-label="添加抄送" :aria-expanded="composeCcVisible" @click="composeCcExpanded = true">抄送</a-button>
+                  <a-button v-if="!composeBccVisible" type="link" size="small" aria-label="添加密送" :aria-expanded="composeBccVisible" @click="composeBccExpanded = true">密送</a-button>
+                </div>
               </div>
-              <a-form-item label="主题">
-                <a-input v-model:value="composeForm.subject" placeholder="邮件主题" />
+              <div v-if="composeCcVisible" class="compose-recipient-row">
+                <a-form-item label="抄送" html-for="compose-cc" class="compose-field-row compose-recipient-field">
+                  <a-select
+                    id="compose-cc"
+                    v-model:value="composeForm.cc"
+                    :bordered="false"
+                    mode="tags"
+                    :options="contactOptions"
+                    :filter-option="false"
+                    :loading="contactSearchLoading"
+                    @search="searchContacts"
+                    placeholder="添加抄送人"
+                    :token-separators="[',', ';', '，', '；']"
+                  />
+                </a-form-item>
+                <a-tooltip v-if="!composeForm.cc.length" title="收起抄送">
+                  <a-button type="text" size="small" aria-label="收起抄送" @click="composeCcExpanded = false"><template #icon><up-outlined /></template></a-button>
+                </a-tooltip>
+              </div>
+              <div v-if="composeBccVisible" class="compose-recipient-row">
+                <a-form-item label="密送" html-for="compose-bcc" class="compose-field-row compose-recipient-field">
+                  <a-select
+                    id="compose-bcc"
+                    v-model:value="composeForm.bcc"
+                    :bordered="false"
+                    mode="tags"
+                    :options="contactOptions"
+                    :filter-option="false"
+                    :loading="contactSearchLoading"
+                    @search="searchContacts"
+                    placeholder="添加密送人"
+                    :token-separators="[',', ';', '，', '；']"
+                  />
+                </a-form-item>
+                <a-tooltip v-if="!composeForm.bcc.length" title="收起密送">
+                  <a-button type="text" size="small" aria-label="收起密送" @click="composeBccExpanded = false"><template #icon><up-outlined /></template></a-button>
+                </a-tooltip>
+              </div>
+              <a-form-item label="主题" html-for="compose-subject" class="compose-field-row compose-subject-row">
+                <a-input id="compose-subject" v-model:value="composeForm.subject" :bordered="false" placeholder="邮件主题" />
               </a-form-item>
             </div>
             <section class="compose-body-shell">
               <div class="compose-body-header">
                 <span>正文</span>
-                <small>{{ composeBodyHint }}</small>
+                <small v-if="composeMode !== 'new'">{{ composeBodyHint }}</small>
               </div>
               <a-form-item class="compose-body-item">
                 <div class="compose-editor">
-                  <div class="compose-toolbar">
                     <input
                       ref="composeAttachmentInput"
                       class="compose-file-input"
@@ -741,162 +778,31 @@
                       multiple
                       @change="onComposeImagesSelected"
                     />
-                    <div class="compose-toolbar-group" @mousedown="saveComposeSelection">
-                      <a-tooltip title="添加附件">
-                        <a-button type="text" class="compose-tool-button" aria-label="添加附件" @mousedown.prevent @click="chooseComposeFiles">
-                          <template #icon><paper-clip-outlined /></template>
-                        </a-button>
-                      </a-tooltip>
-                      <a-tooltip title="插入图片">
-                        <a-button type="text" class="compose-tool-button" aria-label="插入图片" @mousedown.prevent @click="chooseComposeImages">
-                          <template #icon><file-image-outlined /></template>
-                        </a-button>
-                      </a-tooltip>
-                      <a-tooltip title="插入签名">
-                        <a-button type="text" class="compose-tool-button" aria-label="插入签名" @mousedown.prevent @click="insertComposeSignature">
-                          <template #icon><edit-outlined /></template>
-                        </a-button>
-                      </a-tooltip>
-                    </div>
-                    <span class="compose-toolbar-divider"></span>
-                    <div class="compose-toolbar-group compose-toolbar-selects" @mousedown="saveComposeSelection">
-                      <a-select
-                        v-model:value="composeFontFamily"
-                        class="compose-font-select"
-                        size="small"
-                        @change="applyComposeFontFamily"
-                      >
-                        <template #suffixIcon><font-size-outlined /></template>
-                        <a-select-option v-for="font in composeFontFamilies" :key="font.value" :value="font.value">
-                          {{ font.label }}
-                        </a-select-option>
-                      </a-select>
-                      <a-select
-                        v-model:value="composeFontSize"
-                        class="compose-size-select"
-                        size="small"
-                        @change="applyComposeFontSize"
-                      >
-                        <a-select-option v-for="size in composeFontSizes" :key="size.value" :value="size.value">
-                          {{ size.label }}
-                        </a-select-option>
-                      </a-select>
-                    </div>
-                    <span class="compose-toolbar-divider"></span>
-                    <div class="compose-toolbar-group" @mousedown="saveComposeSelection">
-                      <a-tooltip title="加粗">
-                        <a-button type="text" class="compose-tool-button" aria-label="加粗" @mousedown.prevent @click="runComposeCommand('bold')">
-                          <template #icon><bold-outlined /></template>
-                        </a-button>
-                      </a-tooltip>
-                      <a-tooltip title="斜体">
-                        <a-button type="text" class="compose-tool-button" aria-label="斜体" @mousedown.prevent @click="runComposeCommand('italic')">
-                          <template #icon><italic-outlined /></template>
-                        </a-button>
-                      </a-tooltip>
-                      <a-tooltip title="下划线">
-                        <a-button type="text" class="compose-tool-button" aria-label="下划线" @mousedown.prevent @click="runComposeCommand('underline')">
-                          <template #icon><underline-outlined /></template>
-                        </a-button>
-                      </a-tooltip>
-                      <a-tooltip title="删除线">
-                        <a-button type="text" class="compose-tool-button" aria-label="删除线" @mousedown.prevent @click="runComposeCommand('strikeThrough')">
-                          <template #icon><strikethrough-outlined /></template>
-                        </a-button>
-                      </a-tooltip>
-                      <a-popover trigger="click" placement="bottomLeft">
-                        <template #content>
-                          <div class="compose-color-grid" @mousedown.prevent>
-                            <button
-                              v-for="color in composeTextColors"
-                              :key="color"
-                              class="compose-color-swatch"
-                              :class="{ selected: composeTextColor === color }"
-                              :style="{ '--compose-swatch-color': color }"
-                              type="button"
-                              :aria-label="`文字颜色 ${color}`"
-                              @click="applyComposeTextColor(color)"
-                            >
-                              <check-outlined v-if="composeTextColor === color" />
-                            </button>
-                          </div>
-                        </template>
-                        <a-button type="text" class="compose-tool-button compose-color-button" aria-label="字体颜色" @mousedown.prevent>
-                          <template #icon><bg-colors-outlined /></template>
-                          <span class="compose-color-indicator" :style="{ background: composeTextColor }"></span>
-                        </a-button>
-                      </a-popover>
-                      <a-popover trigger="click" placement="bottomLeft">
-                        <template #content>
-                          <div class="compose-color-panel" @mousedown.prevent>
-                            <button class="compose-color-clear" type="button" @click="clearComposeBackgroundColor">
-                              无背景
-                            </button>
-                            <div class="compose-color-grid">
-                              <button
-                                v-for="color in composeBackgroundColors"
-                                :key="color"
-                                class="compose-color-swatch"
-                                :class="{ selected: composeBackgroundColor === color }"
-                                :style="{ '--compose-swatch-color': color }"
-                                type="button"
-                                :aria-label="`背景颜色 ${color}`"
-                                @click="applyComposeBackgroundColor(color)"
-                              >
-                                <check-outlined v-if="composeBackgroundColor === color" />
-                              </button>
-                            </div>
-                          </div>
-                        </template>
-                        <a-button type="text" class="compose-tool-button compose-color-button" aria-label="背景颜色" @mousedown.prevent>
-                          <span class="compose-bg-label">A</span>
-                          <span class="compose-color-indicator" :style="{ background: composeBackgroundColor || 'transparent' }"></span>
-                        </a-button>
-                      </a-popover>
-                    </div>
-                    <span class="compose-toolbar-divider"></span>
-                    <div class="compose-toolbar-group" @mousedown="saveComposeSelection">
-                      <a-tooltip title="项目列表">
-                        <a-button type="text" class="compose-tool-button" aria-label="项目列表" @mousedown.prevent @click="runComposeCommand('insertUnorderedList')">
-                          <template #icon><unordered-list-outlined /></template>
-                        </a-button>
-                      </a-tooltip>
-                      <a-tooltip title="编号列表">
-                        <a-button type="text" class="compose-tool-button" aria-label="编号列表" @mousedown.prevent @click="runComposeCommand('insertOrderedList')">
-                          <template #icon><ordered-list-outlined /></template>
-                        </a-button>
-                      </a-tooltip>
-                      <a-tooltip title="左对齐">
-                        <a-button type="text" class="compose-tool-button" aria-label="左对齐" @mousedown.prevent @click="runComposeCommand('justifyLeft')">
-                          <template #icon><align-left-outlined /></template>
-                        </a-button>
-                      </a-tooltip>
-                      <a-tooltip title="居中">
-                        <a-button type="text" class="compose-tool-button" aria-label="居中" @mousedown.prevent @click="runComposeCommand('justifyCenter')">
-                          <template #icon><align-center-outlined /></template>
-                        </a-button>
-                      </a-tooltip>
-                      <a-tooltip title="右对齐">
-                        <a-button type="text" class="compose-tool-button" aria-label="右对齐" @mousedown.prevent @click="runComposeCommand('justifyRight')">
-                          <template #icon><align-right-outlined /></template>
-                        </a-button>
-                      </a-tooltip>
-                      <a-tooltip title="插入链接">
-                        <a-button type="text" class="compose-tool-button" aria-label="插入链接" @mousedown.prevent @click="insertComposeLink">
-                          <template #icon><link-outlined /></template>
-                        </a-button>
-                      </a-tooltip>
-                      <a-tooltip title="清除格式">
-                        <a-button type="text" class="compose-tool-button" aria-label="清除格式" @mousedown.prevent @click="runComposeCommand('removeFormat')">
-                          <template #icon><clear-outlined /></template>
-                        </a-button>
-                      </a-tooltip>
-                    </div>
-                  </div>
+                  <ComposeToolbar
+                    v-if="composeOpen"
+                    :compose-font-family="composeFontFamily"
+                    :compose-font-size="composeFontSize"
+                    :compose-text-color="composeTextColor"
+                    :compose-background-color="composeBackgroundColor"
+                    :save-compose-selection="saveComposeSelection"
+                    :choose-compose-files="chooseComposeFiles"
+                    :choose-compose-images="chooseComposeImages"
+                    :insert-compose-signature="insertComposeSignature"
+                    :apply-compose-font-family="applyComposeFontFamily"
+                    :apply-compose-font-size="applyComposeFontSize"
+                    :run-compose-command="runComposeCommand"
+                    :apply-compose-text-color="applyComposeTextColor"
+                    :clear-compose-background-color="clearComposeBackgroundColor"
+                    :apply-compose-background-color="applyComposeBackgroundColor"
+                    :insert-compose-link="insertComposeLink"
+                  />
                   <div
                     ref="composeEditor"
                     class="compose-editor-body"
                     contenteditable="true"
+                    role="textbox"
+                    aria-label="邮件正文"
+                    aria-multiline="true"
                     data-placeholder="输入邮件正文"
                     @input="onComposeEditorInput"
                     @focus="saveComposeSelection"
@@ -953,6 +859,7 @@
             </div>
           </a-form>
         </a-spin>
+        </div>
       </a-modal>
       <a-drawer v-model:open="ruleLogOpen" width="620" title="规则记录">
         <a-spin :spinning="ruleLogLoading">
@@ -977,32 +884,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type Component } from 'vue';
+import { computed, defineAsyncComponent, markRaw, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type Component } from 'vue';
 import {
-  AlignCenterOutlined,
-  AlignLeftOutlined,
-  AlignRightOutlined,
-  BgColorsOutlined,
-  BoldOutlined,
   AuditOutlined,
   BranchesOutlined,
   CheckOutlined,
-  ClearOutlined,
   DeleteOutlined,
   DownloadOutlined,
   DownOutlined,
   EditOutlined,
   FilterOutlined,
   FolderOpenOutlined,
-  FileImageOutlined,
-  FontSizeOutlined,
   InboxOutlined,
-  ItalicOutlined,
   HolderOutlined,
-  LinkOutlined,
+  LeftOutlined,
+  RightOutlined,
   MailOutlined,
   MoreOutlined,
-  OrderedListOutlined,
   PaperClipOutlined,
   ForwardOutlined,
   ReloadOutlined,
@@ -1013,15 +911,14 @@ import {
   StopOutlined,
   StarFilled,
   StarOutlined,
-  StrikethroughOutlined,
-  UnderlineOutlined,
-  UnorderedListOutlined,
   UploadOutlined,
+  UpOutlined,
 } from '@ant-design/icons-vue';
 import { Modal, message } from 'ant-design-vue';
 import type { Dayjs } from 'dayjs';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import Sortable from 'sortablejs';
+import { clearMailboxCache, getMailboxCache, setMailboxCache, mailboxCacheEpoch } from '../utils/mailboxCache';
 import {
   ApiEnvelopeError,
   mailAccountApi,
@@ -1032,6 +929,8 @@ import {
   messageApi,
   threadApi,
   type Contact,
+  type MessageListData,
+  type MailThreadListData,
   type ComposeMode,
   type ComposeForwardAttachment,
   type ComposeContext,
@@ -1050,6 +949,10 @@ import {
 } from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import AppLayout from '../components/AppLayout.vue';
+import MailSearchStatus from '../components/MailSearchStatus.vue';
+import { MailCursorHistory } from '../modules/mail/paging';
+
+const ComposeToolbar = defineAsyncComponent(() => import('../modules/mail/compose/ComposeToolbar.vue'));
 
 type SystemFolderKey = 'inbox' | 'sent' | 'drafts' | 'all' | 'starred' | 'spam' | 'trash' | 'attachments';
 type ResizePane = 'folders' | 'list';
@@ -1097,11 +1000,27 @@ const auth = useAuthStore();
 const loading = ref(false);
 const detailLoading = ref(false);
 let detailRequestController: AbortController | null = null;
+let listRequestController: AbortController | null = null;
+let countRequestController: AbortController | null = null;
+let listGeneration = 0;
+const messageCursors = new MailCursorHistory();
+let retryExactTotal = () => {};
+const totalKnown = ref(false);
+const hasMore = ref(false);
+const countError = ref('');
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
 const accounts = ref<MailAccount[]>([]);
 const folders = ref<MailFolder[]>([]);
 const messages = ref<MailListItem[]>([]);
 const threads = ref<MailThread[]>([]);
 const contacts = ref<Contact[]>([]);
+const contactSuggestions = ref<Contact[]>([]);
+const ambiguousContactPrefixes = ref(new Set<string>());
+const contactSearchLoading = ref(false);
+let contactResolveController: AbortController | null = null;
+let contactSearchController: AbortController | null = null;
+let contactResolveTimer: ReturnType<typeof setTimeout> | undefined;
+let contactSearchTimer: ReturnType<typeof setTimeout> | undefined;
 const detail = ref<MailMessageDetail | null>(null);
 const threadDetail = ref<MailThreadDetail | null>(null);
 const selectedMessageId = ref<string | null>(null);
@@ -1123,6 +1042,8 @@ const editingFolderId = ref<string | null>(null);
 const importEMLOpen = ref(false);
 const importingEML = ref(false);
 const composeOpen = ref(false);
+const composeCcExpanded = ref(false);
+const composeBccExpanded = ref(false);
 const composeMode = ref<ComposeMode>('new');
 const composeSourceMessageId = ref('');
 const composeLoading = ref(false);
@@ -1211,30 +1132,13 @@ const composeForm = reactive({
   attachments: [] as File[],
 });
 const currentDraftId = ref('');
+// 草稿和回复已有抄送/密送时必须可见，避免折叠后用户忽略实际收件人。
+const composeCcVisible = computed(() => composeCcExpanded.value || composeForm.cc.length > 0);
+const composeBccVisible = computed(() => composeBccExpanded.value || composeForm.bcc.length > 0);
 const draftSaving = ref(false);
 const draftDirty = ref(false);
 const draftLastSavedAt = ref<string | null>(null);
 const draftSaveError = ref('');
-const composeFontFamilies = [
-  { label: '系统默认', value: 'system-ui' },
-  { label: '微软雅黑', value: 'Microsoft YaHei' },
-  { label: '苹方', value: 'PingFang SC' },
-  { label: '宋体', value: 'SimSun' },
-  { label: '黑体', value: 'SimHei' },
-  { label: 'Georgia', value: 'Georgia' },
-  { label: 'Arial', value: 'Arial' },
-  { label: 'Courier New', value: 'Courier New' },
-];
-const composeFontSizes = [
-  { label: '12', value: '12px' },
-  { label: '14', value: '14px' },
-  { label: '16', value: '16px' },
-  { label: '18', value: '18px' },
-  { label: '24', value: '24px' },
-  { label: '32', value: '32px' },
-];
-const composeTextColors = ['#1f2937', '#111827', '#b91c1c', '#d97706', '#ca8a04', '#047857', '#0369a1', '#7c3aed', '#be185d', '#ffffff'];
-const composeBackgroundColors = ['#ffffff', '#fef3c7', '#fde68a', '#d1fae5', '#dbeafe', '#ede9fe', '#fee2e2', '#f3f4f6'];
 const composeFontFamily = ref('system-ui');
 const composeFontSize = ref('14px');
 const composeTextColor = ref('#1f2937');
@@ -1326,7 +1230,7 @@ const contactByEmailPrefix = computed(() => {
   const map = new Map<string, Contact | null>();
   for (const contact of contacts.value) {
     const prefix = normalizeContactKey(contact.email.split('@')[0] || '');
-    if (!prefix) {
+    if (!prefix || ambiguousContactPrefixes.value.has(prefix)) {
       continue;
     }
     if (map.has(prefix)) {
@@ -1337,7 +1241,7 @@ const contactByEmailPrefix = computed(() => {
   }
   return map;
 });
-const contactOptions = computed(() => contacts.value.map((contact) => ({
+const contactOptions = computed(() => contactSuggestions.value.map((contact) => ({
   value: contact.displayName || contact.nickname
     ? `${contact.displayName || contact.nickname} <${contact.email}>`
     : contact.email,
@@ -1378,6 +1282,7 @@ const mailCountText = computed(() => {
   if (!hasLoadedMessages.value) {
     return '加载中...';
   }
+  if (!totalKnown.value) return countError.value || '正在统计总数…';
   if (mailViewMode.value === 'threads') {
     return `${total.value} 个会话`;
   }
@@ -1487,6 +1392,14 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopResize();
   detailRequestController?.abort();
+  listRequestController?.abort();
+  countRequestController?.abort();
+  listGeneration += 1;
+  clearTimeout(searchTimer);
+  clearTimeout(contactResolveTimer);
+  clearTimeout(contactSearchTimer);
+  contactResolveController?.abort();
+  contactSearchController?.abort();
   clearDraftSaveTimer();
   window.removeEventListener('resize', fitPaneWidthsToViewport);
   window.removeEventListener('beforeunload', handleBeforeUnload);
@@ -1529,10 +1442,19 @@ watch(composeForm, () => {
 watch(selectedForwardAttachmentIds, () => {
   markDraftDirty();
 }, { deep: true });
+// 只解析当前页、当前详情与正在编辑的地址，不在首屏拉取整个通讯录。
+watch(() => JSON.stringify(visibleContactKeys()), () => {
+  clearTimeout(contactResolveTimer);
+  contactResolveController?.abort();
+  contactResolveTimer = setTimeout(() => { void loadContacts(); }, 100);
+});
+watch(composeOpen, (open) => { if (open) searchContacts(''); });
 
 async function refreshAll() {
   await loadAccounts();
-  await Promise.all([loadFolders(), loadContacts(), loadMessages()]);
+  void loadFolders();
+  void loadContacts();
+  await loadMessages();
   await applyRouteMessageSelection();
 }
 
@@ -1562,34 +1484,81 @@ async function loadFolders() {
 }
 
 async function loadContacts() {
+  contactResolveController?.abort();
+  const controller = new AbortController();
+  contactResolveController = controller;
+  const owner = auth.token;
   try {
-    const pageSize = 1000;
     const loaded: Contact[] = [];
-    let page = 1;
-    let total = 0;
-    do {
-      const data = await contactApi.list({ page, pageSize });
+    const ambiguous = new Set<string>();
+    const keys = visibleContactKeys();
+    for (let offset = 0; offset < keys.length; offset += 256) {
+      const data = await contactApi.resolve(keys.slice(offset, offset + 256), controller.signal);
       loaded.push(...data.items);
-      total = data.total;
-      page += 1;
-    } while (loaded.length < total);
-    contacts.value = loaded;
+      data.ambiguousPrefixes.forEach(prefix => ambiguous.add(prefix));
+    }
+    if (controller.signal.aborted || owner !== auth.token) return;
+    contacts.value = [...new Map(loaded.map(contact => [contact.id, contact])).values()];
+    ambiguousContactPrefixes.value = ambiguous;
   } catch (error) {
+    if (isCanceledRequest(error) || owner !== auth.token) return;
     message.error(error instanceof Error ? error.message : '获取联系人失败');
   }
 }
 
+function visibleContactKeys(): string[] {
+  const values: string[] = [];
+  const add = (item: MailMessage) => {
+    if (item.from) values.push(item.from);
+    values.push(...item.to);
+  };
+  messages.value.forEach(add);
+  threads.value.forEach(item => { add(item.latestMessage); values.push(...item.participants); });
+  threadDetail.value?.messages.forEach(add);
+  if (detail.value) { add(detail.value); values.push(...detail.value.cc); }
+  if (composeOpen.value) values.push(...composeForm.to, ...composeForm.cc, ...composeForm.bcc);
+  return [...new Set(values.map(value => {
+    const address = parseContactAddress(value);
+    return normalizeContactKey(address.email || address.name);
+  }).filter(value => value && value !== '-' && value.length <= 254))].sort();
+}
+
+function searchContacts(keyword: string) {
+  clearTimeout(contactSearchTimer);
+  contactSearchController?.abort();
+  const controller = new AbortController();
+  contactSearchController = controller;
+  const owner = auth.token;
+  contactSearchLoading.value = true;
+  contactSearchTimer = setTimeout(() => {
+    void contactApi.list({ keyword, pageSize: 50 }, { signal: controller.signal })
+      .then(data => { if (!controller.signal.aborted && owner === auth.token) contactSuggestions.value = data.items; })
+      .catch(error => { if (!isCanceledRequest(error) && owner === auth.token) message.error('搜索联系人失败，请重试'); })
+      .finally(() => { if (contactSearchController === controller) contactSearchLoading.value = false; });
+  }, 200);
+}
+
 async function loadMessages() {
+  clearTimeout(searchTimer);
+  listRequestController?.abort();
+  countRequestController?.abort();
+  const generation = ++listGeneration;
+  const controller = new AbortController();
+  listRequestController = controller;
   loading.value = true;
+  totalKnown.value = false;
+  countError.value = '';
   try {
     if (!activeLocalFolderId.value && activeSystemFolder.value === 'drafts') {
       mailViewMode.value = 'messages';
       const data = await draftApi.list({
         page: page.value,
         pageSize: pageSize.value,
-      });
+      }, { signal: controller.signal });
+      if (listRequestController !== controller || controller.signal.aborted) return;
       messages.value = data.items.map(draftToListItem);
       total.value = data.total;
+      totalKnown.value = true;
       hasLoadedMessages.value = true;
       detail.value = null;
       threadDetail.value = null;
@@ -1598,40 +1567,8 @@ async function loadMessages() {
       selectedMessageSet.value = new Set();
       return;
     }
-    if (mailViewMode.value === 'threads') {
-      const data = await threadApi.list({
-        page: page.value,
-        pageSize: pageSize.value,
-        accountId: filters.accountId,
-        folderId: activeLocalFolderId.value || undefined,
-        systemFolder: activeLocalFolderId.value ? undefined : activeSystemFolder.value,
-        keyword: keywordQuery(),
-        from: fieldQuery('from'),
-        subject: fieldQuery('subject'),
-        body: fieldQuery('body'),
-        dateFrom: dateRange.value?.[0]?.format('YYYY-MM-DD'),
-        dateTo: dateRange.value?.[1]?.format('YYYY-MM-DD'),
-        hasAttachments: filters.hasAttachments || undefined,
-        isRead: filters.readState === 'all' ? undefined : filters.readState === 'read',
-        starred: filters.starred || undefined,
-      });
-      threads.value = data.items;
-      messages.value = [];
-      total.value = data.total;
-      hasLoadedMessages.value = true;
-      selectedMessageSet.value = new Set();
-      if (!threads.value.some((item) => item.id === selectedThreadId.value)) {
-        selectedThreadId.value = null;
-        threadDetail.value = null;
-        detail.value = null;
-        selectedMessageId.value = null;
-      }
-      if (!selectedThreadId.value && threads.value.length > 0) {
-        void openThread(threads.value[0].id);
-      }
-      return;
-    }
-    const data = await messageApi.list({
+    const kind = mailViewMode.value === 'threads' ? 'threads' : 'messages';
+    const params = {
       page: page.value,
       pageSize: pageSize.value,
       accountId: filters.accountId,
@@ -1646,25 +1583,64 @@ async function loadMessages() {
       hasAttachments: filters.hasAttachments || undefined,
       isRead: filters.readState === 'all' ? undefined : filters.readState === 'read',
       starred: filters.starred || undefined,
-    });
-    messages.value = data.items;
-    threads.value = [];
-    total.value = data.total;
-    hasLoadedMessages.value = true;
-    threadDetail.value = null;
-    selectedThreadId.value = null;
-    pruneSelectedMessages();
-    if (!messages.value.some((item) => item.id === selectedMessageId.value)) {
-      selectedMessageId.value = null;
-      detail.value = null;
-    }
-    if (!selectedMessageId.value && messages.value.length > 0) {
-      void openDetail(messages.value[0].id);
-    }
+      includeTotal: false,
+    };
+    const scope = auth.token;
+    const epoch = mailboxCacheEpoch();
+    const cursorScope = JSON.stringify({owner:scope,epoch,kind,params:{...params,page:undefined}});
+    const requestParams = {...params,cursor:kind==='messages' ? messageCursors.select(cursorScope,page.value) : undefined};
+    const cacheKey = JSON.stringify({kind,params:requestParams});
+    const cached = getMailboxCache<MessageListData | MailThreadListData>(scope, cacheKey);
+    if (cached) displayMailboxPage(kind,cached,false);
+    const data = kind === 'threads'
+      ? await threadApi.list(params,{signal:controller.signal})
+      : await messageApi.list(requestParams,{signal:controller.signal});
+    if (listRequestController !== controller || controller.signal.aborted) return;
+    if (kind==='messages') messageCursors.remember(cursorScope,params.page,(data as MessageListData).nextCursor);
+    setMailboxCache(scope,cacheKey,data,epoch);
+    displayMailboxPage(kind,data,true);
+    const countParams = {...params, page:undefined, pageSize:undefined, includeTotal:undefined};
+    retryExactTotal = () => {
+      countRequestController?.abort();
+      const countController = new AbortController();
+      countRequestController=countController;
+      countError.value='';
+      void (kind==='threads' ? threadApi.count(countParams,{signal:countController.signal}) : messageApi.count(countParams,{signal:countController.signal}))
+        .then((count) => {
+          if (generation !== listGeneration || countController.signal.aborted || scope !== auth.token) return;
+          total.value=count.total; totalKnown.value=true;
+          if (count.revision===data.revision) setMailboxCache(scope,cacheKey,{...data,total:count.total,totalPending:false},epoch);
+        })
+        .catch((error) => {
+          if (generation !== listGeneration || isCanceledRequest(error)) return;
+          countError.value='总数统计失败，可重试';
+        });
+    };
+    retryExactTotal();
   } catch (error) {
+    if (listRequestController !== controller || isCanceledRequest(error)) return;
     message.error(error instanceof Error ? error.message : '获取邮件失败');
   } finally {
-    loading.value = false;
+    if (listRequestController === controller) {
+      listRequestController = null;
+      loading.value = false;
+    }
+  }
+}
+
+function displayMailboxPage(kind: 'threads' | 'messages', data: MessageListData | MailThreadListData, openFirst: boolean) {
+  totalKnown.value=data.total !== null;
+  if (data.total !== null) total.value=data.total;
+  hasMore.value=Boolean(data.hasMore);
+  hasLoadedMessages.value=true;
+  if (kind==='threads') {
+    threads.value=(data as MailThreadListData).items; messages.value=[]; selectedMessageSet.value=new Set();
+    if (!threads.value.some(item=>item.id===selectedThreadId.value)) { selectedThreadId.value=null;threadDetail.value=null;detail.value=null;selectedMessageId.value=null; }
+    if(openFirst && !selectedThreadId.value && threads.value.length) void openThread(threads.value[0].id);
+  } else {
+    messages.value=(data as MessageListData).items; threads.value=[];threadDetail.value=null;selectedThreadId.value=null;pruneSelectedMessages();
+    if (!messages.value.some(item=>item.id===selectedMessageId.value)) { selectedMessageId.value=null;detail.value=null; }
+    if(openFirst && !selectedMessageId.value && messages.value.length) void openDetail(messages.value[0].id);
   }
 }
 
@@ -1690,6 +1666,7 @@ async function openDetail(id: string) {
       return;
     }
     detail.value = nextDetail;
+    if (messages.value.some(item=>item.id===id && !item.isRead)) clearMailboxCache();
     selectedThreadId.value = nextDetail.threadId;
     messages.value = messages.value.map((item) => (
       item.id === id ? { ...item, isRead: true } : item
@@ -1708,16 +1685,26 @@ async function openDetail(id: string) {
 }
 
 async function openThread(id: string) {
+  detailRequestController?.abort();
+  const controller = new AbortController();
+  detailRequestController = controller;
   selectedThreadId.value = id;
   selectedMessageId.value = null;
   detail.value = null;
+  threadDetail.value = null;
   detailLoading.value = true;
   try {
-    threadDetail.value = await threadApi.detail(id);
+    const result = await threadApi.detail(id, { signal: controller.signal });
+    if (controller.signal.aborted || detailRequestController !== controller || selectedThreadId.value !== id) return;
+    threadDetail.value = result;
   } catch (error) {
+    if (isCanceledRequest(error) || detailRequestController !== controller) return;
     message.error(error instanceof Error ? error.message : '获取会话详情失败');
   } finally {
-    detailLoading.value = false;
+    if (detailRequestController === controller) {
+      detailRequestController = null;
+      detailLoading.value = false;
+    }
   }
 }
 
@@ -3018,6 +3005,8 @@ async function deleteCurrentDraft() {
 }
 
 function resetCompose() {
+  composeCcExpanded.value = false;
+  composeBccExpanded.value = false;
   Object.assign(composeForm, {
     accountId: filters.accountId || '',
     to: [],
@@ -3517,6 +3506,13 @@ function deleteFolder(folder: MailFolder) {
 function onFilterChanged() {
   page.value = 1;
   void loadMessages();
+}
+
+function scheduleSearch() {
+  clearTimeout(searchTimer);
+  // 输入期间即取消旧搜索，避免旧结果闪回；回车和搜索按钮仍立即执行。
+  listRequestController?.abort();
+  searchTimer = setTimeout(onFilterChanged, 350);
 }
 
 function clearAdvancedFilters() {
@@ -4201,12 +4197,14 @@ function looksLikeEmail(value: string) {
 
 .filter-summary-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   min-width: 0;
   min-height: 24px;
 }
+
+.filter-search-status { grid-column: 3; grid-row: 1; }
 
 .advanced-filter-toggle {
   display: inline-flex;
@@ -4587,6 +4585,14 @@ function looksLikeEmail(value: string) {
   flex: none;
   margin: 12px 16px 16px;
   align-self: flex-end;
+}
+
+.mail-pending-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .mail-reader-pane {
@@ -5024,48 +5030,65 @@ function looksLikeEmail(value: string) {
   font-size: 42px;
 }
 
-.compose-modal {
+/* Modal 被传送到 body，外壳没有本组件作用域属性，必须用专属全局类定位。 */
+:global(.compose-modal) {
   max-width: calc(100vw - 32px);
 }
 
-.compose-modal :deep(.ant-modal-content) {
-  max-height: calc(100vh - 32px);
+:global(.compose-modal .ant-modal-content) {
+  height: min(860px, calc(100dvh - 32px));
+  max-height: calc(100dvh - 32px);
   display: flex;
   flex-direction: column;
+  padding: 0;
   border-radius: 12px;
   overflow: hidden;
 }
 
-.compose-modal :deep(.ant-modal-header) {
+:global(.compose-modal .ant-modal-header) {
   flex: none;
-  padding: 18px 24px 14px;
+  padding: 14px 20px;
   border-bottom: 1px solid var(--border-subtle);
   margin-bottom: 0;
   background: var(--surface-bg);
 }
 
-.compose-modal :deep(.ant-modal-title) {
+:global(.compose-modal .ant-modal-title) {
   color: var(--heading-color);
   font-size: 18px;
   font-weight: 800;
 }
 
-.compose-modal :deep(.ant-modal-body) {
-  max-height: calc(100vh - 116px);
+:global(.compose-modal .ant-modal-body) {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
   padding: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
-.compose-modal :deep(.ant-select-selection-overflow) {
+.compose-loading-shell,
+.compose-loading-shell :deep(.ant-spin-nested-loading),
+.compose-loading-shell :deep(.ant-spin-container) {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+}
+
+:global(.compose-modal .ant-select-selection-overflow) {
   align-items: center;
 }
 
 .compose-form {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
   min-width: 0;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
-  max-height: calc(100vh - 116px);
   gap: 0;
   padding: 0;
   overflow: hidden;
@@ -5076,41 +5099,94 @@ function looksLikeEmail(value: string) {
   min-width: 0;
 }
 
-.compose-form :deep(.ant-form-item-control),
-.compose-form :deep(.ant-form-item-control-input),
-.compose-form :deep(.ant-form-item-control-input-content),
-.compose-form :deep(.ant-select),
-.compose-form :deep(.ant-input),
-.compose-form :deep(.ant-input-affix-wrapper) {
+.compose-fields :deep(.ant-form-item-control),
+.compose-fields :deep(.ant-form-item-control-input),
+.compose-fields :deep(.ant-form-item-control-input-content),
+.compose-fields :deep(.ant-select),
+.compose-fields :deep(.ant-input),
+.compose-fields :deep(.ant-input-affix-wrapper) {
   min-width: 0;
   width: 100%;
 }
 
 .compose-fields {
   display: grid;
-  gap: 10px;
+  gap: 0;
+  min-height: 0;
+  max-height: min(38dvh, 260px);
+  overflow: auto;
   flex: none;
-  padding: 16px 24px 14px;
+  padding: 4px 20px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-bg);
 }
 
-.compose-address-grid {
+.compose-field-row :deep(.ant-form-item-row) {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: 56px minmax(0, 1fr);
+  align-items: start;
+}
+
+.compose-field-row :deep(.ant-form-item-label) {
+  padding: 0;
+  text-align: left;
+  line-height: 36px;
+}
+
+.compose-field-row :deep(.ant-form-item-label > label) {
+  height: 36px;
+  color: var(--muted-color);
+  font-size: 13px;
+}
+
+.compose-field-row :deep(.ant-form-item-control-input) {
+  min-height: 36px;
+}
+
+.compose-field-row :deep(.ant-select-selector),
+.compose-subject-row :deep(.ant-input) {
+  padding-left: 6px !important;
+  padding-right: 6px !important;
+}
+
+.compose-recipient-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
   min-width: 0;
 }
 
-.compose-address-grid :deep(.ant-form-item) {
-  margin-bottom: 0;
+.compose-recipient-row,
+.compose-fields > .compose-field-row:not(:last-child) {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.compose-recipient-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.compose-recipient-actions {
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: 36px;
+}
+
+.compose-recipient-row > .ant-btn {
+  margin-top: 6px;
+}
+
+.compose-subject-row :deep(.ant-input) {
+  font-weight: 600;
 }
 
 .compose-body-shell {
   display: grid;
+  flex: 1;
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr);
-  padding: 14px 24px;
+  padding: 10px 20px 12px;
   overflow: hidden;
 }
 
@@ -5147,9 +5223,10 @@ function looksLikeEmail(value: string) {
 
 .compose-attachment-zone {
   display: grid;
-  max-height: 22vh;
+  flex: none;
+  max-height: 15dvh;
   gap: 10px;
-  padding: 0 24px 12px;
+  padding: 0 20px 10px;
   overflow: auto;
 }
 
@@ -5161,7 +5238,7 @@ function looksLikeEmail(value: string) {
   gap: 10px;
   flex: none;
   margin: 0;
-  padding: 14px 24px;
+  padding: 12px 20px;
   border-top: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--surface-bg) 94%, transparent);
   backdrop-filter: blur(10px);
@@ -5190,149 +5267,9 @@ function looksLikeEmail(value: string) {
   box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 72%, transparent);
 }
 
-.compose-toolbar {
-  display: flex;
-  min-height: 48px;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 7px 9px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--surface-muted);
-  overflow-x: hidden;
-  row-gap: 7px;
-}
-
-.compose-toolbar-group {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 2px;
-}
-
-.compose-toolbar-selects {
-  gap: 6px;
-}
-
-.compose-font-select {
-  width: 126px;
-}
-
-.compose-size-select {
-  width: 72px;
-}
-
-.compose-font-select :deep(.ant-select-selector),
-.compose-size-select :deep(.ant-select-selector) {
-  height: 32px !important;
-}
-
-.compose-font-select :deep(.ant-select-selection-item),
-.compose-size-select :deep(.ant-select-selection-item) {
-  line-height: 30px !important;
-}
-
-.compose-file-input {
-  display: none;
-}
-
-.compose-tool-button {
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
-  color: var(--muted-color);
-}
-
-.compose-tool-button:hover,
-.compose-tool-button:focus {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.compose-toolbar-divider {
-  width: 1px;
-  height: 22px;
-  flex: 0 0 1px;
-  margin: 5px 2px 0;
-  background: var(--border-color);
-}
-
-.compose-color-button {
-  position: relative;
-}
-
-.compose-color-indicator {
-  position: absolute;
-  right: 8px;
-  bottom: 5px;
-  left: 8px;
-  height: 3px;
-  border: 1px solid rgba(31, 41, 55, 0.12);
-  border-radius: 999px;
-}
-
-.compose-bg-label {
-  font-size: 14px;
-  font-weight: 800;
-  line-height: 1;
-}
-
-.compose-color-panel {
-  display: grid;
-  gap: 8px;
-}
-
-.compose-color-clear {
-  height: 30px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--surface-bg);
-  color: var(--text-color);
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.compose-color-clear:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-tint);
-}
-
-.compose-color-grid {
-  display: grid;
-  grid-template-columns: repeat(5, 26px);
-  gap: 7px;
-  padding: 2px;
-}
-
-.compose-color-swatch {
-  display: inline-flex;
-  width: 26px;
-  height: 26px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--compose-swatch-color);
-  color: #ffffff;
-  cursor: pointer;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
-}
-
-.compose-color-swatch:hover,
-.compose-color-swatch.selected {
-  border-color: var(--accent);
-  outline: 2px solid var(--accent-soft);
-}
-
-.compose-color-swatch[style*="#ffffff"],
-.compose-color-swatch[style*="255, 255, 255"] {
-  color: var(--heading-color);
-}
 
 .compose-editor-body {
-  min-height: 280px;
+  min-height: 0;
   padding: 14px 16px;
   background: var(--surface-bg);
   color: var(--text-color);
@@ -5573,16 +5510,14 @@ function looksLikeEmail(value: string) {
     width: auto;
     text-align: left;
   }
+}
 
-  .compose-address-grid {
-    grid-template-columns: 1fr;
-  }
-
+@media (max-width: 640px) {
   .compose-fields,
   .compose-body-shell,
   .compose-footer {
-    padding-right: 16px;
-    padding-left: 16px;
+    padding-right: 12px;
+    padding-left: 12px;
   }
 
   .compose-footer {
@@ -5597,5 +5532,12 @@ function looksLikeEmail(value: string) {
   .compose-body-header small {
     text-align: left;
   }
+}
+
+@media (max-height: 540px) {
+  .compose-fields { max-height: 28dvh; }
+  .compose-body-header { display: none; }
+  .compose-body-shell { grid-template-rows: minmax(0, 1fr); padding-top: 6px; }
+  .compose-footer { padding-top: 8px; padding-bottom: 8px; }
 }
 </style>

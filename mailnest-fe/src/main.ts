@@ -1,5 +1,4 @@
 import { createApp } from 'vue';
-import Antd from 'ant-design-vue';
 import { createPinia } from 'pinia';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
@@ -10,4 +9,4 @@ import { router } from './router';
 
 dayjs.locale('zh-cn');
 
-createApp(App).use(createPinia()).use(router).use(Antd).mount('#app');
+createApp(App).use(createPinia()).use(router).mount('#app');

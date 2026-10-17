@@ -1,6 +1,18 @@
 .DS_Store
 .superpowers/
 output/
+.playwright-cli/
+.idea/
+
+# Local secrets and backups
+.env
+.env.*
+!.env.example
+backups/
+*.sql.gz
+*.sqlite
+*.sqlite3
+*.db
 
 # Local runtime data
 data/

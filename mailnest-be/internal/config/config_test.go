@@ -21,6 +21,9 @@ func TestLoadUsesDefaultsWhenFileMissing(t *testing.T) {
 	if cfg.App.DataDir != "./data" {
 		t.Fatalf("expected default data dir ./data, got %q", cfg.App.DataDir)
 	}
+	if cfg.Search.Engine != "database" || cfg.Search.Mode != "shadow" || cfg.Search.BatchSize != 25 {
+		t.Fatalf("旧配置不能自动启用全量索引: %+v", cfg.Search)
+	}
 }
 
 func TestLoadReadsRegistrationSwitchFromConfigFile(t *testing.T) {

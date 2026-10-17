@@ -1,6 +1,7 @@
 package mail
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
@@ -14,13 +15,22 @@ type ImportEMLResult struct {
 }
 
 func (s *Service) ImportEML(userID, accountID int64, folder string, raw []byte) (ImportEMLResult, error) {
+	return s.ImportEMLContext(context.Background(), userID, accountID, folder, raw)
+}
+
+func (s *Service) ImportEMLContext(ctx context.Context, userID, accountID int64, folder string, raw []byte) (ImportEMLResult, error) {
+	release, err := s.store.Workload().Background(ctx, "import")
+	if err != nil {
+		return ImportEMLResult{}, err
+	}
+	defer release()
 	if _, err := s.store.FindMailAccountByID(userID, accountID); err != nil {
 		return ImportEMLResult{}, err
 	}
 	folder = normalizeFolderName(folder)
 	fetched := fetchedMessageFromRaw(raw)
 	fetched.UID = importedMessageUID(fetched, raw)
-	inserted, err := s.saveMessageWithTrigger(userID, accountID, folder, fetched, "import")
+	inserted, err := s.saveMessageData(userID, accountID, folder, fetched, "import")
 	if err != nil {
 		return ImportEMLResult{}, err
 	}

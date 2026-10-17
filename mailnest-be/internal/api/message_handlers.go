@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"mailnest-be/internal/mail"
+	"mailnest-be/internal/modules/mail/paging"
 	"mailnest-be/internal/response"
 	"mailnest-be/internal/storage"
 )
@@ -23,12 +24,15 @@ func (a *App) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 
 	page := parsePositiveInt(r.URL.Query().Get("page"), 1)
-	pageSize := parsePositiveInt(r.URL.Query().Get("pageSize"), 20)
+	pageSize := min(parsePositiveInt(r.URL.Query().Get("pageSize"), 20), 100)
+	countOnly := strings.HasSuffix(r.URL.Path, "/count")
+	skipTotal := r.URL.Query().Get("includeTotal") == "false" && !countOnly
+	revision := a.store.MailReadVersionForUser(userID)
 	accountID, _ := strconv.ParseInt(r.URL.Query().Get("accountId"), 10, 64)
 	folderID, _ := strconv.ParseInt(r.URL.Query().Get("folderId"), 10, 64)
 	offset := (page - 1) * pageSize
 
-	messages, total, err := a.store.ListMailMessagesByQuery(storage.ListMailMessagesQuery{
+	query := storage.ListMailMessagesQuery{
 		UserID:         userID,
 		AccountID:      accountID,
 		FolderID:       folderID,
@@ -45,25 +49,80 @@ func (a *App) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		Limit:          pageSize,
 		Offset:         offset,
 		SummaryOnly:    true,
-	})
+		SkipTotal:      skipTotal, CountOnly: countOnly,
+	}
+	var messages []storage.MailMessage
+	cursorScope := paging.Scope(userID, r.URL.Query())
+	if token := r.URL.Query().Get("cursor"); token != "" && !countOnly {
+		if !skipTotal {
+			response.Error(w, http.StatusBadRequest, "游标分页请使用 includeTotal=false")
+			return
+		}
+		id, err := paging.Decode(token, cursorScope, a.cfg.App.JWTSecret)
+		if err != nil {
+			response.Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		query.BeforeID = id
+		query.Offset = 0
+	}
+	var total int
+	var err error
+	var pending bool
+	if countOnly && r.URL.Query().Get("deferred") == "true" {
+		total, pending, err = a.store.DeferredMessageCount(r.Context(), query)
+	} else {
+		messages, total, err = a.store.ListMailMessagesByQueryContext(r.Context(), query)
+	}
 	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		log.Printf("邮件列表查询失败 user_id=%d duration=%s search_mode=%s error=%v", userID, time.Since(started), a.store.MailSearchMode(), err)
 		response.Error(w, http.StatusInternalServerError, "获取邮件列表失败")
 		return
 	}
 	queryDuration := time.Since(started)
+	if countOnly {
+		if pending {
+			response.JSON(w, http.StatusAccepted, true, "正在后台统计", map[string]any{"total": nil, "totalPending": true, "revision": revision})
+			return
+		}
+		response.OK(w, "统计完成", map[string]any{"total": total, "revision": revision})
+		return
+	}
+	hasMore := total > offset+len(messages)
+	if skipTotal {
+		hasMore = len(messages) > pageSize
+		if hasMore {
+			messages = messages[:pageSize]
+		}
+	}
+	var totalValue any = total
+	if skipTotal {
+		totalValue = nil
+	}
 
 	items := make([]map[string]any, 0, len(messages))
 	for _, message := range messages {
 		items = append(items, messageListPayload(message))
 	}
 
+	nextCursor := ""
+	if hasMore && len(messages) > 0 {
+		nextCursor = paging.Encode(messages[len(messages)-1].ID, cursorScope, a.cfg.App.JWTSecret)
+	}
 	response.OK(w, "获取成功", map[string]any{
-		"items":    items,
-		"page":     page,
-		"pageSize": pageSize,
-		"total":    total,
+		"items":        items,
+		"nextCursor":   nextCursor,
+		"page":         page,
+		"pageSize":     pageSize,
+		"total":        totalValue,
+		"totalPending": skipTotal,
+		"hasMore":      hasMore,
+		"revision":     revision,
 	})
-	logSlowAPI("messages.list", started, "query="+queryDuration.String(), "items="+strconv.Itoa(len(items)), "total="+strconv.Itoa(total))
+	logSlowAPI("messages.list", started, "query="+queryDuration.String(), "search_mode="+a.store.MailSearchMode(), "items="+strconv.Itoa(len(items)), "total="+strconv.Itoa(total))
 }
 
 func (a *App) handleMessageBatchAction(w http.ResponseWriter, r *http.Request) {

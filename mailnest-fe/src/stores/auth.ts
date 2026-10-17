@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import { authApi, tokenStorageKey, type CaptchaPayload, type User } from '../api/client';
+import { clearMailboxCache } from '../utils/mailboxCache';
 
 interface AuthState {
   token: string;
@@ -16,6 +17,7 @@ export const useAuthStore = defineStore('auth', {
   },
   actions: {
     setSession(token: string, user: User) {
+      clearMailboxCache();
       this.token = token;
       this.user = user;
       localStorage.setItem(tokenStorageKey, token);
@@ -38,6 +40,7 @@ export const useAuthStore = defineStore('auth', {
       this.user = await authApi.me();
     },
     async logout() {
+      clearMailboxCache();
       if (this.token) {
         await authApi.logout().catch(() => undefined);
       }

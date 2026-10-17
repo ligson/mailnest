@@ -4,12 +4,49 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	netmail "net/mail"
 	"strconv"
 	"strings"
 
 	"mailnest-be/internal/response"
 	"mailnest-be/internal/storage"
 )
+
+func (a *App) handleResolveContacts(w http.ResponseWriter, r *http.Request) {
+	userID, _ := currentUserID(r)
+	var req struct {
+		Addresses []string `json:"addresses"`
+	}
+	if err := decodeJSON(r, &req); err != nil || len(req.Addresses) > 256 {
+		response.Error(w, http.StatusBadRequest, "每次最多解析 256 个联系人地址")
+		return
+	}
+	keys := []string{}
+	for _, raw := range req.Addresses {
+		raw = strings.TrimSpace(raw)
+		if address, err := netmail.ParseAddress(raw); err == nil {
+			raw = address.Address
+		}
+		if len(raw) > 254 {
+			response.Error(w, http.StatusBadRequest, "联系人地址过长")
+			return
+		}
+		keys = append(keys, raw)
+	}
+	result, err := a.store.ResolveContacts(r.Context(), userID, keys)
+	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "解析联系人失败")
+		return
+	}
+	items := make([]map[string]any, 0, len(result.Items))
+	for _, contact := range result.Items {
+		items = append(items, contactPayload(contact))
+	}
+	response.OK(w, "", map[string]any{"items": items, "ambiguousPrefixes": result.AmbiguousPrefixes, "revision": a.store.MailReadVersion()})
+}
 
 func (a *App) handleListContacts(w http.ResponseWriter, r *http.Request) {
 	userID, ok := currentUserID(r)

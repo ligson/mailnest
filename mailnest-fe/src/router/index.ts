@@ -1,16 +1,17 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
-import LoginView from '../views/LoginView.vue';
-import RegisterView from '../views/RegisterView.vue';
-import DashboardView from '../views/DashboardView.vue';
-import AttachmentsView from '../views/AttachmentsView.vue';
-import MailAccountsView from '../views/MailAccountsView.vue';
-import MailRulesView from '../views/MailRulesView.vue';
-import SendLogsView from '../views/SendLogsView.vue';
-import ContactsView from '../views/ContactsView.vue';
-import ProfileSettingsView from '../views/ProfileSettingsView.vue';
-import MicrosoftOAuthCallbackView from '../views/MicrosoftOAuthCallbackView.vue';
-import AdminUsersView from '../views/AdminUsersView.vue';
+// 按路由加载业务页面，打开邮件时不下载账号、规则、管理等页面实现。
+const LoginView = () => import('../views/LoginView.vue');
+const RegisterView = () => import('../views/RegisterView.vue');
+const DashboardView = () => import('../views/DashboardView.vue');
+const AttachmentsView = () => import('../views/AttachmentsView.vue');
+const MailAccountsView = () => import('../views/MailAccountsView.vue');
+const MailRulesView = () => import('../views/MailRulesView.vue');
+const SendLogsView = () => import('../views/SendLogsView.vue');
+const ContactsView = () => import('../views/ContactsView.vue');
+const ProfileSettingsView = () => import('../views/ProfileSettingsView.vue');
+const MicrosoftOAuthCallbackView = () => import('../views/MicrosoftOAuthCallbackView.vue');
+const AdminUsersView = () => import('../views/AdminUsersView.vue');
 
 export const router = createRouter({
   history: createWebHistory(),
