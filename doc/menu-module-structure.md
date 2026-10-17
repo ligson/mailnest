@@ -117,3 +117,5 @@ mailnest-be/internal/
 ### 当前迁移状态
 
 2026-10-17：本次仅确立目标目录和协作规则；现有前端 views、后端 api/storage/mail 的菜单业务实现尚未按本规范整体搬迁。后续每批迁移在此追加实际完成范围与遗留事项。
+
+2026-10-17 联系人分组：前端联系人页面迁至 modules/contacts/pages，分组 API、类型和组件位于 modules/contacts；写信地址合并在 modules/mail/compose。后端分组入口位于 internal/modules/contacts，由 api 装配鉴权；集中 GORM 模型、迁移和存储留在 internal/storage。既有联系人 CRUD/名称解析 HTTP 入口暂留 internal/api，复用既有 DTO 与解析逻辑，不复制两套实现；URL 与鉴权保持兼容。

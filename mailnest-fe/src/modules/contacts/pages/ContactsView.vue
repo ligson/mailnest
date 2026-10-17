@@ -6,13 +6,17 @@
           <h2 class="page-title">联系人</h2>
           <p class="page-subtitle">维护常用联系人，邮件列表和详情会优先显示昵称或姓名。</p>
         </div>
+        <a-space wrap>
+        <a-button @click="groupsOpen = true"><template #icon><team-outlined /></template>管理分组</a-button>
         <a-button type="primary" @click="openCreate">
           <template #icon><plus-outlined /></template>
           新增联系人
         </a-button>
+        </a-space>
       </div>
 
       <div class="contacts-toolbar">
+        <ContactGroupSelect v-model:value="groupId" class="contact-group-filter" :refresh-key="groupRevision" @change="filterChanged" />
         <a-input-search
           v-model:value="keyword"
           allow-clear
@@ -22,12 +26,22 @@
         />
       </div>
 
+      <div v-if="selectedIds.length" class="contacts-selection">
+        <span>已选 {{ selectedIds.length }} 人</span>
+        <a-button size="small" :loading="batchBusy" @click="batchOpen = true"><template #icon><usergroup-add-outlined /></template>加入分组</a-button>
+        <a-button v-if="groupId" size="small" :disabled="batchBusy" @click="removeFromGroup">移出当前分组</a-button>
+        <a-button type="text" size="small" @click="selectedIds = []">取消选择</a-button>
+      </div>
+      <a-alert v-if="batchError" :message="batchError" type="error" show-icon closable class="contacts-error" @close="batchError = ''" />
+
       <a-table
         row-key="id"
         :columns="columns"
         :data-source="contacts"
         :loading="loading"
         :pagination="pagination"
+        :row-selection="rowSelection"
+        :scroll="{ x: 1050 }"
         @change="onTableChanged"
       >
         <template #bodyCell="{ column, record }">
@@ -93,19 +107,42 @@
         </a-form-item>
       </a-form>
     </a-modal>
+    <ContactGroupsManager v-model:open="groupsOpen" @changed="groupsChanged" />
+    <a-modal v-model:open="batchOpen" title="加入联系人分组" ok-text="加入分组" cancel-text="取消"
+      :confirm-loading="batchBusy" :ok-button-props="{ disabled: !batchGroupId }" @ok="addToGroup">
+      <a-alert v-if="batchError" :message="batchError" type="error" show-icon class="contacts-error" />
+      <ContactGroupSelect v-model:value="batchGroupId" placeholder="选择目标分组" :refresh-key="groupRevision" style="width: 100%" />
+    </a-modal>
   </AppLayout>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons-vue';
+import { DeleteOutlined, EditOutlined, PlusOutlined, TeamOutlined, UsergroupAddOutlined } from '@ant-design/icons-vue';
 import { Modal, message, type FormInstance } from 'ant-design-vue';
 import type { TablePaginationConfig } from 'ant-design-vue';
 import { useRoute } from 'vue-router';
-import { contactApi, type Contact, type ContactPayload } from '../api/client';
-import AppLayout from '../components/AppLayout.vue';
+import { contactApi, isCanceledRequest, type Contact, type ContactPayload } from '../../../api/client';
+import AppLayout from '../../../components/AppLayout.vue';
+import { contactGroupApi } from '../api';
+import ContactGroupsManager from '../components/ContactGroupsManager.vue';
+import ContactGroupSelect from '../components/ContactGroupSelect.vue';
+import { onBeforeUnmount } from 'vue';
+import type { Key } from 'ant-design-vue/es/_util/type';
 
 const route = useRoute();
+const groupId = ref<string>();
+const groupRevision = ref(0);
+const groupsOpen = ref(false);
+const selectedIds = ref<string[]>([]);
+const batchOpen = ref(false);
+const batchGroupId = ref<string>();
+const batchBusy = ref(false);
+const batchError = ref('');
+const rowSelection = computed(() => ({ selectedRowKeys: selectedIds.value, onChange: (keys: Key[]) => { selectedIds.value = keys.map(String); } }));
+let listController: AbortController | undefined;
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+onBeforeUnmount(() => { listController?.abort(); clearTimeout(searchTimer); });
 const contacts = ref<Contact[]>([]);
 const loading = ref(false);
 const saving = ref(false);
@@ -162,28 +199,72 @@ watch(() => route.query.email, () => {
 });
 
 async function loadContacts() {
+  listController?.abort(); const current = new AbortController(); listController = current;
   loading.value = true;
   try {
     const data = await contactApi.list({
       keyword: keyword.value.trim() || undefined,
       page: page.value,
       pageSize: pageSize.value,
-    });
+      groupId: groupId.value,
+    }, { signal: current.signal });
+    if (current.signal.aborted) return;
     contacts.value = data.items;
     total.value = data.total;
   } catch (error) {
-    message.error(error instanceof Error ? error.message : '获取联系人失败');
+    if (!isCanceledRequest(error)) message.error(error instanceof Error ? error.message : '获取联系人失败');
   } finally {
-    loading.value = false;
+    if (listController === current) loading.value = false;
   }
 }
 
 function onKeywordChanged() {
+  clearTimeout(searchTimer); listController?.abort(); selectedIds.value = [];
   page.value = 1;
-  void loadContacts();
+  searchTimer = setTimeout(() => void loadContacts(), 250);
+}
+
+function filterChanged() {
+  clearTimeout(searchTimer); selectedIds.value = []; page.value = 1; void loadContacts();
+}
+
+async function groupsChanged() {
+  groupRevision.value++;
+  if (groupId.value) {
+    try { await contactGroupApi.detail(groupId.value); }
+    catch { groupId.value = undefined; }
+  }
+  filterChanged();
+}
+
+async function addToGroup() {
+  if (!batchGroupId.value || batchBusy.value) return;
+  batchBusy.value = true; batchError.value = '';
+  try {
+    await contactGroupApi.changeMembers(batchGroupId.value, selectedIds.value, 'add');
+    batchOpen.value = false; selectedIds.value = []; groupRevision.value++;
+    message.success('已加入分组'); await loadContacts();
+  } catch (e) { batchError.value = e instanceof Error ? e.message : '加入分组失败'; }
+  finally { batchBusy.value = false; }
+}
+
+function removeFromGroup() {
+  if (!groupId.value || batchBusy.value) return;
+  const id = groupId.value; const ids = [...selectedIds.value];
+  Modal.confirm({ title: `将这 ${ids.length} 位联系人移出当前分组？`, content: '联系人及其在其他分组中的关系保留。', okText: '移出分组', cancelText: '取消',
+    async onOk() {
+      batchBusy.value = true; batchError.value = '';
+      try {
+        await contactGroupApi.changeMembers(id, ids, 'remove');
+        selectedIds.value = []; groupRevision.value++; await loadContacts(); message.success('已移出分组');
+      } catch (e) { batchError.value = e instanceof Error ? e.message : '移出失败'; throw e; }
+      finally { batchBusy.value = false; }
+    },
+  });
 }
 
 function onTableChanged(nextPagination: TablePaginationConfig) {
+  selectedIds.value = [];
   page.value = nextPagination.current || 1;
   pageSize.value = nextPagination.pageSize || 20;
   void loadContacts();
@@ -221,6 +302,7 @@ async function openContactFromRoute() {
   }
   const displayName = queryValue(route.query.displayName).trim();
   try {
+    groupId.value = undefined;
     keyword.value = email;
     page.value = 1;
     const data = await contactApi.list({ keyword: email, page: 1, pageSize: 20 });
@@ -319,9 +401,16 @@ function queryValue(value: unknown) {
 }
 
 .contacts-toolbar {
-  max-width: 520px;
+  display: flex;
+  gap: 12px;
+  max-width: 780px;
   margin-bottom: 16px;
 }
+
+.contact-group-filter { width: 220px; flex: none; }
+.contacts-toolbar > .ant-input-search { min-width: 0; flex: 1; }
+.contacts-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+.contacts-error { margin-bottom: 12px; }
 
 .contact-name-cell {
   display: grid;
@@ -349,6 +438,12 @@ function queryValue(value: unknown) {
 }
 
 @media (max-width: 720px) {
+  .contacts-page { padding: 14px; }
+  .contacts-page .page-toolbar { flex-direction: column; align-items: stretch; gap: 12px; }
+  .contacts-page .page-title { white-space: nowrap; }
+  .contacts-page :deep(.ant-table-cell-fix-right) { position: static !important; }
+  .contacts-toolbar { flex-direction: column; }
+  .contact-group-filter { width: 100%; }
   .contact-form-grid {
     grid-template-columns: 1fr;
   }

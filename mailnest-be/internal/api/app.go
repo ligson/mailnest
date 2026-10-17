@@ -9,6 +9,7 @@ import (
 
 	"mailnest-be/internal/config"
 	"mailnest-be/internal/mail"
+	contactmodule "mailnest-be/internal/modules/contacts"
 	"mailnest-be/internal/oauth"
 	"mailnest-be/internal/response"
 	"mailnest-be/internal/searchindex"
@@ -79,6 +80,7 @@ func NewAppWithDependencies(cfg config.Config, fetcher mail.Fetcher, exchanger o
 
 func (a *App) Routes() http.Handler {
 	mux := http.NewServeMux()
+	contactmodule.Register(mux, a.store, a.authMiddleware, currentUserID)
 	mux.HandleFunc("GET /api/v1/health", a.handleHealth)
 	mux.Handle("POST /api/v1/contacts/resolve", a.authMiddleware(http.HandlerFunc(a.handleResolveContacts)))
 	mux.Handle("GET /api/v1/messages/count", a.authMiddleware(http.HandlerFunc(a.handleListMessages)))

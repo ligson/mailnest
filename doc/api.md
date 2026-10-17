@@ -1967,3 +1967,20 @@ JSON 请求：
 - 当 `success=false` 时，优先显示 `message`。
 - 当 HTTP 状态码为 `401` 时，跳转登录页。
 - 前端业务页面不应直接依赖 HTTP 状态码判断业务数据结构，应读取 envelope 中的 `data`。
+
+## 14. 联系人分组
+
+所有接口要求登录，ID 使用十进制字符串，复用统一 envelope；归属不符按 404 处理，不返回其他用户信息。
+
+| 接口 | 用途 |
+| --- | --- |
+| GET /api/v1/contact-groups | keyword、page、pageSize 分页搜索，返回 items/total/page/pageSize，pageSize 最大 100 |
+| POST /api/v1/contact-groups | 创建分组：name、description、contactIds |
+| GET /api/v1/contact-groups/{id} | 返回 group 和 members（地址摘要），供成员编辑 |
+| PUT /api/v1/contact-groups/{id} | 完整更新名称、备注和成员，带当前 revision；冲突返回 409，避免覆盖其他标签页变更 |
+| DELETE /api/v1/contact-groups/{id} | 删除分组及关系，不删除联系人 |
+| POST /api/v1/contact-groups/{id}/members | action 为 add/remove，contactIds 批量加入或移出，事务校验归属 |
+| POST /api/v1/contact-groups/resolve | groupIds 展开为去重的 items 地址摘要，用于收件人/抄送/密送 |
+| GET /api/v1/contacts?groupId={id} | 与原 keyword/page/pageSize 筛选组合使用 |
+
+分组字段包括 id/name/description/memberCount/revision/createdAt/updatedAt。地址摘要包括 id/email/name/nickname/displayName。name 最长 80 字符，备注最长 500 字符；单次成员更新最多 10000 个 ID，单次展开最多 100 个组，超限明确拒绝、不截断结果。重叠成员只返回一次，空组返回空数组。详细行为与升级约束见 contact-groups.md。

@@ -1,11 +1,14 @@
 <template>
-  <a-layout class="app-shell">
+  <a-layout class="app-shell" :class="{ 'mobile-menu-open': isMobile && mobileMenuOpen }" @keydown.esc="mobileMenuOpen = false">
+    <button v-if="isMobile && mobileMenuOpen" class="shell-menu-backdrop" aria-label="关闭菜单" @click="mobileMenuOpen = false" />
     <a-layout-sider
       class="shell-sider"
       :width="220"
       :collapsed-width="64"
       :collapsed="collapsed"
       :trigger="null"
+      breakpoint="md"
+      @breakpoint="onMenuBreakpoint"
     >
       <div class="shell-brand" :class="{ collapsed }">
         <div class="shell-logo">
@@ -150,7 +153,11 @@ defineProps<{
 const router = useRouter();
 const auth = useAuthStore();
 const collapsedStorageKey = 'mailnest.sidebar.collapsed';
-const collapsed = ref(localStorage.getItem(collapsedStorageKey) === 'true');
+const desktopCollapsed = ref(localStorage.getItem(collapsedStorageKey) === 'true');
+const isMobile = ref(window.matchMedia('(max-width: 767px)').matches);
+const mobileMenuOpen = ref(false);
+// 手机使用图标栏，展开时覆盖内容，不改变桌面的菜单偏好。
+const collapsed = computed(() => isMobile.value ? !mobileMenuOpen.value : desktopCollapsed.value);
 const passwordModalOpen = ref(false);
 const changingPassword = ref(false);
 const passwordFormRef = ref<FormInstance>();
@@ -179,15 +186,22 @@ const passwordRules = {
   ],
 };
 
-watch(collapsed, (value) => {
+watch(desktopCollapsed, (value) => {
   localStorage.setItem(collapsedStorageKey, String(value));
 });
 
 function toggleCollapsed() {
-  collapsed.value = !collapsed.value;
+  if (isMobile.value) mobileMenuOpen.value = !mobileMenuOpen.value;
+  else desktopCollapsed.value = !desktopCollapsed.value;
+}
+
+function onMenuBreakpoint(broken: boolean) {
+  isMobile.value = broken;
+  mobileMenuOpen.value = false;
 }
 
 async function onMenuClick(info: MenuInfo) {
+  mobileMenuOpen.value = false;
   await router.push(String(info.key));
 }
 

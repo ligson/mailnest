@@ -8,7 +8,7 @@ import (
 
 func (s *Store) migrateGORM() error {
 	if s.db.dialect == dialectMySQL && s.db.gormDB.Migrator().HasTable(&userModel{}) {
-		if err := s.db.gormDB.AutoMigrate(&mailDraftModel{}, &mailThreadModel{}, &mailRuleLogModel{}, &mailSendLogModel{}, &mailServerDeleteLogModel{}, &mailSearchTaskModel{}); err != nil {
+		if err := s.db.gormDB.AutoMigrate(&mailDraftModel{}, &mailThreadModel{}, &mailRuleLogModel{}, &mailSendLogModel{}, &mailServerDeleteLogModel{}, &mailSearchTaskModel{}, &ContactGroup{}, &contactGroupMember{}); err != nil {
 			return fmt.Errorf("gorm automigrate mysql incremental tables: %w", err)
 		}
 		return s.createSupplementalIndexes()
@@ -20,6 +20,8 @@ func (s *Store) migrateGORM() error {
 		&mailMessageModel{},
 		&mailThreadModel{},
 		&contactModel{},
+		&ContactGroup{},
+		&contactGroupMember{},
 		&mailRuleModel{},
 		&mailRuleConditionModel{},
 		&mailRuleLogModel{},
@@ -48,6 +50,8 @@ func (s *Store) migrateExistingSQLite() error {
 		{table: "mail_messages", model: &mailMessageModel{}},
 		{table: "mail_threads", model: &mailThreadModel{}},
 		{table: "contacts", model: &contactModel{}},
+		{table: "contact_groups", model: &ContactGroup{}},
+		{table: "contact_group_members", model: &contactGroupMember{}},
 		{table: "mail_rules", model: &mailRuleModel{}},
 		{table: "mail_rule_conditions", model: &mailRuleConditionModel{}},
 		{table: "mail_rule_logs", model: &mailRuleLogModel{}},

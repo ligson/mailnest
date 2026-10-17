@@ -8,7 +8,7 @@ const AttachmentsView = () => import('../views/AttachmentsView.vue');
 const MailAccountsView = () => import('../views/MailAccountsView.vue');
 const MailRulesView = () => import('../views/MailRulesView.vue');
 const SendLogsView = () => import('../views/SendLogsView.vue');
-const ContactsView = () => import('../views/ContactsView.vue');
+const ContactsView = () => import('../modules/contacts/pages/ContactsView.vue');
 const ProfileSettingsView = () => import('../views/ProfileSettingsView.vue');
 const MicrosoftOAuthCallbackView = () => import('../views/MicrosoftOAuthCallbackView.vue');
 const AdminUsersView = () => import('../views/AdminUsersView.vue');

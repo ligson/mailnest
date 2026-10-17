@@ -707,7 +707,8 @@
                     :token-separators="[',', ';', '，', '；']"
                   />
                 </a-form-item>
-                <div v-if="!composeCcVisible || !composeBccVisible" class="compose-recipient-actions">
+                <div class="compose-recipient-actions">
+                  <a-tooltip title="从联系人分组添加收件人"><a-button type="text" size="small" aria-label="从分组添加收件人" @click="openRecipientGroups('to')"><template #icon><team-outlined /></template></a-button></a-tooltip>
                   <a-button v-if="!composeCcVisible" type="link" size="small" aria-label="添加抄送" :aria-expanded="composeCcVisible" @click="composeCcExpanded = true">抄送</a-button>
                   <a-button v-if="!composeBccVisible" type="link" size="small" aria-label="添加密送" :aria-expanded="composeBccVisible" @click="composeBccExpanded = true">密送</a-button>
                 </div>
@@ -727,9 +728,12 @@
                     :token-separators="[',', ';', '，', '；']"
                   />
                 </a-form-item>
+                <div class="compose-recipient-actions">
+                <a-tooltip title="从联系人分组添加抄送"><a-button type="text" size="small" aria-label="从分组添加抄送" @click="openRecipientGroups('cc')"><template #icon><team-outlined /></template></a-button></a-tooltip>
                 <a-tooltip v-if="!composeForm.cc.length" title="收起抄送">
                   <a-button type="text" size="small" aria-label="收起抄送" @click="composeCcExpanded = false"><template #icon><up-outlined /></template></a-button>
                 </a-tooltip>
+                </div>
               </div>
               <div v-if="composeBccVisible" class="compose-recipient-row">
                 <a-form-item label="密送" html-for="compose-bcc" class="compose-field-row compose-recipient-field">
@@ -746,9 +750,12 @@
                     :token-separators="[',', ';', '，', '；']"
                   />
                 </a-form-item>
+                <div class="compose-recipient-actions">
+                <a-tooltip title="从联系人分组添加密送"><a-button type="text" size="small" aria-label="从分组添加密送" @click="openRecipientGroups('bcc')"><template #icon><team-outlined /></template></a-button></a-tooltip>
                 <a-tooltip v-if="!composeForm.bcc.length" title="收起密送">
                   <a-button type="text" size="small" aria-label="收起密送" @click="composeBccExpanded = false"><template #icon><up-outlined /></template></a-button>
                 </a-tooltip>
+                </div>
               </div>
               <a-form-item label="主题" html-for="compose-subject" class="compose-field-row compose-subject-row">
                 <a-input id="compose-subject" v-model:value="composeForm.subject" :bordered="false" placeholder="邮件主题" />
@@ -861,6 +868,7 @@
         </a-spin>
         </div>
       </a-modal>
+      <ContactGroupPicker v-if="recipientGroupOpen" v-model:open="recipientGroupOpen" :title="recipientGroupTitle" confirm-text="添加到地址栏" @selected="addRecipientGroups" />
       <a-drawer v-model:open="ruleLogOpen" width="620" title="规则记录">
         <a-spin :spinning="ruleLogLoading">
           <a-empty v-if="ruleLogs.length === 0" description="暂无规则命中记录" />
@@ -913,6 +921,7 @@ import {
   StarOutlined,
   UploadOutlined,
   UpOutlined,
+  TeamOutlined,
 } from '@ant-design/icons-vue';
 import { Modal, message } from 'ant-design-vue';
 import type { Dayjs } from 'dayjs';
@@ -951,8 +960,25 @@ import { useAuthStore } from '../stores/auth';
 import AppLayout from '../components/AppLayout.vue';
 import MailSearchStatus from '../components/MailSearchStatus.vue';
 import { MailCursorHistory } from '../modules/mail/paging';
+import { mergeGroupRecipients } from '../modules/mail/compose/groupRecipients';
+import type { GroupMember } from '../modules/contacts/types';
 
 const ComposeToolbar = defineAsyncComponent(() => import('../modules/mail/compose/ComposeToolbar.vue'));
+const ContactGroupPicker = defineAsyncComponent(() => import('../modules/contacts/components/ContactGroupPicker.vue'));
+const recipientGroupOpen = ref(false);
+const recipientGroupTarget = ref<'to' | 'cc' | 'bcc'>('to');
+const recipientGroupTitle = computed(() => '从分组添加' + ({ to: '收件人', cc: '抄送', bcc: '密送' }[recipientGroupTarget.value]));
+function openRecipientGroups(target: 'to' | 'cc' | 'bcc') {
+  recipientGroupTarget.value = target; recipientGroupOpen.value = true;
+}
+function addRecipientGroups(members: GroupMember[]) {
+  if (!composeOpen.value) return;
+  const key = recipientGroupTarget.value;
+  const before = composeForm[key].length;
+  composeForm[key] = mergeGroupRecipients(composeForm[key], members);
+  const added = composeForm[key].length - before;
+  if (added) message.success(`已添加 ${added} 位联系人`); else message.info('所选联系人已在当前地址栏中');
+}
 
 type SystemFolderKey = 'inbox' | 'sent' | 'drafts' | 'all' | 'starred' | 'spam' | 'trash' | 'attachments';
 type ResizePane = 'folders' | 'list';
@@ -1448,7 +1474,7 @@ watch(() => JSON.stringify(visibleContactKeys()), () => {
   contactResolveController?.abort();
   contactResolveTimer = setTimeout(() => { void loadContacts(); }, 100);
 });
-watch(composeOpen, (open) => { if (open) searchContacts(''); });
+watch(composeOpen, (open) => { if (open) searchContacts(''); else recipientGroupOpen.value = false; });
 
 async function refreshAll() {
   await loadAccounts();

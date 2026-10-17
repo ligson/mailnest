@@ -1,10 +1,14 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func (s *Store) CreateContact(params CreateContactParams) (Contact, error) {
@@ -72,6 +76,18 @@ func (s *Store) UpsertContactSeen(params CreateContactParams) (Contact, error) {
 func (s *Store) ListContacts(query ListContactsQuery) ([]Contact, int, error) {
 	where := "WHERE user_id = ?"
 	args := []any{query.UserID}
+	if query.GroupID > 0 {
+		// 不可仅按成员表 ID 筛选，必须同时验证分组和联系人的用户归属。
+		var count int64
+		if err := s.db.gormDB.Model(&ContactGroup{}).Where("user_id=? AND id=?", query.UserID, query.GroupID).Count(&count).Error; err != nil {
+			return nil, 0, err
+		}
+		if count == 0 {
+			return nil, 0, ErrNotFound
+		}
+		where += " AND EXISTS (SELECT 1 FROM contact_group_members gm WHERE gm.user_id=contacts.user_id AND gm.contact_id=contacts.id AND gm.group_id=?)"
+		args = append(args, query.GroupID)
+	}
 	if query.Keyword = strings.TrimSpace(query.Keyword); query.Keyword != "" {
 		like := "%" + query.Keyword + "%"
 		where += ` AND (
@@ -180,18 +196,21 @@ func (s *Store) UpdateContact(contact Contact) (Contact, error) {
 }
 
 func (s *Store) DeleteContact(userID, id int64) error {
-	result, err := s.db.Exec(`DELETE FROM contacts WHERE user_id = ? AND id = ?`, userID, id)
-	if err != nil {
-		return err
+	err := s.db.gormDB.WithContext(context.Background()).Transaction(func(tx *gorm.DB) error {
+		var contact contactModel
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id=? AND id=?", userID, id).First(&contact).Error; err != nil {
+			return groupNotFound(err)
+		}
+		if err := tx.Where("user_id=? AND contact_id=?", userID, id).Delete(&contactGroupMember{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("user_id=? AND id=?", userID, id).Delete(&contactModel{}).Error
+	})
+	// GORM 写入不经过旧 SQL 包装层，成功提交后显式失效该用户的名称解析缓存。
+	if err == nil {
+		s.db.cacheVersions.bump(cacheMutation{domain: "contacts", userID: userID})
 	}
-	count, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if count == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return err
 }
 
 func scanContact(scanner interface {

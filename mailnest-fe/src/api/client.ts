@@ -655,7 +655,7 @@ apiClient.interceptors.request.use((config) => {
 });
 apiClient.interceptors.response.use((response) => {
   const method=(response.config.method || 'get').toLowerCase();
-  if (!['get','head','options'].includes(method) && response.config.url !== '/contacts/resolve' && response.data?.success) clearMailboxCache();
+  if (!['get','head','options'].includes(method) && !['/contacts/resolve', '/contact-groups/resolve'].includes(response.config.url || '') && response.data?.success) clearMailboxCache();
   return response;
 }, (error) => {
   if (error.response?.status === 401) clearMailboxCache();
@@ -1101,7 +1101,7 @@ export const contactApi = {
   resolve(addresses: string[],signal?:AbortSignal) {
     return requestEnvelope<{items:Contact[];ambiguousPrefixes:string[];revision:string}>(apiClient.post('/contacts/resolve',{addresses},{signal}));
   },
-  list(params?: { keyword?: string; page?: number; pageSize?: number }, options?: { signal?: AbortSignal }) {
+  list(params?: { keyword?: string; page?: number; pageSize?: number; groupId?: string }, options?: { signal?: AbortSignal }) {
     return requestEnvelope<ContactListData>(apiClient.get('/contacts', { params, signal: options?.signal }));
   },
   create(payload: ContactPayload) {

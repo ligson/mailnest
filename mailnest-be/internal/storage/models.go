@@ -419,6 +419,7 @@ type CreateContactParams struct {
 
 type ListContactsQuery struct {
 	UserID  int64
+	GroupID int64
 	Keyword string
 	Limit   int
 	Offset  int

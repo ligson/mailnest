@@ -32,7 +32,7 @@ func (a *App) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// 先校验签名，避免未登录请求影响调度；合法请求的鉴权查询也应优先。
-		if (r.Method == http.MethodGet && !strings.HasSuffix(r.URL.Path, "/count")) || r.URL.Path == "/api/v1/contacts/resolve" {
+		if (r.Method == http.MethodGet && !strings.HasSuffix(r.URL.Path, "/count")) || r.URL.Path == "/api/v1/contacts/resolve" || r.URL.Path == "/api/v1/contact-groups/resolve" {
 			release := a.store.Workload().Interactive()
 			defer release()
 		}

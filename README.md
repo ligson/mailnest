@@ -83,6 +83,7 @@ mailnest/
 - [Bleve 本地邮件检索、重建与安全切换](doc/bleve-search-design.md)
 - [搜索与页面加载优化、接口约定及验收](doc/performance-optimization-plan.md)
 - [第二轮性能优化目标与实施进度](doc/performance-next-stage.md)
+- [联系人分组与写信选组](doc/contact-groups.md)
 - [前后端版本管理、构建注入与系统管理展示](doc/version-management.md)
 - [更新日志](CHANGELOG.md)
 

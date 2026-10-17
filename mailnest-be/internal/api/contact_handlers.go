@@ -56,12 +56,26 @@ func (a *App) handleListContacts(w http.ResponseWriter, r *http.Request) {
 	}
 	page := parsePositiveInt(r.URL.Query().Get("page"), 1)
 	pageSize := parsePositiveInt(r.URL.Query().Get("pageSize"), 100)
+	groupID := int64(0)
+	if raw := r.URL.Query().Get("groupId"); raw != "" {
+		var err error
+		groupID, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || groupID <= 0 {
+			response.Error(w, 400, "分组 ID 格式错误")
+			return
+		}
+	}
 	contacts, total, err := a.store.ListContacts(storage.ListContactsQuery{
 		UserID:  userID,
+		GroupID: groupID,
 		Keyword: r.URL.Query().Get("keyword"),
 		Limit:   pageSize,
 		Offset:  (page - 1) * pageSize,
 	})
+	if errors.Is(err, storage.ErrNotFound) {
+		response.Error(w, 404, "联系人分组不存在")
+		return
+	}
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "获取联系人失败")
 		return

@@ -431,6 +431,30 @@ body {
   background: var(--shell-bg);
 }
 
+.shell-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  padding: 0;
+  border: 0;
+  background: rgb(0 0 0 / 35%);
+}
+
+@media (max-width: 767px) {
+  .mobile-menu-open .shell-sider {
+    position: fixed;
+    z-index: 1001;
+  }
+
+  .mobile-menu-open .shell-main {
+    margin-left: 64px;
+  }
+
+  .app-shell .shell-content {
+    padding: 10px;
+  }
+}
+
 .shell-brand {
   display: flex;
   height: 64px;
