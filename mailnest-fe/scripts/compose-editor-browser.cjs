@@ -26,10 +26,12 @@ async (page) => {
   await page.setViewportSize({width:1280,height:850});
   await page.evaluate(()=>{localStorage.setItem('mailnest.token','rich-local-only');Object.keys(localStorage).filter(k=>k.includes('draft')).forEach(k=>localStorage.removeItem(k));});
   await page.goto(baseURL + '/mail');
+  await page.locator('.account-filter-item').filter({hasText:'sender@example.com'}).waitFor();
   await page.getByRole('button',{name:/写邮件/}).click();
   const modal=page.locator('.compose-modal'),editor=modal.locator('.compose-editor-body');
   await editor.waitFor();await page.waitForTimeout(200);
-  if(!(await editor.innerText()).includes('测试签名'))throw Error('首次异步加载漏插签名');
+  await editor.locator('.compose-signature iframe').waitFor();
+  if(!(await editor.locator('.compose-signature iframe').evaluate(frame=>frame.contentDocument.body.textContent)).includes('测试签名'))throw Error('首次异步加载漏插签名');
   await editor.fill('前缀目标文字后缀');
   async function select(from,to){
     await editor.evaluate((el,{from,to})=>{

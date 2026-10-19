@@ -5,6 +5,7 @@ import TextAlign from '@tiptap/extension-text-align';
 import Image from '@tiptap/extension-image';
 import { TableKit } from '@tiptap/extension-table';
 import { normalizeImageWidth, normalizeMailLink } from './editor-format';
+import { MailSignature } from './signature-extension';
 
 // 发出的 HTML 自带基础表格样式，不依赖本系统的 CSS 才能在其他邮件客户端显示。
 const tableBorder = 'border:1px solid #d9d9d9;padding:6px 10px;vertical-align:top;';
@@ -45,6 +46,7 @@ export function createMailEditorExtensions() {
       blockquote: { HTMLAttributes: { style: 'border-left:3px solid #d9d9d9;margin:12px 0;padding-left:12px;color:#5f6b7a;' } },
     }),
     TextStyleKit.configure({ lineHeight: false }),
+    MailSignature,
     ParagraphLayout,
     TextAlign.configure({ types: ['heading', 'paragraph'] }),
     MailImage.configure({ inline: true, allowBase64: true }),

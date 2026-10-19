@@ -1,15 +1,15 @@
 <template>
-  <component :is="isStandaloneReader ? MailReaderLayout : AppLayout" v-bind="isStandaloneReader ? { mailboxURL, loading: detailLoading } : { selectedKey: '/mail', contentClass: 'mail-shell-content' }" @refresh="refreshAll">
+  <component :is="isStandaloneCompose ? MailComposeLayout : isStandaloneReader ? MailReaderLayout : AppLayout" v-bind="isStandaloneCompose ? { title: composeDrawerTitle } : isStandaloneReader ? { mailboxURL, loading: detailLoading } : { selectedKey: '/mail', contentClass: 'mail-shell-content' }" @refresh="refreshAll">
     <section
       ref="workspaceEl"
       class="mail-workspace"
-      :class="{ 'mail-workspace-standalone': isStandaloneReader }"
+      :class="{ 'mail-workspace-standalone': isStandaloneReader, 'mail-workspace-compose': isStandaloneCompose }"
       :style="{
         '--folder-pane-width': `${folderPaneWidth}px`,
         '--list-pane-width': `${listPaneWidth}px`,
       }"
     >
-      <aside v-if="!isStandaloneReader" class="mail-folders">
+      <aside v-if="!isStandaloneReader && !isStandaloneCompose" class="mail-folders">
         <div class="folder-heading account-heading">邮箱账号</div>
         <div ref="accountSortListEl" class="account-sort-list" :class="{ saving: accountOrderSaving }">
           <button
@@ -85,9 +85,9 @@
         </button>
       </aside>
 
-      <div v-if="!isStandaloneReader" class="mail-resizer" title="拖拽调整文件夹栏宽度" @mousedown="startResize('folders', $event)"></div>
+      <div v-if="!isStandaloneReader && !isStandaloneCompose" class="mail-resizer" title="拖拽调整文件夹栏宽度" @mousedown="startResize('folders', $event)"></div>
 
-      <main v-if="!isStandaloneReader" class="mail-list-pane">
+      <main v-if="!isStandaloneReader && !isStandaloneCompose" class="mail-list-pane">
         <div class="mail-list-header">
           <div class="mail-list-title-row">
             <div class="mail-list-heading">
@@ -106,10 +106,13 @@
             </a-radio-group>
           </div>
           <div class="mail-list-actions">
+            <a-space-compact>
             <a-button type="primary" @click="openCompose">
               <template #icon><send-outlined /></template>
               写邮件
             </a-button>
+            <a-tooltip title="在新窗口写邮件"><a-button type="primary" :href="composeWindowURL" target="_blank" rel="noopener noreferrer" aria-label="在新窗口写邮件"><template #icon><export-outlined /></template></a-button></a-tooltip>
+            </a-space-compact>
             <a-space-compact>
               <a-button :loading="receivingMail" :disabled="!visibleAccounts.length" @click="receiveDefaultMail">
                 <template #icon><download-outlined /></template>
@@ -346,9 +349,9 @@
         />
       </main>
 
-      <div v-if="!isStandaloneReader" class="mail-resizer" title="拖拽调整邮件列表宽度" @mousedown="startResize('list', $event)"></div>
+      <div v-if="!isStandaloneReader && !isStandaloneCompose" class="mail-resizer" title="拖拽调整邮件列表宽度" @mousedown="startResize('list', $event)"></div>
 
-      <section class="mail-reader-pane">
+      <section v-if="!isStandaloneCompose" class="mail-reader-pane">
         <div v-if="detailLoading" class="reader-skeleton">
           <a-skeleton active :title="{ width: '70%' }" :paragraph="{ rows: 4 }" />
           <a-skeleton active :paragraph="{ rows: 8 }" />
@@ -670,20 +673,20 @@
         </a-form>
       </a-modal>
 
-      <a-modal
-        v-model:open="composeOpen"
+      <a-alert v-if="isStandaloneCompose && composeWindowError" type="error" show-icon message="写信窗口加载失败" :description="composeWindowError"><template #action><a-button @click="initStandaloneCompose">重试</a-button></template></a-alert>
+      <ComposeSurface
+        :open="composeOpen"
         :title="composeDrawerTitle"
-        :width="1040"
-        :style="{ top: '16px', paddingBottom: 0 }"
-        :destroy-on-close="false"
-        :mask-closable="false"
+        :standalone="isStandaloneCompose"
+        :busy="composeLoading || sending || composeTransferring"
         @cancel="closeCompose"
-        :footer="null"
-        class="compose-modal"
+        @popout="popoutCompose"
+        @new="openCompose"
       >
         <div class="compose-loading-shell">
-        <a-spin :spinning="composeLoading" tip="正在准备邮件...">
+        <a-spin :spinning="composeLoading || composeTransferring" :tip="composeTransferring ? '正在转移到新窗口...' : '正在准备邮件...'">
           <a-form layout="vertical" :model="composeForm" class="compose-form">
+            <a-alert v-if="composeTransferError" type="error" show-icon closable message="未能转到新窗口，邮件仍保留在这里" :description="composeTransferError" @close="composeTransferError = ''" />
             <div class="compose-fields">
               <a-form-item label="发件人" html-for="compose-from" class="compose-field-row">
                 <a-select id="compose-from" v-model:value="composeForm.accountId" :bordered="false" placeholder="选择发件邮箱" @change="onComposeAccountChanged">
@@ -846,7 +849,7 @@
           </a-form>
         </a-spin>
         </div>
-      </a-modal>
+      </ComposeSurface>
       <ContactGroupPicker v-if="recipientGroupOpen" v-model:open="recipientGroupOpen" :title="recipientGroupTitle" confirm-text="添加到地址栏" @selected="addRecipientGroups" />
       <a-drawer v-model:open="ruleLogOpen" width="620" title="规则记录">
         <a-spin :spinning="ruleLogLoading">
@@ -939,11 +942,15 @@ import {
 import { useAuthStore } from '../stores/auth';
 import AppLayout from '../components/AppLayout.vue';
 import MailReaderLayout from '../modules/mail/reader/MailReaderLayout.vue';
+import MailComposeLayout from '../modules/mail/compose/MailComposeLayout.vue';
+import ComposeSurface from '../modules/mail/compose/ComposeSurface.vue';
+import { openComposeTransfer, receiveComposeTransfer } from '../modules/mail/compose/window-transfer';
 import MailBody from '../modules/mail/reader/MailBody.vue';
 import MailSearchStatus from '../components/MailSearchStatus.vue';
 import { MailCursorHistory } from '../modules/mail/paging';
 import { mergeGroupRecipients } from '../modules/mail/compose/groupRecipients';
 import type { ComposeEditorBridge } from '../modules/mail/compose/editor-types';
+import { wrapMailSignature } from '../modules/mail/compose/signature-html';
 import type { GroupMember } from '../modules/contacts/types';
 
 const ComposeRichEditor = defineAsyncComponent(() => import('../modules/mail/compose/ComposeRichEditor.vue'));
@@ -1001,8 +1008,15 @@ const defaultSystemFolders: SystemFolderItem[] = [
   { key: 'attachments' as const, label: '有附件', icon: markRaw(PaperClipOutlined) },
 ];
 const systemFolders = ref<SystemFolderItem[]>([...defaultSystemFolders]);
-const props = defineProps<{ readerMessageId?: string }>();
+const props = defineProps<{ readerMessageId?: string; standaloneCompose?: boolean }>();
 const isStandaloneReader = computed(() => !!props.readerMessageId);
+const isStandaloneCompose = computed(() => !!props.standaloneCompose);
+const composeWindowURL = computed(() => router.resolve({ path: '/mail/compose', query: filters.accountId ? { accountId: filters.accountId } : {} }).href);
+const composeWindowError = ref('');
+const composeTransferError = ref('');
+const composeTransferring = ref(false);
+let composeTransferPending = false;
+const composeWindowAbort = new AbortController();
 const folderColorOptions = ['#1f66d1', '#0f9f6e', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#64748b', '#be185d'];
 const router = useRouter();
 const route = useRoute();
@@ -1095,6 +1109,8 @@ const importEMLDefaultChunkBytes = 16 * 1024 * 1024;
 let composeSignatureInserted = false;
 let composeContextRequestId = 0;
 let draftSaveTimer: number | undefined;
+let draftSaveInFlight: Promise<boolean> | null = null;
+let draftRevision = 0;
 let suppressDraftAutosave = false;
 let resizeState: {
   pane: ResizePane;
@@ -1387,6 +1403,12 @@ const composeBodyHint = computed(() => {
 });
 
 onMounted(() => {
+  if (isStandaloneCompose.value) {
+    document.title = '写邮件 - Mail Nest';
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    void initStandaloneCompose();
+    return;
+  }
   if (isStandaloneReader.value) {
     window.addEventListener('beforeunload', handleBeforeUnload);
     void refreshAll();
@@ -1404,6 +1426,7 @@ onMounted(() => {
   void refreshAll();
 });
 onBeforeUnmount(() => {
+  composeWindowAbort.abort();
   stopResize();
   detailRequestController?.abort();
   listRequestController?.abort();
@@ -1423,13 +1446,18 @@ onBeforeUnmount(() => {
   systemFolderSortable = null;
 });
 onBeforeRouteLeave((_to, _from, next) => {
+  if (composeTransferring.value || composeTransferPending) {
+    message.info('正在接续写信，请稍候再离开');
+    next(false);
+    return;
+  }
   if (!shouldProtectComposeLeave()) {
     next();
     return;
   }
   Modal.confirm({
     title: '保存草稿后离开？',
-    content: '当前邮件还没有发送，保存为草稿后可以继续编辑。',
+    content: composeForm.attachments.length ? '正文可以保存为草稿，但本地附件尚未上传，离开后需要重新选择。是否继续？' : '当前邮件还没有发送，保存为草稿后可以继续编辑。',
     okText: '保存并离开',
     cancelText: '继续编辑',
     async onOk() {
@@ -1468,6 +1496,7 @@ watch(() => JSON.stringify(visibleContactKeys()), () => {
 watch(composeOpen, (open) => { if (open) searchContacts(''); else recipientGroupOpen.value = false; });
 
 async function refreshAll() {
+  if (isStandaloneCompose.value) return;
   if (isStandaloneReader.value) {
     // 独立窗口不拉取邮件列表、精确统计和文件夹，正文请求也不等待账号列表。
     void loadAccounts();
@@ -1484,7 +1513,7 @@ async function refreshAll() {
 async function loadAccounts() {
   try {
     accounts.value = (await mailAccountApi.list()).items;
-    if (isStandaloneReader.value) return;
+    if (isStandaloneReader.value || isStandaloneCompose.value) return;
     restoreSelectedAccount();
     if (filters.accountId && !visibleAccounts.value.some((account) => account.id === filters.accountId)) {
       filters.accountId = undefined;
@@ -1563,7 +1592,7 @@ function searchContacts(keyword: string) {
 }
 
 async function loadMessages() {
-  if (isStandaloneReader.value) return;
+  if (isStandaloneReader.value || isStandaloneCompose.value) return;
   clearTimeout(searchTimer);
   listRequestController?.abort();
   countRequestController?.abort();
@@ -2611,9 +2640,84 @@ function updateImportEMLTimeEstimate(force = false) {
   importEMLProgress.speedSampleBytes = importEMLProgress.uploadedBytes;
 }
 
+async function initStandaloneCompose() {
+  if (composeOpen.value || composeLoading.value) return;
+  composeWindowError.value = '';
+  composeLoading.value = true;
+  let cancelTransfer: (() => void) | undefined;
+  try {
+    // 独立写信不加载邮件列表、目录、统计或整本通讯录。
+    accounts.value = (await mailAccountApi.list()).items;
+    const handoff = typeof route.query.handoff === 'string' ? route.query.handoff : '';
+    if (handoff) {
+      composeTransferPending = true;
+      composeTransferring.value = true;
+      const transfer = await receiveComposeTransfer(handoff, String(auth.user!.id), composeWindowAbort.signal);
+      cancelTransfer = transfer.cancel;
+      if (!startCompose(transfer.data.draft.composeMode)) throw new Error('原发件账号不可用，请返回原窗口检查');
+      if (!visibleAccounts.value.some(account => account.id === transfer.data.draft.accountId)) throw new Error('原发件账号已停用或不存在');
+      composeForwardAttachments.value = transfer.data.forwardAttachments;
+      applyDraftToCompose(transfer.data.draft);
+      composeForm.attachments = transfer.data.attachments;
+      restoredLocalAttachmentNames.value = transfer.data.missingAttachmentNames;
+      // 编辑器内容和附件全部接续后，原窗口才释放编辑权；未接续时禁止自动保存和发送。
+      const deadline = Date.now() + 15000;
+      while (composeInitializedEditorKey !== composeEditorKey.value) {
+        if (Date.now() > deadline || composeWindowAbort.signal.aborted) throw new Error('编辑器加载失败，请返回原窗口继续编辑');
+        await new Promise(resolve => window.setTimeout(resolve, 50));
+      }
+      await transfer.activate();
+      composeTransferPending = false;
+      armDraftAutosave();
+      await router.replace({ path: '/mail/compose', query: currentDraftId.value ? { draftId: currentDraftId.value } : {} });
+    } else {
+      const accountId = typeof route.query.accountId === 'string' ? route.query.accountId : '';
+      if (accountId) filters.accountId = accountId;
+      const draftId = typeof route.query.draftId === 'string' ? route.query.draftId : '';
+      if (draftId) await openDraft(draftId); else openCompose();
+      if (!composeOpen.value) throw new Error('请先配置并启用一个邮箱账号');
+    }
+  } catch (error) {
+    cancelTransfer?.();
+    composeTransferPending = false;
+    forceCloseCompose();
+    composeWindowError.value = error instanceof Error ? error.message : '写信窗口加载失败';
+  } finally { composeLoading.value = false; composeTransferring.value = false; }
+}
+
+async function popoutCompose() {
+  if (composeLoading.value || sending.value || composeTransferring.value) return;
+  clearDraftSaveTimer();
+  composeTransferError.value = '';
+  composeTransferring.value = true;
+  try {
+    await openComposeTransfer(String(auth.user!.id), async () => {
+      if (!await saveDraftNow(true)) throw new Error('草稿保存失败，已保留当前窗口，请稍后重试');
+      syncComposeEditorContent();
+      const payload = buildDraftPayload();
+      return {
+        draft: { ...payload, forwardAttachmentIds: [...payload.forwardAttachmentIds], localAttachmentNames: [...payload.localAttachmentNames],
+          id: currentDraftId.value, sourceMessageId: payload.sourceMessageId || null,
+          createdAt: draftLastSavedAt.value || new Date().toISOString(), updatedAt: draftLastSavedAt.value || new Date().toISOString() },
+        // Vue 的 reactive 数组需要脱离代理，File 本身通过结构化克隆传递，不重新上传。
+        attachments: [...composeForm.attachments],
+        forwardAttachments: composeForwardAttachments.value.map(item => ({ ...item })),
+        missingAttachmentNames: [...restoredLocalAttachmentNames.value],
+      };
+    }, () => { forceCloseCompose(); });
+  } catch (error) {
+    composeTransferError.value = error instanceof Error ? error.message : '转移失败，邮件仍在当前窗口';
+    if (draftDirty.value) scheduleDraftSave();
+  } finally { composeTransferring.value = false; }
+}
+
 function openCompose() {
   if (!startCompose('new')) {
     return;
+  }
+  if (isStandaloneCompose.value) {
+    composeWindowError.value = '';
+    void router.replace({ path: '/mail/compose', query: composeForm.accountId ? { accountId: composeForm.accountId } : {} });
   }
   finishComposeOpen();
   composeLoading.value = false;
@@ -2759,6 +2863,7 @@ async function openReply(mode: Exclude<ComposeMode, 'new'>) {
 }
 
 async function sendMail() {
+  if (composeTransferPending || composeTransferring.value || sending.value || composeLoading.value) return;
   if (!composeForm.accountId) {
     message.warning('请选择发件账号');
     return;
@@ -2776,7 +2881,10 @@ async function sendMail() {
     return;
   }
   sending.value = true;
+  // 不让迟到的自动保存请求在发送完成后重新创建草稿。
+  clearDraftSaveTimer();
   try {
+    if (draftSaveInFlight) await draftSaveInFlight;
     const sent = await messageApi.send({
       draftId: currentDraftId.value || undefined,
       accountId: composeForm.accountId,
@@ -2798,6 +2906,10 @@ async function sendMail() {
     composeSourceMessageId.value = '';
     composeForwardAttachments.value = [];
     selectedForwardAttachmentIds.value = [];
+    if (isStandaloneCompose.value) {
+      await router.replace('/mail/messages/' + encodeURIComponent(sent.id));
+      return;
+    }
     activeSystemFolder.value = 'sent';
     activeLocalFolderId.value = null;
     page.value = 1;
@@ -2811,16 +2923,20 @@ async function sendMail() {
 }
 
 function markDraftDirty() {
-  if (suppressDraftAutosave || !composeOpen.value || composeLoading.value || sending.value) {
+  if (suppressDraftAutosave || composeTransferPending || composeTransferring.value || !composeOpen.value || composeLoading.value || sending.value) {
     return;
   }
   draftDirty.value = true;
+  draftRevision++;
   draftSaveError.value = '';
   scheduleDraftSave();
 }
 
 function armDraftAutosave() {
+  if (composeTransferPending) return;
+  const sessionKey = composeEditorKey.value;
   window.setTimeout(() => {
+    if (!composeOpen.value || sessionKey !== composeEditorKey.value) return;
     suppressDraftAutosave = false;
     draftDirty.value = false;
   });
@@ -2842,6 +2958,14 @@ function clearDraftSaveTimer() {
 
 async function saveDraftNow(silent: boolean) {
   clearDraftSaveTimer();
+  while (draftSaveInFlight) await draftSaveInFlight;
+  const pending = persistDraftNow(silent);
+  draftSaveInFlight = pending;
+  try { return await pending; }
+  finally { if (draftSaveInFlight === pending) draftSaveInFlight = null; }
+}
+
+async function persistDraftNow(silent: boolean) {
   if (!composeOpen.value || composeLoading.value || sending.value) {
     return true;
   }
@@ -2850,15 +2974,22 @@ async function saveDraftNow(silent: boolean) {
     return true;
   }
   draftSaving.value = true;
+  const revision = draftRevision;
+  const sessionKey = composeEditorKey.value;
   try {
     const payload = buildDraftPayload();
     const saved = currentDraftId.value
       ? await draftApi.update(currentDraftId.value, payload)
       : await draftApi.create(payload);
+    if (!composeOpen.value || sessionKey !== composeEditorKey.value) return true;
     currentDraftId.value = saved.id;
     draftLastSavedAt.value = saved.updatedAt;
-    draftDirty.value = false;
+    draftDirty.value = draftRevision !== revision;
+    if (draftDirty.value) scheduleDraftSave();
     draftSaveError.value = '';
+    if (isStandaloneCompose.value && !composeTransferPending && currentDraftId.value && route.path === '/mail/compose') {
+      await router.replace({ path: '/mail/compose', query: { draftId: currentDraftId.value } });
+    }
     if (!silent) {
       message.success('草稿已保存');
     }
@@ -2910,11 +3041,12 @@ function hasDraftWorthSaving() {
 }
 
 function shouldProtectComposeLeave() {
+  if (composeTransferring.value || composeTransferPending) return true;
   if (!composeOpen.value || sending.value || composeLoading.value) {
     return false;
   }
   syncComposeEditorContent();
-  return draftDirty.value && hasDraftWorthSaving();
+  return composeForm.attachments.length > 0 || (draftDirty.value && hasDraftWorthSaving());
 }
 
 function handleBeforeUnload(event: BeforeUnloadEvent) {
@@ -2950,6 +3082,7 @@ async function deleteCurrentDraft() {
 }
 
 function resetCompose() {
+  composeTransferError.value = '';
   composeCcExpanded.value = false;
   composeBccExpanded.value = false;
   Object.assign(composeForm, {
@@ -2983,10 +3116,11 @@ function resetCompose() {
 }
 
 function closeCompose() {
+  if (composeTransferring.value || composeTransferPending) return;
   if (shouldProtectComposeLeave()) {
     Modal.confirm({
       title: '保存草稿后关闭？',
-      content: '当前邮件还没有发送，保存为草稿后可以继续编辑。',
+      content: composeForm.attachments.length ? '正文可以保存为草稿，但本地附件尚未上传，再次打开需要重新选择。是否保存并关闭？' : '当前邮件还没有发送，保存为草稿后可以继续编辑。',
       okText: '保存并关闭',
       cancelText: '继续编辑',
       async onOk() {
@@ -3043,7 +3177,7 @@ function insertComposeSignatureIfEmpty() {
   if (composeForm.textBody || composeForm.htmlBody.replace(/<br\s*\/?>|&nbsp;/gi, '').trim()) {
     return;
   }
-  composeEditor.value.setContent(`<p><br></p>${selectedComposeAccount.value.signatureHtml}`);
+  composeEditor.value.setContent(`<p><br></p>${wrapMailSignature(selectedComposeAccount.value.signatureHtml)}<p><br></p>`);
   composeSignatureInserted = true;
   syncComposeEditorContent();
 }
@@ -3053,7 +3187,7 @@ function insertComposeSignature() {
     message.info('当前发件账号还没有维护签名模板');
     return;
   }
-  insertHTMLAtCursor(`<br>${selectedComposeAccount.value.signatureHtml}`);
+  insertHTMLAtCursor(`<p><br></p>${wrapMailSignature(selectedComposeAccount.value.signatureHtml)}<p><br></p>`);
   composeSignatureInserted = true;
   syncComposeEditorContent();
 }
@@ -5300,6 +5434,8 @@ function looksLikeEmail(value: string) {
   .compose-footer { padding-top: 8px; padding-bottom: 8px; }
 }
 .mail-workspace.mail-workspace-standalone { grid-template-columns: minmax(0, 1fr); }
+.mail-workspace.mail-workspace-compose { display: flex; flex-direction: column; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
+.mail-workspace-compose > .standalone-compose-surface { flex: 1; }
 .mail-workspace-standalone .mail-reader { width: 100%; }
 .mail-workspace-standalone .mail-reader-pane { padding: 24px; background: var(--surface-bg); }
 @media (max-width: 1080px) {

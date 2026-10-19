@@ -65,4 +65,5 @@ onMounted(async () => { await nextTick(); emit('ready'); });
 :deep(.compose-editor-body .column-resize-handle) { position: absolute; right: -2px; top: 0; bottom: -2px; width: 4px; background: var(--accent); pointer-events: none; }
 :deep(.compose-editor-body.resize-cursor) { cursor: col-resize; }
 :deep(.compose-editor-body pre) { padding: 12px; background: var(--surface-muted); white-space: pre-wrap; }
+:deep(.compose-signature) { display: block; max-width: 100%; overflow-x: auto; margin: 8px 0; background: #fff; cursor: default; }
 </style>

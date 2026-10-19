@@ -1,13 +1,13 @@
 {
   "name": "mailnest-fe",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build && node scripts/precompress.mjs",
     "test:assets": "node --test scripts/precompress.test.mjs",
-    "test:mail": "node --test scripts/mail-paging.test.mjs scripts/group-recipients.test.mjs scripts/editor-format.test.mjs scripts/mail-reader.test.mjs",
+    "test:mail": "node --test scripts/mail-paging.test.mjs scripts/group-recipients.test.mjs scripts/editor-format.test.mjs scripts/mail-reader.test.mjs scripts/compose-window.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -22,6 +22,7 @@
     "@tiptap/vue-3": "3.32.0",
     "ant-design-vue": "^4.2.6",
     "axios": "^1.7.9",
+    "dompurify": "3.4.17",
     "pinia": "^2.3.0",
     "sortablejs": "^1.15.7",
     "vue": "^3.5.13",

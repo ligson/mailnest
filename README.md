@@ -86,6 +86,7 @@ mailnest/
 - [联系人分组与写信选组](doc/contact-groups.md)
 - [联系人批量设置公司与分组](doc/contacts-batch-edit.md)
 - [写信富文本编辑器增强](doc/compose-rich-editor.md)
+- [独立写信窗口与完整签名](doc/compose-window-signature.md)
 - [独立邮件阅读窗口与宽表格排版](doc/mail-reader-window.md)
 - [前后端版本管理、构建注入与系统管理展示](doc/version-management.md)
 - [更新日志](CHANGELOG.md)
