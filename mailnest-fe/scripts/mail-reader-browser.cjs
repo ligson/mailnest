@@ -1,0 +1,106 @@
+async (page) => {
+  // 独立本地模拟，不读取生产邮件、不发送真实邮件。
+  const base = 'http://127.0.0.1:15174';
+  const requests = [], errors = [];
+  const context = page.context();
+  const envelope = data => JSON.stringify({success:true,message:'',httpCode:200,data});
+  const account = {id:'1',displayName:'工作邮箱',email:'me@example.com',enabled:true,smtpConfigured:true};
+  const mail = {id:'reader-test',accountId:'1',threadId:null,subject:'宽表格与独立阅读窗口回归',from:'张三 <sender@example.com>',to:['me@example.com'],cc:['copy@example.com'],sentAt:'2026-10-19T08:00:00Z',receivedAt:'2026-10-19T08:01:00Z',isRead:true,hasAttachments:true,folder:'INBOX',textBody:'邮件正文',attachments:[{id:'a1',messageId:'reader-test',filename:'产品安装说明.txt',contentType:'text/plain',size:12,inline:false,downloadUrl:'/api/v1/attachments/a1/download'}],htmlBody:'<p>各位好：</p><p>产品盘信息如下，请按完整表格核对。</p><table width="1400" style="table-layout:fixed;border:1px solid #555"><colgroup><col width="180"><col width="220"><col width="220"><col width="780"></colgroup><tbody><tr style="background:#e7f3ee"><th>领域云编码</th><th>领域云名称</th><th>领域编码</th><th>描述</th></tr><tr><td>YonDiF</td><td>数字政府平台</td><td>YonDiF-Platform</td><td>安装、部署、运行所依赖的产品安装盘和说明文件</td></tr></tbody></table><p>正文图片：</p><img src="/reader-delayed.svg" alt="正文图片"><p id="body-end">邮件正文结束</p><script>parent.__mailScriptRan=true</script>'};
+  let fail = false;
+  await context.route('**/api/v1/**', async route => {
+    const request = route.request(), path = new URL(request.url()).pathname.replace('/api/v1','');
+    requests.push({path,method:request.method()});
+    if (path === '/messages/reader-test' && fail) return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({success:false,message:'模拟服务暂不可用',httpCode:503,data:{}})});
+    if (path === '/attachments/a1/download') return route.fulfill({status:200,body:'测试附件',contentType:'text/plain'});
+    let data = {items:[]};
+    if (path === '/auth/me') data = {id:'1',username:'测试用户',email:'me@example.com',enabled:true,isAdmin:true};
+    else if (path === '/mail-accounts') data = {items:[account]};
+    else if (path === '/messages') data = {items:[mail],total:1,hasMore:false,totalPending:false,revision:'reader-1'};
+    else if (path === '/messages/count') data = {total:1,revision:'reader-1'};
+    else if (path === '/messages/reader-test') data = mail;
+    else if (path === '/messages/reader-test/compose-context') data = {accountId:'1',sourceMessageId:'reader-test',to:['sender@example.com'],cc:['copy@example.com'],bcc:[],subject:'Re: '+mail.subject,textBody:'原邮件',htmlBody:'<p>回复引用</p>',forwardAttachments:[]};
+    else if (path === '/search/status') data = {engine:'database',phase:'disabled'};
+    else if (path === '/contacts/resolve') data = {items:[{id:'contact-1',email:'sender@example.com',nickname:'张老师',name:'张三'}],ambiguousPrefixes:[]};
+    await route.fulfill({status:200,contentType:'application/json',body:envelope(data)});
+  });
+  await context.route('**/reader-delayed.svg', async route => {
+    await new Promise(resolve => setTimeout(resolve, 250));
+    await route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="600" height="120"><rect width="600" height="120" fill="#dceee7"/><text x="24" y="66" font-size="22">邮件正文图片</text></svg>'});
+  });
+  context.on('page', child => child.on('pageerror', error => errors.push(error.message)));
+  page.on('pageerror', error => errors.push(error.message));
+  await page.evaluate(() => localStorage.setItem('mailnest.token','reader-local-only'));
+  await page.setViewportSize({width:1440,height:900});
+  await page.goto(base + '/mail');
+  await page.locator('.mail-list-item').first().click();
+  const open = page.getByRole('link',{name:'新窗口打开邮件'});
+  await open.waitFor();
+  if (await open.getAttribute('href') !== '/mail/messages/reader-test') throw Error('独立详情链接错误');
+  const popupPromise = context.waitForEvent('page');
+  await open.click();
+  const reader = await popupPromise;
+  await reader.setViewportSize({width:1440,height:900});
+  await reader.waitForURL('**/mail/messages/reader-test');
+  await reader.locator('.mail-body-frame').waitFor();
+  await reader.getByText('张老师',{exact:true}).waitFor();
+  const check = async (target, standalone) => {
+    await target.frameLocator('.mail-body-frame').locator('#body-end').waitFor();
+    await target.waitForFunction(() => {
+      const frame = document.querySelector('.mail-body-frame');
+      return frame && frame.contentDocument?.images[0]?.complete && frame.clientHeight >= frame.contentDocument.body.scrollHeight;
+    });
+    const result = await target.evaluate(() => {
+      const host=document.querySelector('.mail-body-scroll'), frame=document.querySelector('.mail-body-frame'), doc=frame.contentDocument;
+      const cells=Array.from(doc.querySelectorAll('td')).map(el=>({width:el.getBoundingClientRect().width,height:el.getBoundingClientRect().height}));
+      return {hostWidth:host.clientWidth,scrollWidth:host.scrollWidth,frameWidth:frame.clientWidth,tableWidth:doc.querySelector('table').getBoundingClientRect().width,cells,bodyOverflow:document.documentElement.scrollWidth>innerWidth+1,script:window.__mailScriptRan,opener:!!window.opener,panes:!!document.querySelector('.mail-list-pane'),sandbox:frame.getAttribute('sandbox')};
+    });
+    if (result.tableWidth < 1390 || result.cells.some(cell => cell.height > 90) || result.cells[2].width < 180) throw Error('表格仍被压缩 '+JSON.stringify(result));
+    if (result.frameWidth < result.tableWidth || result.bodyOverflow) throw Error('横向滚动未隔离 '+JSON.stringify(result));
+    if (result.script || result.sandbox.includes('allow-scripts')) throw Error('邮件脚本被执行');
+    if (standalone && (result.panes || result.opener)) throw Error('独立页面包含列表或保留opener');
+    return result;
+  };
+  const embedded = await check(page, false);
+  const desktop = await check(reader, true);
+  await reader.screenshot({path:'output/playwright/mail-reader-desktop.png'});
+  requests.length = 0;
+  await reader.reload();
+  await check(reader, true);
+  if (requests.some(req => ['/messages','/messages/count','/mail-folders'].includes(req.path))) throw Error('独立窗口加载了无关数据');
+  const download = reader.waitForEvent('download');
+  await reader.getByRole('button',{name:'下载',exact:true}).click();
+  if ((await download).suggestedFilename() !== '产品安装说明.txt') throw Error('附件下载名错误');
+  await reader.getByRole('button',{name:/回复全部/}).click();
+  await reader.locator('.compose-modal .compose-editor-body').waitFor();
+  if (!(await reader.locator('.compose-modal').innerText()).includes('copy@example.com')) throw Error('独立窗口回复全部未保留抄送');
+  await reader.locator('.compose-modal .ant-modal-close').click();
+  fail = true;
+  await reader.getByRole('button',{name:'刷新邮件',exact:true}).click();
+  await reader.getByText('邮件加载失败',{exact:true}).waitFor();
+  fail = false;
+  await reader.getByRole('button',{name:'重新加载',exact:true}).click();
+  await check(reader, true);
+  await reader.setViewportSize({width:390,height:844});
+  const mobile = await check(reader, true);
+  await reader.getByRole('button',{name:'更多邮件操作',exact:true}).click();
+  await reader.getByRole('menuitem',{name:/回复全部/}).waitFor();
+  await reader.getByRole('button',{name:'更多邮件操作',exact:true}).click();
+  await reader.screenshot({path:'output/playwright/mail-reader-mobile.png'});
+  await reader.setViewportSize({width:1700,height:900});
+  const wide = await check(reader, true);
+  if (wide.scrollWidth > wide.hostWidth + 2) throw Error('宽窗口仍残留无用横向溢出');
+  // 返回邮箱链接定位同一封邮件，而不是回到默认空详情。
+  if (!(await reader.getByRole('link',{name:/返回邮箱/}).getAttribute('href')).includes('messageId=reader-test')) throw Error('返回邮箱丢失邮件定位');
+  mail.htmlBody = '';
+  mail.textBody = '纯文本第一行\n纯文本第二行';
+  await reader.getByRole('button',{name:'刷新邮件',exact:true}).click();
+  await reader.locator('.mail-text-body').getByText('纯文本第一行', {exact:false}).waitFor();
+  if (await reader.locator('.mail-body-frame').count()) throw Error('纯文本误用了HTML渲染');
+  await reader.evaluate(() => localStorage.removeItem('mailnest.token'));
+  const anonymous = await context.newPage();
+  await anonymous.goto(base + '/mail/messages/reader-test');
+  await anonymous.waitForURL('**/login');
+  await anonymous.close();
+  if (errors.length) throw Error('浏览器异常 '+errors.join(';'));
+  return {embedded,desktop,mobile,wide,errors};
+}

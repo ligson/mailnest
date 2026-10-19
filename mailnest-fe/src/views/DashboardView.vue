@@ -1,14 +1,15 @@
 <template>
-  <AppLayout selected-key="/mail" content-class="mail-shell-content">
+  <component :is="isStandaloneReader ? MailReaderLayout : AppLayout" v-bind="isStandaloneReader ? { mailboxURL, loading: detailLoading } : { selectedKey: '/mail', contentClass: 'mail-shell-content' }" @refresh="refreshAll">
     <section
       ref="workspaceEl"
       class="mail-workspace"
+      :class="{ 'mail-workspace-standalone': isStandaloneReader }"
       :style="{
         '--folder-pane-width': `${folderPaneWidth}px`,
         '--list-pane-width': `${listPaneWidth}px`,
       }"
     >
-      <aside class="mail-folders">
+      <aside v-if="!isStandaloneReader" class="mail-folders">
         <div class="folder-heading account-heading">邮箱账号</div>
         <div ref="accountSortListEl" class="account-sort-list" :class="{ saving: accountOrderSaving }">
           <button
@@ -84,9 +85,9 @@
         </button>
       </aside>
 
-      <div class="mail-resizer" title="拖拽调整文件夹栏宽度" @mousedown="startResize('folders', $event)"></div>
+      <div v-if="!isStandaloneReader" class="mail-resizer" title="拖拽调整文件夹栏宽度" @mousedown="startResize('folders', $event)"></div>
 
-      <main class="mail-list-pane">
+      <main v-if="!isStandaloneReader" class="mail-list-pane">
         <div class="mail-list-header">
           <div class="mail-list-title-row">
             <div class="mail-list-heading">
@@ -345,13 +346,16 @@
         />
       </main>
 
-      <div class="mail-resizer" title="拖拽调整邮件列表宽度" @mousedown="startResize('list', $event)"></div>
+      <div v-if="!isStandaloneReader" class="mail-resizer" title="拖拽调整邮件列表宽度" @mousedown="startResize('list', $event)"></div>
 
       <section class="mail-reader-pane">
         <div v-if="detailLoading" class="reader-skeleton">
           <a-skeleton active :title="{ width: '70%' }" :paragraph="{ rows: 4 }" />
           <a-skeleton active :paragraph="{ rows: 8 }" />
         </div>
+        <a-result v-else-if="detailError" status="warning" title="邮件加载失败" :sub-title="detailError">
+          <template #extra><a-button type="primary" @click="openDetail(selectedMessageId || readerMessageId || '')">重新加载</a-button></template>
+        </a-result>
         <div v-else-if="detail" class="mail-reader">
           <div class="reader-header">
             <div class="reader-title-row">
@@ -379,6 +383,11 @@
                   规则记录
                 </a-button>
               </a-space>
+              <a-tooltip v-if="!isStandaloneReader" title="新窗口打开">
+                <a-button size="small" :href="readerURL(detail.id)" target="_blank" rel="noopener noreferrer" aria-label="新窗口打开邮件">
+                  <template #icon><export-outlined /></template>
+                </a-button>
+              </a-tooltip>
               <a-dropdown class="reader-actions-mobile" :trigger="['click']">
                 <a-button size="small" aria-label="更多邮件操作">
                   <template #icon><more-outlined /></template>
@@ -456,16 +465,7 @@
               </div>
             </div>
           </div>
-          <div v-if="detail.htmlBody" class="mail-body">
-            <iframe
-              class="mail-body-frame"
-              :srcdoc="mailBodySrcdoc"
-              sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"
-              title="邮件正文"
-              @load="resizeMailBodyFrame"
-            ></iframe>
-          </div>
-          <pre v-else class="mail-text-body">{{ detail.textBody || '没有正文内容' }}</pre>
+          <MailBody :key="detail.id" :html="detail.htmlBody" :text="detail.textBody" />
           <section v-if="normalAttachments.length" class="attachments-panel">
             <h4 class="attachments-title">附件</h4>
             <div class="attachment-card-grid">
@@ -785,39 +785,18 @@
                       multiple
                       @change="onComposeImagesSelected"
                     />
-                  <ComposeToolbar
+                  <ComposeRichEditor
                     v-if="composeOpen"
-                    :compose-font-family="composeFontFamily"
-                    :compose-font-size="composeFontSize"
-                    :compose-text-color="composeTextColor"
-                    :compose-background-color="composeBackgroundColor"
-                    :save-compose-selection="saveComposeSelection"
-                    :choose-compose-files="chooseComposeFiles"
-                    :choose-compose-images="chooseComposeImages"
-                    :insert-compose-signature="insertComposeSignature"
-                    :apply-compose-font-family="applyComposeFontFamily"
-                    :apply-compose-font-size="applyComposeFontSize"
-                    :run-compose-command="runComposeCommand"
-                    :apply-compose-text-color="applyComposeTextColor"
-                    :clear-compose-background-color="clearComposeBackgroundColor"
-                    :apply-compose-background-color="applyComposeBackgroundColor"
-                    :insert-compose-link="insertComposeLink"
-                  />
-                  <div
+                    :key="composeEditorKey"
                     ref="composeEditor"
-                    class="compose-editor-body"
-                    contenteditable="true"
-                    role="textbox"
-                    aria-label="邮件正文"
-                    aria-multiline="true"
-                    data-placeholder="输入邮件正文"
-                    @input="onComposeEditorInput"
-                    @focus="saveComposeSelection"
-                    @keyup="saveComposeSelection"
-                    @mouseup="saveComposeSelection"
-                    @paste="onComposeEditorPaste"
-                    @blur="onComposeEditorInput"
-                  ></div>
+                    :initial-html="composeForm.htmlBody"
+                    @ready="finishComposeOpen"
+                    @change="onComposeEditorInput"
+                    @files="chooseComposeFiles"
+                    @images="chooseComposeImages"
+                    @signature="insertComposeSignature"
+                    @paste-images="insertComposeImageFiles"
+                  />
                 </div>
               </a-form-item>
             </section>
@@ -888,7 +867,7 @@
         </a-spin>
       </a-drawer>
     </section>
-  </AppLayout>
+  </component>
 </template>
 
 <script setup lang="ts">
@@ -901,6 +880,7 @@ import {
   DownloadOutlined,
   DownOutlined,
   EditOutlined,
+  ExportOutlined,
   FilterOutlined,
   FolderOpenOutlined,
   InboxOutlined,
@@ -958,12 +938,15 @@ import {
 } from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import AppLayout from '../components/AppLayout.vue';
+import MailReaderLayout from '../modules/mail/reader/MailReaderLayout.vue';
+import MailBody from '../modules/mail/reader/MailBody.vue';
 import MailSearchStatus from '../components/MailSearchStatus.vue';
 import { MailCursorHistory } from '../modules/mail/paging';
 import { mergeGroupRecipients } from '../modules/mail/compose/groupRecipients';
+import type { ComposeEditorBridge } from '../modules/mail/compose/editor-types';
 import type { GroupMember } from '../modules/contacts/types';
 
-const ComposeToolbar = defineAsyncComponent(() => import('../modules/mail/compose/ComposeToolbar.vue'));
+const ComposeRichEditor = defineAsyncComponent(() => import('../modules/mail/compose/ComposeRichEditor.vue'));
 const ContactGroupPicker = defineAsyncComponent(() => import('../modules/contacts/components/ContactGroupPicker.vue'));
 const recipientGroupOpen = ref(false);
 const recipientGroupTarget = ref<'to' | 'cc' | 'bcc'>('to');
@@ -1018,13 +1001,18 @@ const defaultSystemFolders: SystemFolderItem[] = [
   { key: 'attachments' as const, label: '有附件', icon: markRaw(PaperClipOutlined) },
 ];
 const systemFolders = ref<SystemFolderItem[]>([...defaultSystemFolders]);
+const props = defineProps<{ readerMessageId?: string }>();
+const isStandaloneReader = computed(() => !!props.readerMessageId);
 const folderColorOptions = ['#1f66d1', '#0f9f6e', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#64748b', '#be185d'];
 const router = useRouter();
 const route = useRoute();
 const auth = useAuthStore();
+const mailboxURL = computed(() => router.resolve({ path: '/mail', query: { messageId: props.readerMessageId } }).href);
+function readerURL(id: string) { return router.resolve({ path: `/mail/messages/${encodeURIComponent(id)}` }).href; }
 
 const loading = ref(false);
 const detailLoading = ref(false);
+const detailError = ref('');
 let detailRequestController: AbortController | null = null;
 let listRequestController: AbortController | null = null;
 let countRequestController: AbortController | null = null;
@@ -1077,7 +1065,9 @@ const sending = ref(false);
 const batching = ref(false);
 const receivingMail = ref(false);
 const importEMLFileInput = ref<HTMLInputElement | null>(null);
-const composeEditor = ref<HTMLElement | null>(null);
+const composeEditor = ref<ComposeEditorBridge | null>(null);
+const composeEditorKey = ref(0);
+let composeInitializedEditorKey = -1;
 const composeAttachmentInput = ref<HTMLInputElement | null>(null);
 const composeImageInput = ref<HTMLInputElement | null>(null);
 const workspaceEl = ref<HTMLElement | null>(null);
@@ -1165,11 +1155,6 @@ const draftSaving = ref(false);
 const draftDirty = ref(false);
 const draftLastSavedAt = ref<string | null>(null);
 const draftSaveError = ref('');
-const composeFontFamily = ref('system-ui');
-const composeFontSize = ref('14px');
-const composeTextColor = ref('#1f2937');
-const composeBackgroundColor = ref('');
-let composeSavedRange: Range | null = null;
 const filters = reactive({
   keyword: '',
   searchField: 'all' as SearchField,
@@ -1241,7 +1226,6 @@ const readerStatusBadges = computed(() => {
   }
   return badges.length ? badges : [{ label: '普通邮件', tone: 'neutral', icon: markRaw(MailOutlined) }];
 });
-const mailBodySrcdoc = computed(() => buildMailBodySrcdoc(detail.value?.htmlBody || ''));
 const contactByEmail = computed(() => {
   const map = new Map<string, Contact>();
   for (const contact of contacts.value) {
@@ -1403,12 +1387,16 @@ const composeBodyHint = computed(() => {
 });
 
 onMounted(() => {
+  if (isStandaloneReader.value) {
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    void refreshAll();
+    return;
+  }
   fitPaneWidthsToViewport();
   restoreAllAccountPosition();
   restoreSystemFolderOrder();
   window.addEventListener('resize', fitPaneWidthsToViewport);
   window.addEventListener('beforeunload', handleBeforeUnload);
-  document.addEventListener('selectionchange', saveComposeSelection);
   void nextTick(() => {
     setupAccountSorting();
     setupSystemFolderSorting();
@@ -1429,7 +1417,6 @@ onBeforeUnmount(() => {
   clearDraftSaveTimer();
   window.removeEventListener('resize', fitPaneWidthsToViewport);
   window.removeEventListener('beforeunload', handleBeforeUnload);
-  document.removeEventListener('selectionchange', saveComposeSelection);
   accountSortable?.destroy();
   accountSortable = null;
   systemFolderSortable?.destroy();
@@ -1462,6 +1449,10 @@ onBeforeRouteLeave((_to, _from, next) => {
 watch(() => route.query.messageId, () => {
   void applyRouteMessageSelection();
 });
+watch(() => props.readerMessageId, (id) => { if (id) void openDetail(id); });
+watch(() => detail.value?.subject, (subject) => {
+  if (isStandaloneReader.value) document.title = `${subject || '邮件阅读'} - Mail Nest`;
+});
 watch(composeForm, () => {
   markDraftDirty();
 }, { deep: true });
@@ -1477,6 +1468,12 @@ watch(() => JSON.stringify(visibleContactKeys()), () => {
 watch(composeOpen, (open) => { if (open) searchContacts(''); else recipientGroupOpen.value = false; });
 
 async function refreshAll() {
+  if (isStandaloneReader.value) {
+    // 独立窗口不拉取邮件列表、精确统计和文件夹，正文请求也不等待账号列表。
+    void loadAccounts();
+    await openDetail(props.readerMessageId!);
+    return;
+  }
   await loadAccounts();
   void loadFolders();
   void loadContacts();
@@ -1487,6 +1484,7 @@ async function refreshAll() {
 async function loadAccounts() {
   try {
     accounts.value = (await mailAccountApi.list()).items;
+    if (isStandaloneReader.value) return;
     restoreSelectedAccount();
     if (filters.accountId && !visibleAccounts.value.some((account) => account.id === filters.accountId)) {
       filters.accountId = undefined;
@@ -1565,6 +1563,7 @@ function searchContacts(keyword: string) {
 }
 
 async function loadMessages() {
+  if (isStandaloneReader.value) return;
   clearTimeout(searchTimer);
   listRequestController?.abort();
   countRequestController?.abort();
@@ -1684,6 +1683,7 @@ async function openDetail(id: string) {
   detailRequestController = controller;
   selectedMessageId.value = id;
   detailLoading.value = true;
+  detailError.value = '';
   detail.value = null;
   threadDetail.value = null;
   try {
@@ -1692,16 +1692,17 @@ async function openDetail(id: string) {
       return;
     }
     detail.value = nextDetail;
+    if (isStandaloneReader.value) filters.accountId = nextDetail.accountId;
     if (messages.value.some(item=>item.id===id && !item.isRead)) clearMailboxCache();
     selectedThreadId.value = nextDetail.threadId;
     messages.value = messages.value.map((item) => (
       item.id === id ? { ...item, isRead: true } : item
     ));
   } catch (error) {
-    if (isCanceledRequest(error)) {
+    if (isCanceledRequest(error) || detailRequestController !== controller) {
       return;
     }
-    message.error(error instanceof Error ? error.message : '获取邮件详情失败');
+    detailError.value = error instanceof Error ? error.message : '获取邮件详情失败';
   } finally {
     if (detailRequestController === controller) {
       detailRequestController = null;
@@ -1715,6 +1716,7 @@ async function openThread(id: string) {
   const controller = new AbortController();
   detailRequestController = controller;
   selectedThreadId.value = id;
+  detailError.value = '';
   selectedMessageId.value = null;
   detail.value = null;
   threadDetail.value = null;
@@ -2113,95 +2115,6 @@ function showReceiveResult(
 
 function accountDisplayName(account: MailAccount) {
   return account.displayName || account.email;
-}
-
-function buildMailBodySrcdoc(html: string) {
-  return `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <base target="_blank" />
-    <style>
-      html,
-      body {
-        width: 100% !important;
-        max-width: 100% !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        overflow-x: hidden !important;
-        background: transparent !important;
-      }
-      body {
-        box-sizing: border-box;
-        color: #1f2937;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        font-size: 14px;
-        line-height: 1.7;
-        overflow-wrap: anywhere;
-        word-break: break-word;
-      }
-      *,
-      *::before,
-      *::after {
-        box-sizing: border-box;
-        max-width: 100%;
-      }
-      img,
-      video,
-      canvas,
-      svg {
-        max-width: 100% !important;
-        height: auto !important;
-      }
-      table {
-        max-width: 100% !important;
-        width: auto;
-        border-collapse: collapse;
-      }
-      td,
-      th {
-        overflow-wrap: anywhere;
-        word-break: break-word;
-      }
-      pre,
-      code {
-        white-space: pre-wrap !important;
-        overflow-wrap: anywhere;
-        word-break: break-word;
-      }
-    </style>
-  </head>
-  <body>
-    ${html}
-  </body>
-</html>`;
-}
-
-function resizeMailBodyFrame(event: Event) {
-  const frame = event.target instanceof HTMLIFrameElement ? event.target : null;
-  if (!frame) {
-    return;
-  }
-  const resize = () => {
-    try {
-      const doc = frame.contentDocument;
-      if (!doc) {
-        return;
-      }
-      const height = Math.max(
-        doc.body?.scrollHeight || 0,
-        doc.documentElement?.scrollHeight || 0,
-        180,
-      );
-      frame.style.height = `${height}px`;
-    } catch {
-      frame.style.height = '520px';
-    }
-  };
-  frame.style.height = '0px';
-  resize();
-  window.setTimeout(resize, 120);
-  window.setTimeout(resize, 600);
 }
 
 function openFolderCreate() {
@@ -2715,6 +2628,7 @@ function startCompose(mode: ComposeMode) {
   }
   suppressDraftAutosave = true;
   resetCompose();
+  composeEditorKey.value++;
   composeMode.value = mode;
   const filteredAccount = enabledAccounts.find((account) => account.id === filters.accountId);
   composeForm.accountId = filteredAccount?.id
@@ -2726,7 +2640,12 @@ function startCompose(mode: ComposeMode) {
 }
 
 function finishComposeOpen() {
+  const sessionKey = composeEditorKey.value;
   window.setTimeout(() => {
+    // 异步组件就绪与上下文请求可能先后完成；每封邮件只初始化一次，旧回调不覆盖用户输入。
+    if (!composeOpen.value || composeLoading.value || !composeEditor.value ||
+      sessionKey !== composeEditorKey.value || composeInitializedEditorKey === sessionKey) return;
+    composeInitializedEditorKey = sessionKey;
     resetComposeEditor();
     if (composeForm.htmlBody || composeForm.textBody) {
       syncComposeEditorContent();
@@ -3061,11 +2980,6 @@ function resetCompose() {
   if (composeImageInput.value) {
     composeImageInput.value.value = '';
   }
-  composeFontFamily.value = 'system-ui';
-  composeFontSize.value = '14px';
-  composeTextColor.value = '#1f2937';
-  composeBackgroundColor.value = '';
-  composeSavedRange = null;
 }
 
 function closeCompose() {
@@ -3111,13 +3025,13 @@ function syncComposeEditorContent() {
   if (!editor) {
     return;
   }
-  composeForm.htmlBody = editor.innerHTML.trim();
-  composeForm.textBody = editor.innerText.trim();
+  composeForm.htmlBody = editor.getHTML().trim();
+  composeForm.textBody = editor.getText().trim();
 }
 
 function resetComposeEditor() {
   if (composeEditor.value) {
-    composeEditor.value.innerHTML = composeForm.htmlBody;
+    composeEditor.value.setContent(composeForm.htmlBody);
   }
 }
 
@@ -3129,7 +3043,7 @@ function insertComposeSignatureIfEmpty() {
   if (composeForm.textBody || composeForm.htmlBody.replace(/<br\s*\/?>|&nbsp;/gi, '').trim()) {
     return;
   }
-  composeEditor.value.innerHTML = `<br><br>${selectedComposeAccount.value.signatureHtml}`;
+  composeEditor.value.setContent(`<p><br></p>${selectedComposeAccount.value.signatureHtml}`);
   composeSignatureInserted = true;
   syncComposeEditorContent();
 }
@@ -3144,131 +3058,10 @@ function insertComposeSignature() {
   syncComposeEditorContent();
 }
 
-function runComposeCommand(command: string, value?: string) {
-  restoreComposeSelection();
-  document.execCommand('styleWithCSS', false, 'true');
-  const applied = document.execCommand(command, false, value);
-  if (!applied && command === 'hiliteColor') {
-    document.execCommand('backColor', false, value);
-  }
-  syncComposeEditorContent();
-  saveComposeSelection();
-}
-
-function applyComposeFontFamily(value: string) {
-  composeFontFamily.value = value;
-  applyComposeInlineStyle({ 'font-family': value });
-}
-
-function applyComposeFontSize(value: string) {
-  composeFontSize.value = value;
-  applyComposeInlineStyle({ 'font-size': value });
-}
-
-function applyComposeTextColor(color: string) {
-  composeTextColor.value = color;
-  applyComposeInlineStyle({ color });
-}
-
-function applyComposeBackgroundColor(color: string) {
-  composeBackgroundColor.value = color;
-  applyComposeInlineStyle({ 'background-color': color });
-}
-
-function clearComposeBackgroundColor() {
-  composeBackgroundColor.value = '';
-  clearComposeInlineStyle('background-color');
-}
-
-function applyComposeInlineStyle(styles: Record<string, string>) {
-  restoreComposeSelection();
-  const editor = composeEditor.value;
-  const selection = window.getSelection();
-  if (!editor || !selection || selection.rangeCount === 0) {
-    return;
-  }
-  const range = selection.getRangeAt(0);
-  if (!editor.contains(range.commonAncestorContainer)) {
-    return;
-  }
-
-  const styleText = Object.entries(styles)
-    .map(([name, value]) => `${name}:${value}`)
-    .join(';');
-  if (range.collapsed) {
-    insertHTMLAtCursor(`<span style="${styleText}">\u200b</span>`);
-    return;
-  }
-
-  const span = document.createElement('span');
-  for (const [name, value] of Object.entries(styles)) {
-    span.style.setProperty(name, value);
-  }
-  const contents = range.extractContents();
-  span.appendChild(contents);
-  range.insertNode(span);
-
-  const nextRange = document.createRange();
-  nextRange.selectNodeContents(span);
-  selection.removeAllRanges();
-  selection.addRange(nextRange);
-  composeSavedRange = nextRange.cloneRange();
-  syncComposeEditorContent();
-}
-
-function clearComposeInlineStyle(styleName: string) {
-  restoreComposeSelection();
-  const editor = composeEditor.value;
-  const selection = window.getSelection();
-  if (!editor || !selection || selection.rangeCount === 0) {
-    return;
-  }
-  const range = selection.getRangeAt(0);
-  if (!editor.contains(range.commonAncestorContainer)) {
-    return;
-  }
-
-  if (range.collapsed) {
-    document.execCommand('hiliteColor', false, 'transparent');
-    syncComposeEditorContent();
-    saveComposeSelection();
-    return;
-  }
-
-  const root = (range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
-    ? range.commonAncestorContainer
-    : range.commonAncestorContainer.parentElement) as Element | null;
-  const elements = root ? [root, ...Array.from(root.querySelectorAll('*'))] : [];
-  for (const element of elements) {
-    if (!range.intersectsNode(element) || !(element instanceof HTMLElement)) {
-      continue;
-    }
-    element.style.removeProperty(styleName);
-    if (styleName === 'background-color') {
-      element.style.removeProperty('background');
-    }
-    if (!element.getAttribute('style')?.trim()) {
-      element.removeAttribute('style');
-    }
-  }
-  syncComposeEditorContent();
-  saveComposeSelection();
-}
-
-function insertComposeLink() {
-  saveComposeSelection();
-  const value = window.prompt('链接地址');
-  if (!value?.trim()) {
-    return;
-  }
-  runComposeCommand('createLink', value.trim());
-}
-
 function insertHTMLAtCursor(html: string) {
-  restoreComposeSelection();
-  document.execCommand('insertHTML', false, html);
+  composeEditor.value?.insertHTML(html);
   syncComposeEditorContent();
-  saveComposeSelection();
+  markDraftDirty();
 }
 
 function chooseComposeFiles() {
@@ -3276,7 +3069,6 @@ function chooseComposeFiles() {
 }
 
 function chooseComposeImages() {
-  saveComposeSelection();
   composeImageInput.value?.click();
 }
 
@@ -3304,20 +3096,8 @@ async function onComposeImagesSelected(event: Event) {
   input.value = '';
 }
 
-async function onComposeEditorPaste(event: ClipboardEvent) {
-  const files = Array.from(event.clipboardData?.files || []).filter((file) => file.type.startsWith('image/'));
-  if (files.length === 0) {
-    window.setTimeout(() => {
-      syncComposeEditorContent();
-      saveComposeSelection();
-    });
-    return;
-  }
-  event.preventDefault();
-  await insertComposeImageFiles(files);
-}
-
 async function insertComposeImageFiles(files: File[]) {
+  const sessionKey = composeEditorKey.value;
   const imageFiles = files.filter((file) => file.type.startsWith('image/'));
   if (imageFiles.length === 0) {
     message.warning('请选择图片文件');
@@ -3330,9 +3110,16 @@ async function insertComposeImageFiles(files: File[]) {
       message.warning(`${file.name} 超过 3MB，建议作为附件发送`);
       continue;
     }
-    const dataUrl = await readFileAsDataURL(file);
-    insertHTMLAtCursor(buildComposeImageHTML(dataUrl, file.name));
-    insertedCount += 1;
+    try {
+      const dataUrl = await readFileAsDataURL(file);
+      // 读文件期间若关闭写信或切换另一封邮件，不能把图片插入新的编辑会话。
+      if (!composeOpen.value || composeEditorKey.value !== sessionKey) return;
+      insertHTMLAtCursor(buildComposeImageHTML(dataUrl, file.name));
+      insertedCount += 1;
+    } catch {
+      if (!composeOpen.value || composeEditorKey.value !== sessionKey) return;
+      message.error(`读取图片「${file.name}」失败，请重新选择`);
+    }
   }
   if (insertedCount > 0) {
     message.success(`已插入 ${insertedCount} 张图片`);
@@ -3368,33 +3155,6 @@ function hasComposeBodyContent() {
   }
   const html = composeForm.htmlBody.trim();
   return /<img\b|<table\b|<hr\b/i.test(html) || html.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, '').trim().length > 0;
-}
-
-function saveComposeSelection() {
-  const editor = composeEditor.value;
-  const selection = window.getSelection();
-  if (!editor || !selection || selection.rangeCount === 0) {
-    return;
-  }
-  const range = selection.getRangeAt(0);
-  if (!editor.contains(range.commonAncestorContainer)) {
-    return;
-  }
-  composeSavedRange = range.cloneRange();
-}
-
-function restoreComposeSelection() {
-  const editor = composeEditor.value;
-  if (!editor) {
-    return;
-  }
-  editor.focus();
-  if (!composeSavedRange || !editor.contains(composeSavedRange.commonAncestorContainer)) {
-    return;
-  }
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(composeSavedRange);
 }
 
 function removeComposeAttachment(index: number) {
@@ -4959,33 +4719,6 @@ function looksLikeEmail(value: string) {
   background: var(--accent-soft);
 }
 
-.mail-body {
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-color);
-  line-height: 1.7;
-  overflow-wrap: anywhere;
-}
-
-.mail-body-frame {
-  display: block;
-  width: 100%;
-  min-height: 180px;
-  border: 0;
-  background: transparent;
-}
-
-.mail-text-body {
-  margin: 0;
-  color: var(--text-color);
-  font-family: inherit;
-  line-height: 1.7;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .attachments-panel {
   display: flex;
   flex-direction: column;
@@ -5282,10 +5015,10 @@ function looksLikeEmail(value: string) {
 }
 
 .compose-editor {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   background: var(--surface-bg);
@@ -5565,5 +5298,15 @@ function looksLikeEmail(value: string) {
   .compose-body-header { display: none; }
   .compose-body-shell { grid-template-rows: minmax(0, 1fr); padding-top: 6px; }
   .compose-footer { padding-top: 8px; padding-bottom: 8px; }
+}
+.mail-workspace.mail-workspace-standalone { grid-template-columns: minmax(0, 1fr); }
+.mail-workspace-standalone .mail-reader { width: 100%; }
+.mail-workspace-standalone .mail-reader-pane { padding: 24px; background: var(--surface-bg); }
+@media (max-width: 1080px) {
+  .reader-actions-mobile { display: inline-flex; }
+}
+@media (max-width: 640px) {
+  .mail-workspace-standalone .mail-reader-pane { padding: 12px; }
+  .mail-workspace-standalone .attachment-card-grid { grid-template-columns: minmax(0, 1fr); }
 }
 </style>

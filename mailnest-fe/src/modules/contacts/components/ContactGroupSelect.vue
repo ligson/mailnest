@@ -1,6 +1,7 @@
 <template>
   <a-select
-    :value="value" :options="options" :loading="loading" :filter-option="false"
+    :value="multiple ? values : value" :mode="multiple ? 'multiple' : undefined"
+    :max-tag-count="3" :max-tag-text-length="24" :options="options" :loading="loading" :filter-option="false"
     show-search allow-clear :placeholder="placeholder || '全部分组'"
     @change="change" @search="search" @dropdown-visible-change="visible" @popup-scroll="onScroll"
   >
@@ -12,9 +13,10 @@
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { contactGroupApi } from '../api';
 import type { ContactGroup } from '../types';
-const props = defineProps<{ value?: string; placeholder?: string; refreshKey?: number }>();
-const emit = defineEmits<{ 'update:value': [value: string | undefined]; change: [value: string | undefined] }>();
+const props = defineProps<{ value?: string; values?: string[]; multiple?: boolean; placeholder?: string; refreshKey?: number }>();
+const emit = defineEmits<{ 'update:value': [value: string | undefined]; 'update:values': [value: string[]]; change: [value: string | undefined] }>();
 const groups = ref<ContactGroup[]>([]);
+const selectedGroups = ref<ContactGroup[]>([]);
 const loading = ref(false);
 const error = ref('');
 const keyword = ref('');
@@ -23,8 +25,19 @@ const total = ref(0);
 let loadedKey: number | undefined = -1;
 let controller: AbortController | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
-const options = computed(() => groups.value.map(g => ({ value: g.id, label: `${g.name}（${g.memberCount} 人）` })));
-function change(value?: string) { emit('update:value', value); emit('change', value); }
+const options = computed(() => [...new Map([...selectedGroups.value, ...groups.value].map(g => [g.id, g])).values()]
+  .map(g => ({ value: g.id, label: `${g.name}（${g.memberCount} 人）` })));
+function change(value?: string | string[]) {
+  if (props.multiple) {
+    const ids = Array.isArray(value) ? value : [];
+    // 搜索下一组时保留已选标签，避免显示成裸 ID。
+    selectedGroups.value = [...new Map([...selectedGroups.value, ...groups.value].map(g => [g.id, g])).values()].filter(g => ids.includes(g.id));
+    emit('update:values', ids);
+  } else {
+    const id = typeof value === 'string' ? value : undefined;
+    emit('update:value', id); emit('change', id);
+  }
+}
 async function load(reset = false) {
   if (reset) { controller?.abort(); page.value = 0; }
   else if (loading.value) return;

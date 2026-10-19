@@ -28,7 +28,8 @@
 
       <div v-if="selectedIds.length" class="contacts-selection">
         <span>已选 {{ selectedIds.length }} 人</span>
-        <a-button size="small" :loading="batchBusy" @click="batchOpen = true"><template #icon><usergroup-add-outlined /></template>加入分组</a-button>
+        <a-button size="small" :disabled="batchBusy" @click="openBatch('company')"><template #icon><bank-outlined /></template>设置公司</a-button>
+        <a-button size="small" :disabled="batchBusy" @click="openBatch('groups')"><template #icon><team-outlined /></template>设置分组</a-button>
         <a-button v-if="groupId" size="small" :disabled="batchBusy" @click="removeFromGroup">移出当前分组</a-button>
         <a-button type="text" size="small" @click="selectedIds = []">取消选择</a-button>
       </div>
@@ -108,17 +109,13 @@
       </a-form>
     </a-modal>
     <ContactGroupsManager v-model:open="groupsOpen" @changed="groupsChanged" />
-    <a-modal v-model:open="batchOpen" title="加入联系人分组" ok-text="加入分组" cancel-text="取消"
-      :confirm-loading="batchBusy" :ok-button-props="{ disabled: !batchGroupId }" @ok="addToGroup">
-      <a-alert v-if="batchError" :message="batchError" type="error" show-icon class="contacts-error" />
-      <ContactGroupSelect v-model:value="batchGroupId" placeholder="选择目标分组" :refresh-key="groupRevision" style="width: 100%" />
-    </a-modal>
+    <ContactBatchEditor v-model:open="batchOpen" :kind="batchKind" :contact-ids="selectedIds" :refresh-key="groupRevision" @saved="batchSaved" />
   </AppLayout>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { DeleteOutlined, EditOutlined, PlusOutlined, TeamOutlined, UsergroupAddOutlined } from '@ant-design/icons-vue';
+import { BankOutlined, DeleteOutlined, EditOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons-vue';
 import { Modal, message, type FormInstance } from 'ant-design-vue';
 import type { TablePaginationConfig } from 'ant-design-vue';
 import { useRoute } from 'vue-router';
@@ -127,6 +124,8 @@ import AppLayout from '../../../components/AppLayout.vue';
 import { contactGroupApi } from '../api';
 import ContactGroupsManager from '../components/ContactGroupsManager.vue';
 import ContactGroupSelect from '../components/ContactGroupSelect.vue';
+import ContactBatchEditor from '../components/ContactBatchEditor.vue';
+import type { ContactBatchResult } from '../batch';
 import { onBeforeUnmount } from 'vue';
 import type { Key } from 'ant-design-vue/es/_util/type';
 
@@ -136,10 +135,11 @@ const groupRevision = ref(0);
 const groupsOpen = ref(false);
 const selectedIds = ref<string[]>([]);
 const batchOpen = ref(false);
-const batchGroupId = ref<string>();
+const batchKind = ref<'company' | 'groups'>('company');
 const batchBusy = ref(false);
 const batchError = ref('');
-const rowSelection = computed(() => ({ selectedRowKeys: selectedIds.value, onChange: (keys: Key[]) => { selectedIds.value = keys.map(String); } }));
+const rowSelection = computed(() => ({ selectedRowKeys: selectedIds.value, preserveSelectedRowKeys: true,
+  onChange: (keys: Key[]) => { selectedIds.value = keys.map(String); } }));
 let listController: AbortController | undefined;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 onBeforeUnmount(() => { listController?.abort(); clearTimeout(searchTimer); });
@@ -237,15 +237,14 @@ async function groupsChanged() {
   filterChanged();
 }
 
-async function addToGroup() {
-  if (!batchGroupId.value || batchBusy.value) return;
-  batchBusy.value = true; batchError.value = '';
-  try {
-    await contactGroupApi.changeMembers(batchGroupId.value, selectedIds.value, 'add');
-    batchOpen.value = false; selectedIds.value = []; groupRevision.value++;
-    message.success('已加入分组'); await loadContacts();
-  } catch (e) { batchError.value = e instanceof Error ? e.message : '加入分组失败'; }
-  finally { batchBusy.value = false; }
+function openBatch(kind: 'company' | 'groups') {
+  batchKind.value = kind; batchOpen.value = true;
+}
+
+async function batchSaved(result: ContactBatchResult) {
+  selectedIds.value = []; batchError.value = ''; groupRevision.value++;
+  message.success(batchKind.value === 'company' ? `已更新 ${result.companyUpdatedCount} 位联系人的公司信息` : `已更新 ${result.groupMembershipChangedCount} 条分组成员关系`);
+  await loadContacts();
 }
 
 function removeFromGroup() {
@@ -264,7 +263,6 @@ function removeFromGroup() {
 }
 
 function onTableChanged(nextPagination: TablePaginationConfig) {
-  selectedIds.value = [];
   page.value = nextPagination.current || 1;
   pageSize.value = nextPagination.pageSize || 20;
   void loadContacts();
@@ -370,6 +368,8 @@ function deleteContact(contact: Contact) {
     cancelText: '取消',
     async onOk() {
       await contactApi.remove(contact.id);
+      selectedIds.value = selectedIds.value.filter(id => id !== contact.id);
+      groupRevision.value++;
       message.success('联系人已删除');
       await loadContacts();
     },

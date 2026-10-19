@@ -432,6 +432,40 @@ JSON 请求：
 
 删除联系人不会删除任何邮件，只是不再用该联系人信息优化邮件地址显示。
 
+### 5.5 批量设置公司与分组
+
+`PATCH /api/v1/contacts/batch`，需要登录，使用统一 envelope。
+
+请求示例（company/groups 至少提供一个，也可组合提交）：
+
+```json
+{
+  "contactIds": ["1", "2"],
+  "company": {"mode": "fill_empty", "value": "示例公司"},
+  "groups": {"mode": "add", "groupIds": ["3", "4"]}
+}
+```
+
+- company.mode：fill_empty 仅补全空公司；set 覆盖公司；clear 清空，此时 value 为空或省略。其他模式 value 去除首尾空白后必须非空，最多 120 字符。
+- groups.mode：add 加入，remove 移出。保留其他组关系，不删除联系人；不支持 replace。
+- contactIds/groupIds 为正整数字符串，自动去重。单次最多 10000 个联系人 ID、100 个组 ID，去重后组合最多 50000 对。超限拒绝，不截断。
+- 全部归属校验与写入在单个事务中；无效目标不会部分成功。不会修改昵称、姓名、邮箱、电话、备注等资料。
+
+成功 `200`：
+
+```json
+{
+  "success": true,
+  "message": "批量设置成功",
+  "httpCode": 200,
+  "data": {"selectedCount": 2, "companyUpdatedCount": 1, "groupMembershipChangedCount": 4}
+}
+```
+
+selectedCount 为去重后所选人数；companyUpdatedCount 为实际公司变化人数；groupMembershipChangedCount 为实际新增或删除的关系条数（不是人数）。重复操作的实际变化可为 0。分组修订号递增，旧编辑表单仍需处理既有 409 冲突。
+
+错误：未登录 401；格式、模式、数量、公司名称或联系人归属无效 400；分组不存在或不属于当前用户 404；其他存储失败 500。错误同样返回统一 envelope，httpCode 与 HTTP 状态码一致，data 为对象。详细交互见 [批量设置设计](contacts-batch-edit.md)。
+
 响应：
 
 ```json

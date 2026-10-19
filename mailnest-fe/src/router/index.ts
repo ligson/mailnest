@@ -21,6 +21,7 @@ export const router = createRouter({
     { path: '/register', component: RegisterView, meta: { public: true } },
     { path: '/oauth/microsoft/callback', component: MicrosoftOAuthCallbackView },
     { path: '/mail', component: DashboardView },
+    { path: '/mail/messages/:messageId', component: () => import('../modules/mail/reader/MailReaderPage.vue') },
     { path: '/attachments', component: AttachmentsView },
     { path: '/accounts', component: MailAccountsView },
     { path: '/contacts', component: ContactsView },

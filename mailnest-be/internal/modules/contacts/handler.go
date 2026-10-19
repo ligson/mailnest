@@ -24,6 +24,7 @@ type Handler struct {
 func Register(mux *http.ServeMux, store *storage.Store, auth func(http.Handler) http.Handler, user func(*http.Request) (int64, bool)) {
 	h := &Handler{store: store, user: user}
 	for path, fn := range map[string]http.HandlerFunc{
+		"PATCH /api/v1/contacts/batch":             h.batchUpdate,
 		"GET /api/v1/contact-groups":               h.list,
 		"POST /api/v1/contact-groups":              h.save,
 		"POST /api/v1/contact-groups/resolve":      h.resolve,
