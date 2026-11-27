@@ -210,6 +210,7 @@ export interface MailAttachment {
 
 export interface MailMessageDetail extends MailMessage {
   cc: string[];
+  bcc?: string[];
   folder: string;
   messageId: string | null;
   textBody: string;
@@ -217,7 +218,7 @@ export interface MailMessageDetail extends MailMessage {
   attachments: MailAttachment[];
 }
 
-export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward';
+export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward' | 'resend';
 
 export interface ComposeForwardAttachment {
   id: string;
@@ -568,6 +569,7 @@ export interface AttachmentCenterListData {
   page: number;
   pageSize: number;
   total: number;
+  totalPending?: boolean;
 }
 
 export interface SyncJob {
@@ -860,7 +862,6 @@ export const messageApi = {
     starred?: boolean;
     page?: number;
     pageSize?: number;
-    includeTotal?: boolean;
   }, options?: { signal?: AbortSignal }) {
     return requestEnvelope<MessageListData>(apiClient.get('/messages', { params, signal: options?.signal }));
   },
@@ -998,7 +999,6 @@ export const threadApi = {
     starred?: boolean;
     page?: number;
     pageSize?: number;
-    includeTotal?: boolean;
   }, options?: { signal?: AbortSignal }) {
     return requestEnvelope<MailThreadListData>(apiClient.get('/threads', { params, signal: options?.signal }));
   },
@@ -1042,6 +1042,7 @@ export const attachmentApi = {
     dateTo?: string;
     page?: number;
     pageSize?: number;
+    includeTotal?: boolean;
   }) {
     return requestEnvelope<AttachmentCenterListData>(apiClient.get('/attachments', { params }));
   },

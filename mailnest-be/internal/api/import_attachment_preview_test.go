@@ -47,6 +47,14 @@ func TestAttachmentPreviewServesInlineContentAndIsIsolated(t *testing.T) {
 		t.Fatalf("expected attachments status 200, got %d: %s", attachmentResp.Code, attachmentResp.Body.String())
 	}
 	attachmentID := firstListItemID(t, attachmentResp.Body.Bytes())
+	lightResp := performRequest(router, http.MethodGet, "/api/v1/attachments?includeTotal=false", "", firstToken)
+	if lightResp.Code != http.StatusOK {
+		t.Fatalf("expected light attachment list status 200, got %d: %s", lightResp.Code, lightResp.Body.String())
+	}
+	lightData := decodeEnvelope(t, lightResp.Body.Bytes())["data"].(map[string]any)
+	if lightData["totalPending"] != true {
+		t.Fatalf("expected light attachment list to defer total, got %#v", lightData["totalPending"])
+	}
 
 	previewResp := performRequest(router, http.MethodGet, "/api/v1/attachments/"+attachmentID+"/preview", "", firstToken)
 	if previewResp.Code != http.StatusOK {

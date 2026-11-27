@@ -21,19 +21,21 @@ func (a *App) handleListAttachments(w http.ResponseWriter, r *http.Request) {
 	}
 	page := parsePositiveInt(r.URL.Query().Get("page"), 1)
 	pageSize := parsePositiveInt(r.URL.Query().Get("pageSize"), 20)
+	includeTotal := r.URL.Query().Get("includeTotal") != "false"
 	accountID, _ := strconv.ParseInt(r.URL.Query().Get("accountId"), 10, 64)
 	folderID, _ := strconv.ParseInt(r.URL.Query().Get("folderId"), 10, 64)
 	items, total, err := a.store.ListAttachments(storage.ListAttachmentsQuery{
-		UserID:      userID,
-		Keyword:     r.URL.Query().Get("keyword"),
-		ContentType: r.URL.Query().Get("contentType"),
-		AccountID:   accountID,
-		FolderID:    folderID,
-		Inline:      parseBoolQuery(r.URL.Query().Get("inline")),
-		DateFrom:    parseDateQuery(r.URL.Query().Get("dateFrom")),
-		DateTo:      parseDateQuery(r.URL.Query().Get("dateTo")),
-		Limit:       pageSize,
-		Offset:      (page - 1) * pageSize,
+		UserID:       userID,
+		Keyword:      r.URL.Query().Get("keyword"),
+		ContentType:  r.URL.Query().Get("contentType"),
+		AccountID:    accountID,
+		FolderID:     folderID,
+		Inline:       parseBoolQuery(r.URL.Query().Get("inline")),
+		DateFrom:     parseDateQuery(r.URL.Query().Get("dateFrom")),
+		DateTo:       parseDateQuery(r.URL.Query().Get("dateTo")),
+		Limit:        pageSize,
+		Offset:       (page - 1) * pageSize,
+		IncludeTotal: includeTotal,
 	})
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "获取附件失败")
@@ -44,10 +46,11 @@ func (a *App) handleListAttachments(w http.ResponseWriter, r *http.Request) {
 		payloadItems = append(payloadItems, attachmentCenterPayload(item))
 	}
 	response.OK(w, "获取成功", map[string]any{
-		"items":    payloadItems,
-		"page":     page,
-		"pageSize": pageSize,
-		"total":    total,
+		"items":        payloadItems,
+		"page":         page,
+		"pageSize":     pageSize,
+		"total":        total,
+		"totalPending": !includeTotal,
 	})
 }
 

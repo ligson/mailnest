@@ -381,6 +381,10 @@
                   <template #icon><forward-outlined /></template>
                   转发
                 </a-button>
+                <a-button size="small" @click="openResend">
+                  <template #icon><send-outlined /></template>
+                  再发一封
+                </a-button>
                 <a-button size="small" @click="openMessageRuleLogs(detail.id)">
                   <template #icon><audit-outlined /></template>
                   规则记录
@@ -408,6 +412,10 @@
                     <a-menu-item key="forward">
                       <forward-outlined />
                       <span>转发</span>
+                    </a-menu-item>
+                    <a-menu-item key="resend">
+                      <send-outlined />
+                      <span>再发一封</span>
                     </a-menu-item>
                     <a-menu-item key="ruleLogs">
                       <audit-outlined />
@@ -1389,6 +1397,7 @@ const composeDrawerTitle = computed(() => {
     reply: '回复邮件',
     replyAll: '回复全部',
     forward: '转发邮件',
+    resend: '再发一封',
   };
   return titles[composeMode.value];
 });
@@ -1398,6 +1407,7 @@ const composeBodyHint = computed(() => {
     reply: '已准备原邮件引用内容',
     replyAll: '已合并原发件人、收件人和抄送人',
     forward: '可选择是否带上原附件',
+    resend: '保留原收件人、抄送人、正文和附件',
   };
   return hints[composeMode.value];
 });
@@ -1822,7 +1832,9 @@ function handleBatchMenuClick(info: { key: string }) {
 }
 
 function handleReaderActionMenu(info: { key: string }) {
-  if (info.key === 'reply' || info.key === 'replyAll' || info.key === 'forward') {
+  if (info.key === 'resend') {
+    openResend();
+  } else if (info.key === 'reply' || info.key === 'replyAll' || info.key === 'forward') {
     void openReply(info.key);
   } else if (info.key === 'ruleLogs' && detail.value) {
     void openMessageRuleLogs(detail.value.id);
@@ -2862,6 +2874,23 @@ async function openReply(mode: Exclude<ComposeMode, 'new'>) {
   }
 }
 
+function openResend() {
+  if (!detail.value || !startCompose('resend')) return;
+  composeForm.accountId = detail.value.accountId;
+  composeForm.to = [...detail.value.to];
+  composeForm.cc = [...detail.value.cc];
+  composeForm.bcc = [...(detail.value.bcc || [])];
+  composeForm.subject = detail.value.subject || '';
+  composeForm.textBody = detail.value.textBody || '';
+  composeForm.htmlBody = detail.value.htmlBody || '';
+  composeSourceMessageId.value = detail.value.id;
+  composeForwardAttachments.value = normalAttachments.value.map(item => ({ id: item.id, filename: item.filename, contentType: item.contentType || 'application/octet-stream', size: item.size, selected: true, failed: 0, message: '' }));
+  selectedForwardAttachmentIds.value = composeForwardAttachments.value.map(item => item.id);
+  composeLoading.value = false;
+  finishComposeOpen();
+  armDraftAutosave();
+}
+
 async function sendMail() {
   if (composeTransferPending || composeTransferring.value || sending.value || composeLoading.value) return;
   if (!composeForm.accountId) {
@@ -2896,7 +2925,7 @@ async function sendMail() {
       htmlBody: composeForm.htmlBody,
       composeMode: composeMode.value,
       sourceMessageId: composeSourceMessageId.value || undefined,
-      forwardAttachmentIds: composeMode.value === 'forward' ? selectedForwardAttachmentIds.value : undefined,
+      forwardAttachmentIds: ['forward', 'resend'].includes(composeMode.value) ? selectedForwardAttachmentIds.value : undefined,
       attachments: composeForm.attachments,
     });
     message.success('邮件已发送');
@@ -3016,7 +3045,7 @@ function buildDraftPayload() {
     htmlBody: composeForm.htmlBody,
     composeMode: composeMode.value,
     sourceMessageId: composeSourceMessageId.value || undefined,
-    forwardAttachmentIds: composeMode.value === 'forward' ? selectedForwardAttachmentIds.value : [],
+    forwardAttachmentIds: ['forward', 'resend'].includes(composeMode.value) ? selectedForwardAttachmentIds.value : [],
     localAttachmentNames: composeForm.attachments.length
       ? composeForm.attachments.map((file) => file.name)
       : restoredLocalAttachmentNames.value,
@@ -4567,6 +4596,7 @@ function looksLikeEmail(value: string) {
 .reader-actions {
   flex: 0 1 auto;
   margin-left: auto;
+  gap: 10px !important;
 }
 
 .reader-actions-mobile {

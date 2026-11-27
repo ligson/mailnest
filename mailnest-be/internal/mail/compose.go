@@ -243,6 +243,11 @@ func (s *Service) prepareOutgoingSource(userID int64, message *OutgoingMessage) 
 		message.References = referencesForSource(source)
 		return nil
 	}
+	if mode == "resend" {
+		message.InReplyTo = ""
+		message.References = nil
+		return nil
+	}
 	message.InReplyTo = ""
 	message.References = nil
 	return nil
@@ -497,6 +502,8 @@ func normalizeComposeMode(value string) string {
 		return "replyAll"
 	case "forward", "fwd":
 		return "forward"
+	case "resend", "re-send", "again":
+		return "resend"
 	default:
 		return "new"
 	}

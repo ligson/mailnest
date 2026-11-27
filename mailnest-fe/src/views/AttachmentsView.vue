@@ -6,7 +6,7 @@
           <h2 class="page-title">附件中心</h2>
           <p class="page-subtitle">集中查找、下载和定位邮件附件</p>
         </div>
-        <a-button @click="loadAttachments">刷新</a-button>
+        <a-button :loading="loading" @click="loadAttachments">刷新</a-button>
       </div>
 
       <div class="attachment-filters">
@@ -78,7 +78,7 @@
       </a-table>
 
       <a-pagination
-        v-if="total > pageSize"
+        v-if="total > pageSize || totalPending"
         v-model:current="page"
         :page-size="pageSize"
         :total="total"
@@ -147,6 +147,7 @@ const folders = ref<MailFolder[]>([]);
 const page = ref(1);
 const pageSize = ref(20);
 const total = ref(0);
+const totalPending = ref(false);
 const dateRange = ref<[Dayjs, Dayjs] | null>(null);
 const filters = reactive({
   keyword: '',
@@ -168,7 +169,8 @@ const columns: TableColumnsType<AttachmentCenterItem> = [
 const previewTitle = computed(() => previewItem.value?.filename ? `预览：${previewItem.value.filename}` : '附件预览');
 
 onMounted(async () => {
-  await Promise.all([loadMeta(), loadAttachments()]);
+  await loadAttachments();
+  void loadMeta();
 });
 
 onBeforeUnmount(() => {
@@ -191,6 +193,7 @@ async function loadAttachments() {
     const data = await attachmentApi.list({
       page: page.value,
       pageSize: pageSize.value,
+      includeTotal: false,
       keyword: filters.keyword.trim() || undefined,
       contentType: filters.contentType,
       accountId: filters.accountId,
@@ -199,8 +202,16 @@ async function loadAttachments() {
       dateFrom: dateRange.value?.[0]?.format('YYYY-MM-DD'),
       dateTo: dateRange.value?.[1]?.format('YYYY-MM-DD'),
     });
+    if (data.totalPending && data.items.length === 0 && page.value > 1) {
+      page.value -= 1;
+      await loadAttachments();
+      return;
+    }
     attachments.value = data.items;
-    total.value = data.total;
+    totalPending.value = Boolean(data.totalPending && data.items.length === pageSize.value);
+    total.value = data.totalPending
+      ? (data.items.length === pageSize.value ? page.value * pageSize.value + 1 : (page.value - 1) * pageSize.value + data.items.length)
+      : data.total;
   } catch (error) {
     message.error(error instanceof Error ? error.message : '获取附件失败');
   } finally {

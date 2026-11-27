@@ -612,16 +612,17 @@ type MessageBatchFolderCount struct {
 }
 
 type ListAttachmentsQuery struct {
-	UserID      int64
-	Keyword     string
-	ContentType string
-	AccountID   int64
-	FolderID    int64
-	Inline      sql.NullBool
-	DateFrom    sql.NullTime
-	DateTo      sql.NullTime
-	Limit       int
-	Offset      int
+	UserID       int64
+	Keyword      string
+	ContentType  string
+	AccountID    int64
+	FolderID     int64
+	Inline       sql.NullBool
+	DateFrom     sql.NullTime
+	DateTo       sql.NullTime
+	Limit        int
+	Offset       int
+	IncludeTotal bool
 }
 
 type AttachmentListItem struct {

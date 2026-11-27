@@ -38,10 +38,13 @@ func (s *Store) ListAttachments(query ListAttachmentsQuery) ([]AttachmentListIte
 		where += " AND COALESCE(m.sent_at, m.received_at, m.created_at) < ?"
 		args = append(args, query.DateTo.Time.AddDate(0, 0, 1))
 	}
-	countArgs := append([]any{}, args...)
-	var total int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM mail_attachments a JOIN mail_messages m ON m.id = a.message_id `+where, countArgs...).Scan(&total); err != nil {
-		return nil, 0, err
+	total := -1
+	if query.IncludeTotal {
+		countArgs := append([]any{}, args...)
+		total = 0
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM mail_attachments a JOIN mail_messages m ON m.id = a.message_id `+where, countArgs...).Scan(&total); err != nil {
+			return nil, 0, err
+		}
 	}
 	if query.Limit <= 0 || query.Limit > 500 {
 		query.Limit = 20

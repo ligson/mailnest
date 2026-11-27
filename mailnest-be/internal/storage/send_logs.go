@@ -194,7 +194,7 @@ func scanMailSendLog(scanner interface {
 func normalizeSendLogComposeMode(value string) string {
 	value = strings.TrimSpace(value)
 	switch value {
-	case "reply", "replyAll", "forward":
+	case "reply", "replyAll", "forward", "resend":
 		return value
 	default:
 		return "new"

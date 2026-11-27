@@ -12,7 +12,7 @@
       <div v-for="item in versions" :key="item.name" class="version-component">
         <div class="version-name">
           <span>{{ item.name }}</span>
-          <strong v-if="item.info">v{{ item.info.version }}</strong>
+          <a-button v-if="item.info" type="link" class="version-link" @click="openRelease(item.info.version)">v{{ item.info.version }}</a-button>
           <span v-else>{{ loading ? '正在读取…' : '暂不可用' }}</span>
         </div>
         <dl v-if="item.info" class="version-details">
@@ -23,6 +23,14 @@
         </dl>
       </div>
     </div>
+    <a-modal v-model:open="releaseOpen" :title="releaseTitle" :footer="null" width="680px">
+      <div v-if="release" class="release-detail">
+        <div class="release-meta"><a-tag color="blue">{{ release.version }}</a-tag><span>{{ release.date }}</span></div>
+        <p class="release-summary">{{ release.summary }}</p>
+        <a-divider />
+        <ul><li v-for="item in release.items" :key="item">{{ item }}</li></ul>
+      </div>
+    </a-modal>
     <a-alert v-if="error" type="warning" show-icon :message="error" class="version-error">
       <template #action><a-button size="small" :loading="loading" aria-label="重试读取后端版本" @click="loadVersion">重试</a-button></template>
     </a-alert>
@@ -39,6 +47,15 @@ const frontend: AppBuildInfo = __APP_BUILD_INFO__;
 const backend = ref<AppBuildInfo | null>(null);
 const loading = ref(false);
 const error = ref('');
+const releaseOpen = ref(false);
+const selectedRelease = ref('');
+const releaseNotes = [
+  { version: '0.5.0', date: '2026-10-19', summary: '独立写信与完整签名排版', items: ['写邮件、回复和转发支持转到新窗口继续编辑', '收件人、抄送、密送、正文和附件可在窗口间接续', '签名保留原有颜色、字号、边框、间距和布局表格', '草稿保存串行化，避免迟到请求覆盖最新内容'] },
+  { version: '0.4.0', date: '2026-10-19', summary: '联系人批量设置、富文本编辑器和独立邮件阅读', items: ['联系人支持批量设置公司和分组', '写信编辑器支持局部格式、表格、图片和草稿恢复', '邮件详情支持独立阅读窗口和宽表格滚动'] },
+  { version: '0.3.0', date: '2026-10-17', summary: '联系人分组与收件人分组选择', items: ['联系人支持多对多分组管理', '写信时可以按分组添加收件人、抄送和密送'] },
+];
+const release = computed(() => releaseNotes.find(item => item.version === selectedRelease.value));
+const releaseTitle = computed(() => release.value ? `${release.value.version} 发布内容` : '版本发布内容');
 const versions = computed(() => [
   { name: '前端', info: frontend },
   { name: '后端', info: backend.value },
@@ -69,6 +86,11 @@ function formatBuildTime(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '未提供' : date.toLocaleString('zh-CN', { hour12: false });
 }
+
+function openRelease(version: string) {
+  selectedRelease.value = version;
+  releaseOpen.value = true;
+}
 </script>
 
 <style scoped>
@@ -98,7 +120,7 @@ function formatBuildTime(value: string) {
 }
 .version-component { min-width: 0; }
 .version-name { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; }
-.version-name strong { color: var(--heading-color); font-size: 16px; overflow-wrap: anywhere; }
+.version-link { height: auto; padding: 0; color: var(--heading-color); font-size: 16px; font-weight: 700; }
 .version-details {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
@@ -109,6 +131,9 @@ function formatBuildTime(value: string) {
 .version-details dt { color: var(--muted-color); }
 .version-details dd { margin: 0; overflow-wrap: anywhere; }
 .version-error { margin-top: 12px; }
+.release-meta { display: flex; align-items: center; gap: 10px; color: var(--muted-color); }
+.release-summary { margin: 16px 0 0; color: var(--heading-color); font-size: 15px; font-weight: 600; }
+.release-detail ul { display: grid; gap: 10px; margin: 0; padding-left: 20px; color: var(--text-color); line-height: 1.65; }
 @media (max-width: 640px) {
   .version-grid { grid-template-columns: minmax(0, 1fr); }
   .version-details { grid-template-columns: minmax(0, 1fr); gap: 2px; }

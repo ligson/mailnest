@@ -274,7 +274,7 @@ func draftPayload(draft storage.MailDraft) map[string]any {
 
 func normalizeDraftComposeMode(value string) string {
 	switch strings.TrimSpace(value) {
-	case "reply", "replyAll", "forward":
+	case "reply", "replyAll", "forward", "resend":
 		return strings.TrimSpace(value)
 	default:
 		return "new"
