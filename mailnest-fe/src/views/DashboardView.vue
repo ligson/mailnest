@@ -4033,7 +4033,7 @@ function looksLikeEmail(value: string) {
   min-width: 0;
   align-items: center;
   justify-content: flex-start;
-  gap: 6px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 

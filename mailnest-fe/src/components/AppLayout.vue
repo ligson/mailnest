@@ -69,7 +69,7 @@
     </a-layout-sider>
     <a-layout class="shell-main">
       <a-layout-header class="shell-header">
-        <div class="shell-header-spacer"></div>
+        <div class="shell-header-spacer"><ReleaseNotesButton /></div>
         <a-dropdown :trigger="['click']">
           <a-button class="shell-user-button" type="text">
             <a-avatar :size="28" :src="auth.user?.avatarUrl || undefined">
@@ -144,6 +144,7 @@ import { message, type FormInstance } from 'ant-design-vue';
 import type { MenuInfo } from 'ant-design-vue/es/menu/src/interface';
 import { authApi } from '../api/client';
 import { useAuthStore } from '../stores/auth';
+import ReleaseNotesButton from './ReleaseNotesButton.vue';
 
 defineProps<{
   selectedKey: string;
