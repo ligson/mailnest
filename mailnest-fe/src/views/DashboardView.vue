@@ -7,10 +7,12 @@
       :style="{
         '--folder-pane-width': `${folderPaneWidth}px`,
         '--list-pane-width': `${listPaneWidth}px`,
+        'grid-template-columns': workspaceGridColumns,
       }"
     >
-      <aside v-if="!isStandaloneReader && !isStandaloneCompose" class="mail-folders">
-        <div class="folder-heading account-heading">邮箱账号</div>
+      <aside v-if="!isStandaloneReader && !isStandaloneCompose" class="mail-folders" :class="{ 'pane-collapsed': paneCollapsed.folders }">
+        <a-tooltip v-if="paneCollapsed.folders" class="pane-restore-tooltip" title="展开邮箱账号栏" placement="right"><a-button class="pane-restore-button" type="text" aria-label="展开邮箱账号栏" @click="togglePane('folders')"><template #icon><right-outlined /></template></a-button></a-tooltip>
+        <div class="folder-heading account-heading"><span>邮箱账号</span><a-tooltip title="折叠邮箱账号栏"><a-button class="pane-collapse-button" type="text" size="small" aria-label="折叠邮箱账号栏" @click="togglePane('folders')"><template #icon><left-outlined /></template></a-button></a-tooltip></div>
         <div ref="accountSortListEl" class="account-sort-list" :class="{ saving: accountOrderSaving }">
           <button
             v-for="item in accountFilterItems"
@@ -87,7 +89,8 @@
 
       <div v-if="!isStandaloneReader && !isStandaloneCompose" class="mail-resizer" title="拖拽调整文件夹栏宽度" @mousedown="startResize('folders', $event)"></div>
 
-      <main v-if="!isStandaloneReader && !isStandaloneCompose" class="mail-list-pane">
+      <main v-if="!isStandaloneReader && !isStandaloneCompose" class="mail-list-pane" :class="{ 'pane-collapsed': paneCollapsed.list }">
+        <a-tooltip v-if="paneCollapsed.list" class="pane-restore-tooltip" title="展开邮件列表栏" placement="right"><a-button class="pane-restore-button" type="text" aria-label="展开邮件列表栏" @click="togglePane('list')"><template #icon><right-outlined /></template></a-button></a-tooltip>
         <div class="mail-list-header">
           <div class="mail-list-title-row">
             <div class="mail-list-heading">
@@ -104,6 +107,7 @@
               <a-radio-button value="messages">邮件</a-radio-button>
               <a-radio-button value="threads">会话</a-radio-button>
             </a-radio-group>
+            <a-tooltip title="折叠邮件列表栏"><a-button class="pane-collapse-button" type="text" size="small" aria-label="折叠邮件列表栏" @click="togglePane('list')"><template #icon><left-outlined /></template></a-button></a-tooltip>
           </div>
           <div class="mail-list-actions">
             <a-space-compact>
@@ -351,7 +355,8 @@
 
       <div v-if="!isStandaloneReader && !isStandaloneCompose" class="mail-resizer" title="拖拽调整邮件列表宽度" @mousedown="startResize('list', $event)"></div>
 
-      <section v-if="!isStandaloneCompose" class="mail-reader-pane">
+      <section v-if="!isStandaloneCompose" class="mail-reader-pane" :class="{ 'pane-collapsed': paneCollapsed.reader }">
+        <a-tooltip v-if="paneCollapsed.reader" class="pane-restore-tooltip" title="展开邮件内容栏" placement="left"><a-button class="pane-restore-button" type="text" aria-label="展开邮件内容栏" @click="togglePane('reader')"><template #icon><left-outlined /></template></a-button></a-tooltip>
         <div v-if="detailLoading" class="reader-skeleton">
           <a-skeleton active :title="{ width: '70%' }" :paragraph="{ rows: 4 }" />
           <a-skeleton active :paragraph="{ rows: 8 }" />
@@ -424,6 +429,7 @@
                   </a-menu>
                 </template>
               </a-dropdown>
+              <a-tooltip title="折叠邮件内容栏"><a-button class="pane-collapse-button" type="text" size="small" aria-label="折叠邮件内容栏" @click="togglePane('reader')"><template #icon><right-outlined /></template></a-button></a-tooltip>
             </div>
 
             <div class="reader-title-main">
@@ -1104,6 +1110,19 @@ const selectedMessageSet = ref(new Set<string>());
 const batchMoveFolderId = ref<string | undefined>();
 const folderPaneWidth = ref(210);
 const listPaneWidth = ref(430);
+type MailPane = 'folders' | 'list' | 'reader';
+const paneCollapsed = reactive<Record<MailPane, boolean>>({
+  folders: localStorage.getItem('mailnest.mail-pane.folders') === 'true',
+  list: localStorage.getItem('mailnest.mail-pane.list') === 'true',
+  reader: localStorage.getItem('mailnest.mail-pane.reader') === 'true',
+});
+const workspaceGridColumns = computed(() => {
+  if (isStandaloneReader.value || isStandaloneCompose.value) return 'minmax(0, 1fr)';
+  const folder = paneCollapsed.folders ? '52px' : 'minmax(150px, var(--folder-pane-width, 210px))';
+  const list = paneCollapsed.list ? '52px' : 'minmax(300px, var(--list-pane-width, 430px))';
+  const reader = paneCollapsed.reader ? '52px' : 'minmax(0, 1fr)';
+  return `${folder} 6px ${list} 6px ${reader}`;
+});
 const resizeConstraints = {
   minFolder: 150,
   maxFolder: 300,
@@ -1112,6 +1131,18 @@ const resizeConstraints = {
   minReader: 320,
   resizers: 12,
 };
+
+function togglePane(pane: MailPane) {
+  if (!paneCollapsed[pane]) {
+    const visibleCount = Object.values(paneCollapsed).filter(value => !value).length;
+    if (visibleCount <= 1) {
+      message.info('至少保留一个区域');
+      return;
+    }
+  }
+  paneCollapsed[pane] = !paneCollapsed[pane];
+  localStorage.setItem(`mailnest.mail-pane.${pane}`, String(paneCollapsed[pane]));
+}
 const importEMLMaxFileBytes = 2 * 1024 * 1024 * 1024;
 const importEMLDefaultChunkBytes = 16 * 1024 * 1024;
 let composeSignatureInserted = false;
@@ -5466,6 +5497,13 @@ function looksLikeEmail(value: string) {
 .mail-workspace.mail-workspace-standalone { grid-template-columns: minmax(0, 1fr); }
 .mail-workspace.mail-workspace-compose { display: flex; flex-direction: column; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
 .mail-workspace-compose > .standalone-compose-surface { flex: 1; }
+.pane-collapsed { min-width: 0 !important; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.pane-collapsed > *:not(.pane-restore-button):not(.pane-restore-tooltip) { display: none !important; }
+.pane-restore-tooltip { display: inline-flex !important; }
+.pane-restore-button { display: inline-flex; width: 40px; height: 40px; align-items: center; justify-content: center; color: var(--muted-color); }
+.pane-restore-button:hover { color: var(--accent); background: var(--accent-soft); }
+.pane-collapse-button { flex: none; color: var(--muted-color); }
+.pane-collapse-button:hover { color: var(--accent); background: var(--accent-soft); }
 .mail-workspace-standalone .mail-reader { width: 100%; }
 .mail-workspace-standalone .mail-reader-pane { padding: 24px; background: var(--surface-bg); }
 @media (max-width: 1080px) {
