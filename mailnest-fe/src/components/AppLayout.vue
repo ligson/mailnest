@@ -49,6 +49,10 @@
           <team-outlined />
           <span>系统管理</span>
         </a-menu-item>
+        <a-menu-item key="/settings/versions">
+          <history-outlined />
+          <span>版本记录</span>
+        </a-menu-item>
       </a-menu>
       <div class="shell-collapse-panel" :class="{ collapsed }">
         <a-tooltip :title="collapsed ? '展开菜单' : '锁起菜单'" placement="right">
@@ -128,6 +132,7 @@
 import {
   BranchesOutlined,
   DownOutlined,
+  HistoryOutlined,
   LockOutlined,
   LogoutOutlined,
   MailOutlined,

@@ -12,6 +12,7 @@ const ContactsView = () => import('../modules/contacts/pages/ContactsView.vue');
 const ProfileSettingsView = () => import('../views/ProfileSettingsView.vue');
 const MicrosoftOAuthCallbackView = () => import('../views/MicrosoftOAuthCallbackView.vue');
 const AdminUsersView = () => import('../views/AdminUsersView.vue');
+const VersionHistoryView = () => import('../views/VersionHistoryView.vue');
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -29,6 +30,7 @@ export const router = createRouter({
     { path: '/rules', component: MailRulesView },
     { path: '/send-logs', component: SendLogsView },
     { path: '/settings/profile', component: ProfileSettingsView },
+    { path: '/settings/versions', component: VersionHistoryView },
     { path: '/admin/users', component: AdminUsersView, meta: { admin: true } },
   ],
 });
